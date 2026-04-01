@@ -113,10 +113,22 @@ Before every career document delivery:
 
 ---
 
+## Output Format
+
+**Primary format: HTML/CSS → PDF via Puppeteer (headless Chrome)**
+- Vela writes the resume/document as a single HTML file with inline CSS
+- Puppeteer renders it using the system Chrome installation at `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`
+- Build scripts live in `/tmp/pdf-build/` (puppeteer pre-installed)
+- This gives pixel-perfect, consistent output that AI can reason about directly
+- `.docx` is only used when the owner explicitly needs an editable Word file
+
+**Why not docx:**
+docx-js requires DXA units and XML primitives with no visual feedback. Font sizes, spacing, and alignment are unpredictable across Word/Google Docs/LibreOffice. HTML/CSS is what Vela knows and what Chrome renders faithfully every time.
+
 ## Reads / Writes
 
 - **Reads:** Completed content in any format (markdown, plain text, rough .docx, notes)
-- **Writes:** Polished .docx files, brand asset specs, design system notes, visual briefs
+- **Writes:** PDFs (primary), .docx (on explicit request), brand asset specs, design system notes
 
 ---
 

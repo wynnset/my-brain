@@ -17,7 +17,9 @@
       "Read(//tmp/**)",
       "Bash(npm install:*)",
       "Bash(node build-resume.js)",
-      "Bash(node build-resume-v2.js)"
+      "Bash(node build-resume-v2.js)",
+      "Bash(node build-resume-v3.js)",
+      "Bash(python3 -:*)"
     ]
   }
 }

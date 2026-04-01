@@ -15,12 +15,11 @@ Technical co-founder and CTO with 16+ years building software products — most 
 ### NextGen Kitchens — Co-Founder & CTO → Technical & Strategy Advisor
 *Jan 2022 – Present*
 
-- Built the entire technical platform from scratch. ~$250K/month in transactions across North America at peak.
-- Architected 11 applications (6 frontend, 5 backend), 9 shared TypeScript library packages, 100+ Firebase Cloud Functions across the platform.
-- Held CTO + acting CPO simultaneously for 3+ years — owned product strategy, engineering architecture, team leadership, and release management concurrently.
-- Shipped the Kitchen Display System (KDS) in Q1 2026: 71,000+ lines, the most complex product in the stack.
-- Built and maintained 6+ third-party integrations: Deliverect, DoorDash Drive, Stripe Connect, Square, TikTok, Kitchen Hub.
-- Engineered an AI platform for the engineering team: 12 Cursor slash commands, 4 custom agent skills, RAG codebase assistant (Firestore vector search + Gemini + Claude API), GitHub Copilot SWE Agent integration, and subagent parallelization patterns. Result: 197 commits and 20+ releases in Q1 2026 with the leanest team ever.
+- Built the entire technical platform from scratch; scaled to ~$250K/month in transactions across North America.
+- Architected 11 applications, 9 shared TypeScript packages, 100+ Firebase Cloud Functions, and 6+ third-party integrations (Deliverect, DoorDash Drive, Stripe Connect, Square, TikTok).
+- Held CTO + acting CPO simultaneously for 3+ years — owned product strategy, engineering architecture, and release management concurrently.
+- Repeatedly delivered high-complexity products under aggressive timelines — including a full restaurant display and order management system shipped end-to-end in under 2 weeks.
+- Built an AI engineering platform (Cursor commands, agent skills, RAG codebase assistant) that produced 197 commits and 20+ releases in a single quarter with the leanest team in company history.
 - Negotiated 15.45% equity, board representation, and ROFR provisions at seed round ($4M pre-money valuation).
 
 ### Wynnset Inc. — Director & Principal Consultant
@@ -31,9 +30,8 @@ Technical co-founder and CTO with 16+ years building software products — most 
 ### University of British Columbia — Software Architect & Development Manager
 *Department of Psychology · Sep 2018 – Jan 2023*
 
-- Led architecture and development of Tapestry, TYDE, PolarUs, and other research and teaching applications.
-- Managed and mentored a cross-functional team of developers, designers, and junior project managers.
-- Engineered cloud architecture supporting 20,000+ university users. Presented research at international conferences (H5P Melbourne, CNIE).
+- Led architecture and development of multiple research and teaching platforms across the university.
+- Managed and mentored a cross-functional team of developers, designers, and junior PMs; engineered cloud infrastructure supporting 20,000+ users.
 
 ### UBC Centre for Teaching, Learning and Technology — Systems Analyst
 *Contract · Sep 2017 – Sep 2018*
@@ -44,7 +42,7 @@ Technical co-founder and CTO with 16+ years building software products — most 
 ### UBC MedIT — Systems Analyst
 *Contract · Dec 2016 – Sep 2017*
 
-- Maintained 200+ WordPress sites; built dynamic interfaces for the Entrada/Elentra curriculum management system.
+- Implemented systems to manage and maintain 200+ university microsites; designed and built workflow tools and dynamic interfaces for a faculty-wide curriculum management system.
 
 ### First Available Inc. — Technical Co-Founder
 *Apr 2015 – Apr 2017*
@@ -81,12 +79,3 @@ Joint Major in Computing Science and Business Administration · 2004–2009
 **AI Ethics 1 — Governance**
 Alberta Machine Intelligence Institute (Amii) · March 2024
 
----
-
-## Selected Projects
-
-**Codebase AI Chat Assistant** — RAG-based tool for engineering teams using Firestore vector search, Gemini embeddings, and Claude API. Lets any engineer query full codebase history in natural language. Deployed to production at NextGen Kitchens.
-
-**Launchpad** — Personal career pipeline manager built with Next.js, Firebase, and Claude API. Production-quality tooling applied to own workflows.
-
-**TwoPeas** — Social coordination app built on Expo SDK 55, Firebase, Plivo SMS, and FCM. Privacy-first design philosophy.

@@ -37,6 +37,17 @@ If no existing team member has the right expertise, Larry routes the request to 
 - Larry always names which team member is handling what
 - Larry speaks in first person on behalf of the team, but credit goes to the team
 
+## Daily Rhythm (active from 2026-03-31)
+
+| Trigger | Action | Owner |
+|---------|--------|-------|
+| "morning brief" | Pull today's action items from Launchpad → `/owners-inbox/daily-brief-[date].md` | Dash |
+| Job posting URL dropped in `/team-inbox/` | Application package (cover letter + resume recs) | Tailor |
+| Contact name + context dropped in `/team-inbox/` | Outreach draft | Relay |
+| Rough notes or topic dropped in `/team-inbox/` | Content draft | Scribe |
+| "update: [status change]" | Write status change to correct DB tables | Dash |
+| "weekly summary" (Sundays) | Full weekly report → `/owners-inbox/weekly-summary-[date].md` | Dash |
+
 ## Team Roster
 
 See `/team/` for individual team member profiles.

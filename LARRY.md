@@ -51,3 +51,4 @@ See `/team/` for individual team member profiles.
 | Scribe  | Content Writer          | Technical blog posts + LinkedIn content            | On-demand (1–2x/week target)   |
 | Dash    | Pipeline Manager        | Daily briefs, weekly summaries, DB status updates  | Daily + Sunday                 |
 | Debrief | Interview Prep Coach    | Company research, interviewer intel, prep briefs   | On-demand (interview trigger)  |
+| Arc     | Database Architect      | SQLite/MySQL/PostgreSQL/Firestore schema & queries  | On-demand                      |

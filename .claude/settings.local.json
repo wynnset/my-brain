@@ -5,7 +5,18 @@
       "Bash(git add:*)",
       "Bash(git commit:*)",
       "Bash(git remote:*)",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "Bash(sqlite3 /Users/aidin/Documents/Websites/claude-code/my-brain/data/launchpad.db \":*)",
+      "Bash(sqlite3 /Users/aidin/Documents/Websites/claude-code/my-brain/data/launchpad.db \"PRAGMA integrity_check;\")",
+      "Bash(sqlite3 /Users/aidin/Documents/Websites/claude-code/my-brain/data/launchpad.db \"PRAGMA foreign_key_check;\")",
+      "Read(//Users/aidin/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/abff4e92-1ac1-4e76-beb1-2925fbfc0e73/0d2183ce-5b08-4992-bc94-f750e626903d/skills/docx/**)",
+      "Bash(npm list:*)",
+      "Read(//usr/local/lib/node_modules/**)",
+      "Read(//opt/homebrew/lib/node_modules/**)",
+      "Bash(mkdir -p /tmp/resume-build)",
+      "Read(//tmp/**)",
+      "Bash(npm install:*)",
+      "Bash(node build-resume.js)"
     ]
   }
 }

@@ -52,3 +52,4 @@ See `/team/` for individual team member profiles.
 | Dash    | Pipeline Manager        | Daily briefs, weekly summaries, DB status updates  | Daily + Sunday                 |
 | Debrief | Interview Prep Coach    | Company research, interviewer intel, prep briefs   | On-demand (interview trigger)  |
 | Arc     | Database Architect      | SQLite/MySQL/PostgreSQL/Firestore schema & queries  | On-demand                      |
+| Vela    | Senior Designer         | Document polish, visual identity, branding          | Every document before delivery |

@@ -16,7 +16,8 @@
       "Bash(mkdir -p /tmp/resume-build)",
       "Read(//tmp/**)",
       "Bash(npm install:*)",
-      "Bash(node build-resume.js)"
+      "Bash(node build-resume.js)",
+      "Bash(node build-resume-v2.js)"
     ]
   }
 }

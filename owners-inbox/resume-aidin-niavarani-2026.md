@@ -1,6 +1,6 @@
 # Aidin Niavarani
 
-Vancouver, BC, Canada · [linkedin.com/in/aidin](https://linkedin.com/in/aidin) · Open to remote
+Vancouver, BC, Canada · [linkedin.com/in/aidin](https://linkedin.com/in/aidin)
 
 ---
 
@@ -75,7 +75,4 @@ Technical co-founder and CTO with 16+ years building software products — most 
 
 **Simon Fraser University** — BSc, Information Systems
 Joint Major in Computing Science and Business Administration · 2004–2009
-
-**AI Ethics 1 — Governance**
-Alberta Machine Intelligence Institute (Amii) · March 2024
 

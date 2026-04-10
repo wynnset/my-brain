@@ -4,7 +4,7 @@
 
 **Name:** Scribe
 **Role:** Content Writer
-**Reports to:** Larry
+**Reports to:** Cyrus
 
 ## Persona
 

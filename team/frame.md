@@ -4,7 +4,7 @@
 
 **Name:** Frame
 **Role:** Interface Designer & Data Visualizer
-**Reports to:** Larry
+**Reports to:** Cyrus
 
 ---
 

@@ -4,7 +4,7 @@
 
 **Name:** Tailor
 **Role:** Application Specialist
-**Reports to:** Larry
+**Reports to:** Cyrus
 
 ## Persona
 

@@ -1,0 +1,864 @@
+<!DOCTYPE html>
+<html lang="en" class="">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=5, viewport-fit=cover">
+<title>Cyrus</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = {
+  darkMode: 'class',
+}
+</script>
+<link rel="stylesheet" href="dashboard.css">
+</head>
+<body class="bg-slate-50 dark:bg-slate-900 text-slate-800 dark:text-slate-100 min-h-screen transition-colors duration-200" x-data="app" x-init="init()">
+
+<!-- TOP NAV -->
+<nav class="bg-white dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 sticky top-0 z-50 shadow-sm transition-[padding-right] duration-200 ease-out" :style="chatPanelInsetStyle()">
+  <div class="max-w-7xl mx-auto px-4">
+    <div class="flex items-center justify-between h-14">
+      <div class="flex items-center gap-6">
+        <a href="#/" @click.prevent="go('home')" class="font-bold text-lg text-slate-900 dark:text-white tracking-tight flex items-center gap-2 rounded-md -ml-1 pl-1 pr-2 py-1 hover:bg-slate-100 dark:hover:bg-slate-700/80 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500" aria-label="Home">
+          <i data-lucide="hexagon" class="w-6 h-6 text-slate-600 dark:text-slate-300 shrink-0"></i>
+          Cyrus
+        </a>
+        <div class="hidden sm:flex items-center gap-1">
+          <a href="#/" @click.prevent="go('home')" :class="navLinkClass('home')" class="px-3 py-1.5 rounded-md text-sm font-medium transition-colors">Home</a>
+          <a href="#/career" @click.prevent="go('career')" :class="navLinkClass('career')" class="px-3 py-1.5 rounded-md text-sm font-medium transition-colors">Career</a>
+          <a href="#/finance" @click.prevent="go('finance')" :class="navLinkClass('finance')" class="px-3 py-1.5 rounded-md text-sm font-medium transition-colors">Finance</a>
+          <a href="#/business" @click.prevent="go('business')" :class="navLinkClass('business')" class="px-3 py-1.5 rounded-md text-sm font-medium transition-colors">Business</a>
+          <a href="#/files" @click.prevent="go('files')" :class="navLinkClass('files')" class="px-3 py-1.5 rounded-md text-sm font-medium transition-colors">Files</a>
+        </div>
+      </div>
+      <div class="flex items-center gap-1 sm:gap-2">
+        <span x-show="refreshing" x-cloak class="text-xs text-slate-400 dark:text-slate-500">Refreshing…</span>
+        <span x-show="lastRefresh" x-text="lastRefresh" class="hidden sm:block text-xs text-slate-400 dark:text-slate-500"></span>
+        <button type="button" x-show="loginRequired" x-cloak @click="signOut()" class="icon-btn p-2 rounded-md text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors" title="Sign out" aria-label="Sign out">
+          <i data-lucide="log-out" class="w-5 h-5"></i>
+        </button>
+        <button type="button" @click="cycleTheme()" class="icon-btn p-2 rounded-md text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors" title="Cycle theme: Auto → Light → Dark" aria-label="Cycle theme">
+          <i x-show="theme === 'dark'" x-cloak data-lucide="moon" class="w-5 h-5"></i>
+          <i x-show="theme === 'light'" x-cloak data-lucide="sun" class="w-5 h-5"></i>
+          <svg x-show="theme === 'system'" x-cloak xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-5 h-5" aria-hidden="true">
+            <defs>
+              <clipPath id="theme-auto-left"><rect x="0" y="0" width="12" height="24"/></clipPath>
+              <clipPath id="theme-auto-right"><rect x="12" y="0" width="12" height="24"/></clipPath>
+            </defs>
+            <g clip-path="url(#theme-auto-left)"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></g>
+            <g clip-path="url(#theme-auto-right)">
+              <circle cx="12" cy="12" r="4"/>
+              <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>
+            </g>
+          </svg>
+        </button>
+        <button type="button" @click="mobileMenuOpen = !mobileMenuOpen" class="sm:hidden p-2 rounded-md text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-700 icon-btn" aria-label="Menu">
+          <i data-lucide="menu" class="w-5 h-5"></i>
+        </button>
+        <button type="button" @click="toggleChat()" :class="chatOpen ? 'bg-slate-100 dark:bg-slate-700 text-slate-900 dark:text-white' : 'text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-700'" class="icon-btn p-2 rounded-md transition-colors" title="Toggle chat" aria-label="Toggle chat">
+          <i data-lucide="message-square" class="w-5 h-5"></i>
+        </button>
+      </div>
+    </div>
+    <div x-show="mobileMenuOpen" x-cloak x-transition class="sm:hidden py-2 border-t border-slate-100 dark:border-slate-700">
+      <a href="#/" @click.prevent="go('home'); mobileMenuOpen = false" :class="navLinkClass('home')" class="block px-3 py-2 rounded-md text-sm font-medium">Home</a>
+      <a href="#/career" @click.prevent="go('career'); mobileMenuOpen = false" :class="navLinkClass('career')" class="block px-3 py-2 rounded-md text-sm font-medium">Career</a>
+      <a href="#/finance" @click.prevent="go('finance'); mobileMenuOpen = false" :class="navLinkClass('finance')" class="block px-3 py-2 rounded-md text-sm font-medium">Finance</a>
+      <a href="#/business" @click.prevent="go('business'); mobileMenuOpen = false" :class="navLinkClass('business')" class="block px-3 py-2 rounded-md text-sm font-medium">Business</a>
+      <a href="#/files" @click.prevent="go('files'); mobileMenuOpen = false" :class="navLinkClass('files')" class="block px-3 py-2 rounded-md text-sm font-medium">Files</a>
+      <button type="button" x-show="loginRequired" x-cloak @click="signOut(); mobileMenuOpen = false" class="block w-full text-left px-3 py-2 rounded-md text-sm font-medium text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-700">Sign out</button>
+    </div>
+  </div>
+</nav>
+
+<button type="button" x-show="!chatOpen" @click="openChat()" class="lg:hidden fixed bottom-6 right-6 z-40 w-14 h-14 bg-slate-800 dark:bg-slate-700 hover:bg-slate-900 dark:hover:bg-slate-600 text-white rounded-full shadow-lg icon-btn" aria-label="Open chat">
+  <i data-lucide="message-square" class="w-6 h-6"></i>
+</button>
+
+<div class="flex relative min-w-0 max-w-full transition-[padding-right] duration-200 ease-out" :style="chatPanelInsetStyle()">
+<main class="flex-1 min-w-0 max-w-7xl mx-auto px-4 py-6">
+
+  <!-- ── HOME PAGE ── -->
+  <div id="page-home" x-show="page === 'home'" x-cloak x-transition.opacity.duration.150ms>
+    <div class="mb-6">
+      <h1 class="text-2xl font-bold text-slate-900 dark:text-white" x-text="homeGreeting"></h1>
+      <p class="text-sm text-slate-500 dark:text-slate-400 mt-0.5" x-text="homeDateStr"></p>
+    </div>
+
+    <section class="mb-8">
+      <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+        <div class="flex items-center gap-2">
+          <h2 class="text-base font-semibold text-slate-700 dark:text-slate-200">Action Items</h2>
+          <span x-show="(actionData.home || []).length" class="text-xs font-semibold bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300 px-2 py-0.5 rounded-full" x-text="(actionData.home || []).length + ' open'"></span>
+        </div>
+        <div class="flex flex-wrap gap-1.5">
+          <select class="text-xs border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-lg px-2 py-1 cursor-pointer focus:outline-none" x-model="actionState.home.sort">
+            <option value="date-urgency">Date → Urgency</option>
+            <option value="urgency-date">Urgency → Date</option>
+            <option value="urgency">Urgency only</option>
+            <option value="date">Date only</option>
+          </select>
+          <select class="text-xs border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-lg px-2 py-1 cursor-pointer focus:outline-none" x-model="actionState.home.group">
+            <option value="none">No grouping</option>
+            <option value="domain">Group: Domain</option>
+          </select>
+          <select class="text-xs border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-lg px-2 py-1 cursor-pointer focus:outline-none" x-model="actionState.home.range">
+            <option value="all">All</option>
+            <option value="overdue">Overdue</option>
+            <option value="today">Due today</option>
+            <option value="week">This week</option>
+            <option value="2weeks">Next 2 weeks</option>
+            <option value="nodateset">No due date</option>
+          </select>
+        </div>
+      </div>
+      <div class="space-y-2">
+        <template x-if="loadError.home">
+          <div class="p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg text-sm text-red-700 dark:text-red-300" x-text="loadError.home"></div>
+        </template>
+        <template x-if="!loadError.home && !pageReady.home">
+          <div><div class="skeleton h-14 w-full mb-2"></div><div class="skeleton h-14 w-full mb-2"></div><div class="skeleton h-14 w-4/5"></div></div>
+        </template>
+        <template x-if="pageReady.home && !getActionGroups('home', { showDomain: true }).length">
+          <div class="text-center py-8 text-sm text-slate-400 dark:text-slate-500">No open action items matching current filters</div>
+        </template>
+        <template x-for="grp in getActionGroups('home', { showDomain: true })" :key="grp.key">
+          <div class="mb-5">
+            <div class="flex items-center gap-2 mb-2" x-show="grp.label">
+              <span class="text-xs font-semibold px-2 py-0.5 rounded-full capitalize" :class="grp.headerClass" x-text="grp.label"></span>
+              <span class="text-xs text-slate-400 dark:text-slate-500" x-text="grp.items.length"></span>
+            </div>
+            <div class="space-y-2">
+              <template x-for="(item, idx) in grp.items" :key="item.id != null ? item.id : 'h-' + idx + '-' + (item.title || '')">
+                <div class="flex items-start gap-3 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 border-l-4 rounded-lg px-4 py-3" :class="urgencyBorderClass(item)">
+                  <span class="inline-block w-2 h-2 rounded-full flex-shrink-0 mt-1" :class="urgencyDotClass(item)"></span>
+                  <div class="flex-1 min-w-0">
+                    <div class="flex flex-wrap items-center gap-2">
+                      <span class="text-sm font-medium text-slate-800 dark:text-slate-100" x-text="item.title"></span>
+                      <span x-show="item.domain" class="text-xs font-medium px-2 py-0.5 rounded-full" :class="domainBadgeClass(item.domain)" x-text="item.domain"></span>
+                      <span x-html="dueChipHtml(item)"></span>
+                    </div>
+                    <p x-show="item.description" class="text-xs text-slate-500 dark:text-slate-400 mt-0.5 line-clamp-1" x-text="item.description"></p>
+                  </div>
+                </div>
+              </template>
+            </div>
+          </div>
+        </template>
+      </div>
+    </section>
+
+    <section class="mb-8">
+      <h2 class="text-base font-semibold text-slate-700 dark:text-slate-200 mb-3">Domains</h2>
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-4" x-html="homeDomainCardsHtml"></div>
+    </section>
+
+    <section class="mb-8">
+      <h2 class="text-base font-semibold text-slate-700 dark:text-slate-200 mb-3">This Week</h2>
+      <div x-html="homeWeekHtml"></div>
+    </section>
+  </div>
+
+  <!-- ── CAREER PAGE ── -->
+  <div id="page-career" x-show="page === 'career'" x-cloak x-transition.opacity.duration.150ms>
+    <div class="mb-6">
+      <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Career</h1>
+      <p class="text-sm text-slate-500 dark:text-slate-400 mt-0.5">Job search, consulting pipeline &amp; weekly progress</p>
+    </div>
+
+    <section class="mb-8">
+      <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+        <div class="flex items-center gap-2">
+          <h2 class="text-base font-semibold text-slate-700 dark:text-slate-200">Action Items</h2>
+          <span x-show="(actionData.career || []).length" class="text-xs font-semibold bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300 px-2 py-0.5 rounded-full" x-text="(actionData.career || []).length + ' open'"></span>
+        </div>
+        <div class="flex flex-wrap gap-1.5">
+          <select class="text-xs border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-lg px-2 py-1 cursor-pointer focus:outline-none" x-model="actionState.career.sort">
+            <option value="date-urgency">Date → Urgency</option>
+            <option value="urgency-date">Urgency → Date</option>
+            <option value="urgency">Urgency only</option>
+            <option value="date">Date only</option>
+          </select>
+          <select class="text-xs border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-lg px-2 py-1 cursor-pointer focus:outline-none" x-model="actionState.career.group">
+            <option value="none">No grouping</option>
+            <option value="category">Group: Category</option>
+          </select>
+          <select class="text-xs border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-lg px-2 py-1 cursor-pointer focus:outline-none" x-model="actionState.career.range">
+            <option value="all">All</option>
+            <option value="overdue">Overdue</option>
+            <option value="today">Due today</option>
+            <option value="week">This week</option>
+            <option value="2weeks">Next 2 weeks</option>
+            <option value="nodateset">No due date</option>
+          </select>
+        </div>
+      </div>
+      <div class="space-y-2">
+        <template x-if="loadError.career">
+          <div class="p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg text-sm text-red-700 dark:text-red-300" x-text="loadError.career"></div>
+        </template>
+        <template x-if="!loadError.career && !pageReady.career">
+          <div class="skeleton h-14 w-full"></div>
+        </template>
+        <template x-if="pageReady.career && !getActionGroups('career', { showDomain: false }).length">
+          <div class="text-center py-8 text-sm text-slate-400 dark:text-slate-500">No open action items matching current filters</div>
+        </template>
+        <template x-for="grp in getActionGroups('career', { showDomain: false })" :key="grp.key">
+          <div class="mb-5">
+            <div class="flex items-center gap-2 mb-2" x-show="grp.label">
+              <span class="text-xs font-semibold px-2 py-0.5 rounded-full capitalize" :class="grp.headerClass" x-text="grp.label"></span>
+              <span class="text-xs text-slate-400 dark:text-slate-500" x-text="grp.items.length"></span>
+            </div>
+            <div class="space-y-2">
+              <template x-for="(item, idx) in grp.items" :key="item.id != null ? item.id : 'c-' + idx + '-' + (item.title || '')">
+                <div class="flex items-start gap-3 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 border-l-4 rounded-lg px-4 py-3" :class="urgencyBorderClass(item)">
+                  <span class="inline-block w-2 h-2 rounded-full flex-shrink-0 mt-1" :class="urgencyDotClass(item)"></span>
+                  <div class="flex-1 min-w-0">
+                    <div class="flex flex-wrap items-center gap-2">
+                      <span class="text-sm font-medium text-slate-800 dark:text-slate-100" x-text="item.title"></span>
+                      <span x-html="dueChipHtml(item)"></span>
+                    </div>
+                    <p x-show="item.description" class="text-xs text-slate-500 dark:text-slate-400 mt-0.5 line-clamp-1" x-text="item.description"></p>
+                  </div>
+                </div>
+              </template>
+            </div>
+          </div>
+        </template>
+      </div>
+    </section>
+
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+      <section>
+        <h2 class="text-base font-semibold text-slate-700 dark:text-slate-200 mb-3">Job Pipeline</h2>
+        <div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4" x-html="careerPipelineHtml"></div>
+      </section>
+      <section>
+        <h2 class="text-base font-semibold text-slate-700 dark:text-slate-200 mb-3">Week Progress</h2>
+        <div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4" x-html="careerWeekHtml"></div>
+      </section>
+    </div>
+
+    <section class="mb-8">
+      <h2 class="text-base font-semibold text-slate-700 dark:text-slate-200 mb-3">Active Applications</h2>
+      <div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 overflow-x-auto" x-html="careerApplicationsHtml"></div>
+    </section>
+
+    <section class="mb-8">
+      <h2 class="text-base font-semibold text-slate-700 dark:text-slate-200 mb-3">Outreach Queue</h2>
+      <div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 overflow-x-auto" x-html="careerOutreachHtml"></div>
+    </section>
+
+    <section class="mb-8">
+      <h2 class="text-base font-semibold text-slate-700 dark:text-slate-200 mb-3">Consulting Pipeline</h2>
+      <div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4" x-html="careerConsultingHtml"></div>
+    </section>
+  </div>
+
+  <!-- ── FINANCE PAGE ── -->
+  <div id="page-finance" x-show="page === 'finance'" x-cloak x-transition.opacity.duration.150ms>
+    <div class="mb-6">
+      <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Finance</h1>
+      <p class="text-sm text-slate-500 dark:text-slate-400 mt-0.5">Personal spending, income &amp; corporate accounting</p>
+    </div>
+
+    <section class="mb-8">
+      <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+        <div class="flex items-center gap-2">
+          <h2 class="text-base font-semibold text-slate-700 dark:text-slate-200">Action Items</h2>
+          <span x-show="(actionData.finance || []).length" class="text-xs font-semibold bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300 px-2 py-0.5 rounded-full" x-text="(actionData.finance || []).length + ' open'"></span>
+        </div>
+        <div class="flex flex-wrap gap-1.5">
+          <select class="text-xs border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-lg px-2 py-1 cursor-pointer focus:outline-none" x-model="actionState.finance.sort">
+            <option value="date-urgency">Date → Urgency</option>
+            <option value="urgency-date">Urgency → Date</option>
+            <option value="urgency">Urgency only</option>
+            <option value="date">Date only</option>
+          </select>
+          <select class="text-xs border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-lg px-2 py-1 cursor-pointer focus:outline-none" x-model="actionState.finance.group">
+            <option value="none">No grouping</option>
+            <option value="category">Group: Category</option>
+          </select>
+          <select class="text-xs border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-lg px-2 py-1 cursor-pointer focus:outline-none" x-model="actionState.finance.range">
+            <option value="all">All</option>
+            <option value="overdue">Overdue</option>
+            <option value="today">Due today</option>
+            <option value="week">This week</option>
+            <option value="2weeks">Next 2 weeks</option>
+            <option value="nodateset">No due date</option>
+          </select>
+        </div>
+      </div>
+      <div class="space-y-2">
+        <template x-if="loadError.finance">
+          <div class="p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg text-sm text-red-700 dark:text-red-300" x-text="loadError.finance"></div>
+        </template>
+        <template x-if="!loadError.finance && !pageReady.finance">
+          <div class="skeleton h-14 w-full"></div>
+        </template>
+        <template x-if="pageReady.finance && !getActionGroups('finance', { showDomain: false }).length">
+          <div class="text-center py-8 text-sm text-slate-400 dark:text-slate-500">No open action items matching current filters</div>
+        </template>
+        <template x-for="grp in getActionGroups('finance', { showDomain: false })" :key="grp.key">
+          <div class="mb-5">
+            <div class="flex items-center gap-2 mb-2" x-show="grp.label">
+              <span class="text-xs font-semibold px-2 py-0.5 rounded-full capitalize" :class="grp.headerClass" x-text="grp.label"></span>
+              <span class="text-xs text-slate-400 dark:text-slate-500" x-text="grp.items.length"></span>
+            </div>
+            <div class="space-y-2">
+              <template x-for="(item, idx) in grp.items" :key="item.id != null ? item.id : 'f-' + idx + '-' + (item.title || '')">
+                <div class="flex items-start gap-3 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 border-l-4 rounded-lg px-4 py-3" :class="urgencyBorderClass(item)">
+                  <span class="inline-block w-2 h-2 rounded-full flex-shrink-0 mt-1" :class="urgencyDotClass(item)"></span>
+                  <div class="flex-1 min-w-0">
+                    <div class="flex flex-wrap items-center gap-2">
+                      <span class="text-sm font-medium text-slate-800 dark:text-slate-100" x-text="item.title"></span>
+                      <span x-html="dueChipHtml(item)"></span>
+                    </div>
+                    <p x-show="item.description" class="text-xs text-slate-500 dark:text-slate-400 mt-0.5 line-clamp-1" x-text="item.description"></p>
+                  </div>
+                </div>
+              </template>
+            </div>
+          </div>
+        </template>
+      </div>
+    </section>
+
+    <section class="mb-8">
+      <h2 class="text-base font-semibold text-slate-700 dark:text-slate-200 mb-3">Accounts</h2>
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3" x-html="financeAccountsHtml"></div>
+    </section>
+
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+      <section>
+        <h2 class="text-base font-semibold text-slate-700 dark:text-slate-200 mb-3">Burn Rate (Last 3 Months)</h2>
+        <div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4" x-html="financeBurnHtml"></div>
+      </section>
+      <section>
+        <h2 class="text-base font-semibold text-slate-700 dark:text-slate-200 mb-3">This Month by Category</h2>
+        <div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4" x-html="financeCategoriesHtml"></div>
+      </section>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+      <section>
+        <h2 class="text-base font-semibold text-slate-700 dark:text-slate-200 mb-3">Income (Last 6 Months)</h2>
+        <div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4" x-html="financeIncomeHtml"></div>
+      </section>
+      <section>
+        <h2 class="text-base font-semibold text-slate-700 dark:text-slate-200 mb-3">Top Merchants</h2>
+        <div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4" x-html="financeMerchantsHtml"></div>
+      </section>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+      <section>
+        <h2 class="text-base font-semibold text-slate-700 dark:text-slate-200 mb-3">Compliance Deadlines</h2>
+        <div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden" x-html="financeComplianceHtml"></div>
+      </section>
+      <section>
+        <h2 class="text-base font-semibold text-slate-700 dark:text-slate-200 mb-3">Shareholder Loan</h2>
+        <div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4" x-html="financeLoanHtml"></div>
+      </section>
+    </div>
+
+    <section class="mb-8">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="text-base font-semibold text-slate-700 dark:text-slate-200">Trial Balance</h2>
+        <button type="button" @click="toggleTrialBalance()" class="text-xs text-blue-500 hover:text-blue-600 dark:text-blue-400" x-text="trialBalanceMode === 'detail' ? 'Show summary' : 'Show detail'"></button>
+      </div>
+      <div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 overflow-x-auto" x-html="trialBalanceHtml"></div>
+    </section>
+  </div>
+
+  <!-- ── BUSINESS PAGE ── -->
+  <div id="page-business" x-show="page === 'business'" x-cloak x-transition.opacity.duration.150ms>
+    <div class="mb-6">
+      <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Business</h1>
+      <p class="text-sm text-slate-500 dark:text-slate-400 mt-0.5">WynnSet Inc. — corporate overview &amp; compliance</p>
+    </div>
+
+    <section class="mb-8">
+      <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+        <div class="flex items-center gap-2">
+          <h2 class="text-base font-semibold text-slate-700 dark:text-slate-200">Action Items</h2>
+          <span x-show="(actionData.business || []).length" class="text-xs font-semibold bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300 px-2 py-0.5 rounded-full" x-text="(actionData.business || []).length + ' open'"></span>
+        </div>
+        <div class="flex flex-wrap gap-1.5">
+          <select class="text-xs border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-lg px-2 py-1 cursor-pointer focus:outline-none" x-model="actionState.business.sort">
+            <option value="date-urgency">Date → Urgency</option>
+            <option value="urgency-date">Urgency → Date</option>
+            <option value="urgency">Urgency only</option>
+            <option value="date">Date only</option>
+          </select>
+          <select class="text-xs border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-lg px-2 py-1 cursor-pointer focus:outline-none" x-model="actionState.business.group">
+            <option value="none">No grouping</option>
+            <option value="category">Group: Category</option>
+          </select>
+          <select class="text-xs border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-lg px-2 py-1 cursor-pointer focus:outline-none" x-model="actionState.business.range">
+            <option value="all">All</option>
+            <option value="overdue">Overdue</option>
+            <option value="today">Due today</option>
+            <option value="week">This week</option>
+            <option value="2weeks">Next 2 weeks</option>
+            <option value="nodateset">No due date</option>
+          </select>
+        </div>
+      </div>
+      <div class="space-y-2">
+        <template x-if="loadError.business">
+          <div class="p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg text-sm text-red-700 dark:text-red-300" x-text="loadError.business"></div>
+        </template>
+        <template x-if="!loadError.business && !pageReady.business">
+          <div class="skeleton h-14 w-full"></div>
+        </template>
+        <template x-if="pageReady.business && !getActionGroups('business', { showDomain: false }).length">
+          <div class="text-center py-8 text-sm text-slate-400 dark:text-slate-500">No open action items matching current filters</div>
+        </template>
+        <template x-for="grp in getActionGroups('business', { showDomain: false })" :key="grp.key">
+          <div class="mb-5">
+            <div class="flex items-center gap-2 mb-2" x-show="grp.label">
+              <span class="text-xs font-semibold px-2 py-0.5 rounded-full capitalize" :class="grp.headerClass" x-text="grp.label"></span>
+              <span class="text-xs text-slate-400 dark:text-slate-500" x-text="grp.items.length"></span>
+            </div>
+            <div class="space-y-2">
+              <template x-for="(item, idx) in grp.items" :key="item.id != null ? item.id : 'b-' + idx + '-' + (item.title || '')">
+                <div class="flex items-start gap-3 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 border-l-4 rounded-lg px-4 py-3" :class="urgencyBorderClass(item)">
+                  <span class="inline-block w-2 h-2 rounded-full flex-shrink-0 mt-1" :class="urgencyDotClass(item)"></span>
+                  <div class="flex-1 min-w-0">
+                    <div class="flex flex-wrap items-center gap-2">
+                      <span class="text-sm font-medium text-slate-800 dark:text-slate-100" x-text="item.title"></span>
+                      <span x-html="dueChipHtml(item)"></span>
+                    </div>
+                    <p x-show="item.description" class="text-xs text-slate-500 dark:text-slate-400 mt-0.5 line-clamp-1" x-text="item.description"></p>
+                  </div>
+                </div>
+              </template>
+            </div>
+          </div>
+        </template>
+      </div>
+    </section>
+
+    <section class="mb-8">
+      <h2 class="text-base font-semibold text-slate-700 dark:text-slate-200 mb-3">WynnSet Overview</h2>
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-3" x-html="businessSummaryHtml"></div>
+    </section>
+
+    <section class="mb-8">
+      <h2 class="text-base font-semibold text-slate-700 dark:text-slate-200 mb-3">Compliance Calendar</h2>
+      <div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 overflow-x-auto" x-html="businessComplianceHtml"></div>
+    </section>
+
+    <section class="mb-8">
+      <h2 class="text-base font-semibold text-slate-700 dark:text-slate-200 mb-3">Chart of Accounts</h2>
+      <div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden">
+        <template x-if="!businessCoaSections.length && pageReady.business">
+          <div class="text-center py-8 text-sm text-slate-400 dark:text-slate-500">No chart of accounts data</div>
+        </template>
+        <template x-for="(row, i) in businessCoaSections" :key="row.type + '-' + i">
+          <div class="border-b border-slate-100 dark:border-slate-700 last:border-0">
+            <button type="button" @click="row.open = !row.open" class="w-full flex items-center justify-between px-4 py-3 hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
+              <span class="font-medium capitalize" :class="coaTypeColor(row.type)" x-text="row.type"></span>
+              <span class="flex items-center gap-3 text-sm text-slate-500 dark:text-slate-400">
+                <span x-text="row.account_count + ' accounts'"></span>
+                <svg class="w-4 h-4 text-slate-400 shrink-0 transition-transform duration-200" :class="row.open ? 'rotate-180' : ''" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/></svg>
+              </span>
+            </button>
+            <div x-show="row.open" x-cloak class="px-4 pb-3">
+              <table class="w-full text-sm">
+                <template x-for="(a, ai) in row.accounts" :key="a.code + '-' + ai">
+                  <tr class="border-t border-slate-50 dark:border-slate-700/50">
+                    <td class="py-1.5 text-slate-500 dark:text-slate-400 w-16" x-text="a.code"></td>
+                    <td class="py-1.5 text-slate-800 dark:text-slate-200" x-text="a.name"></td>
+                    <td class="py-1.5 text-slate-400 dark:text-slate-500 text-right" x-text="a.subtype || ''"></td>
+                  </tr>
+                </template>
+              </table>
+            </div>
+          </div>
+        </template>
+      </div>
+    </section>
+  </div>
+
+  <!-- ── FILES PAGE ── -->
+  <div id="page-files" x-show="page === 'files'" x-cloak x-transition.opacity.duration.150ms>
+    <div class="flex flex-col lg:flex-row lg:items-stretch lg:gap-0 lg:min-h-[calc(100vh-8rem)]">
+      <!-- File list (sidebar on lg+) -->
+      <div class="flex flex-col min-h-0 lg:w-80 xl:w-[22rem] shrink-0 lg:pr-5 lg:border-r border-slate-200 dark:border-slate-700">
+        <div class="mb-6 flex items-center justify-between gap-3 shrink-0">
+          <div class="min-w-0">
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Files</h1>
+            <p class="text-sm text-slate-500 dark:text-slate-400 mt-0.5 hidden sm:block">Browse, view, edit, and download files</p>
+          </div>
+          <label class="cursor-pointer shrink-0 px-4 py-2 text-sm font-medium bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors">
+            Upload
+            <input type="file" multiple class="hidden" @change="handleFileInput($event)" />
+          </label>
+        </div>
+        <div class="flex-1 min-h-0 lg:overflow-y-auto lg:pr-1 -mr-1">
+          <template x-if="filesLoadError">
+            <div class="text-red-500 text-sm p-4" x-text="filesLoadError"></div>
+          </template>
+          <template x-if="!filesLoadError && filesLoading">
+            <div class="skeleton h-32 rounded-xl"></div>
+          </template>
+          <template x-if="!filesLoading && !filesLoadError && !fileSections.length">
+            <div class="text-slate-400 dark:text-slate-500 text-sm p-4">No files found.</div>
+          </template>
+          <template x-for="sec in fileSections" :key="sec.dir">
+            <div class="mb-4">
+              <button type="button" @click="sec.open = !sec.open" class="w-full flex items-center gap-2 px-1 py-2 rounded-lg text-left hover:bg-slate-100/80 dark:hover:bg-slate-700/50 transition-colors -mx-1">
+                <svg class="w-4 h-4 text-slate-400 shrink-0 transition-transform duration-200" :class="sec.open ? 'rotate-90' : ''" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+                <h3 class="text-sm font-semibold text-slate-600 dark:text-slate-300 uppercase tracking-wide flex-1 min-w-0 truncate" x-text="sec.label"></h3>
+                <span class="text-xs text-slate-400 dark:text-slate-500 tabular-nums shrink-0" x-text="sec.files.length"></span>
+              </button>
+              <div x-show="sec.open" x-cloak class="mt-1 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 divide-y divide-slate-100 dark:divide-slate-700 overflow-hidden">
+                <template x-if="!sec.files.length">
+                  <div class="px-4 py-6 text-sm text-slate-400 dark:text-slate-500 text-center">No files yet.</div>
+                </template>
+                <template x-for="f in sec.files" :key="sec.dir + '/' + f.name">
+                  <div role="button" tabindex="0" @click="openFileRow(sec.dir, f.name)" @keydown.enter.prevent="openFileRow(sec.dir, f.name)" @keydown.space.prevent="openFileRow(sec.dir, f.name)" class="px-4 py-3 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700/40 active:bg-slate-100 dark:active:bg-slate-700/60 transition-colors">
+                    <div class="min-w-0">
+                      <span class="text-sm font-medium text-slate-800 dark:text-slate-100 truncate block" x-text="f.name"></span>
+                      <span class="text-xs text-slate-500 dark:text-slate-400 mt-0.5 block" x-text="fileTypeLabel(f.name)"></span>
+                      <span class="text-xs text-slate-400 dark:text-slate-500 mt-0.5 block" x-text="fileMetaLine(f)"></span>
+                    </div>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </template>
+        </div>
+      </div>
+
+      <!-- Desktop: viewer / editor pane -->
+      <div class="hidden lg:flex flex-1 flex-col min-w-0 min-h-0 mt-6 lg:mt-0 lg:pl-5">
+        <div x-show="!viewerOpen && !editorOpen" class="flex-1 flex flex-col items-center justify-center rounded-xl border border-dashed border-slate-200 dark:border-slate-600 bg-slate-50/50 dark:bg-slate-800/30 text-slate-400 dark:text-slate-500 text-sm px-6 py-16 text-center">
+          <i data-lucide="file-text" class="w-10 h-10 mb-3 opacity-50"></i>
+          <p>Select a file in the list to open it here. Use <strong class="font-medium text-slate-500 dark:text-slate-400">Edit</strong> in the toolbar when previewing an editable file.</p>
+        </div>
+        <div x-show="viewerOpen && !editorOpen" x-cloak class="flex flex-col flex-1 min-h-0 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 shadow-sm overflow-hidden">
+          <div class="flex items-center justify-between gap-2 px-4 py-3 border-b border-slate-200 dark:border-slate-700 shrink-0">
+            <span class="font-semibold text-slate-800 dark:text-slate-100 text-sm truncate min-w-0" x-text="viewerTitle"></span>
+            <div class="flex items-center gap-1 shrink-0">
+              <button type="button" x-show="viewerPath && viewerDisplayMode !== 'download'" @click="triggerFileDownload(viewerPath.dir, viewerPath.name)" class="text-xs font-medium px-2.5 py-1.5 rounded-md bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 transition-colors">Download</button>
+              <button type="button" x-show="viewerPath && fileIsEditable(viewerPath.name)" @click="editFromViewer()" class="text-xs font-medium px-2.5 py-1.5 rounded-md bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 transition-colors">Edit</button>
+              <button type="button" @click="closeViewer()" class="icon-btn p-1.5 rounded-md text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700" aria-label="Close">
+                <i data-lucide="x" class="w-5 h-5"></i>
+              </button>
+            </div>
+          </div>
+          <div x-show="viewerDisplayMode === 'markdown'" class="flex-1 overflow-auto p-4 text-sm text-slate-700 dark:text-slate-200 min-h-0 chat-md-output" x-html="viewerMarkdownHtml()"></div>
+          <pre x-show="viewerDisplayMode === 'text'" x-cloak class="flex-1 overflow-auto p-4 text-xs text-slate-700 dark:text-slate-200 font-mono whitespace-pre-wrap min-h-0" x-text="viewerContent"></pre>
+          <template x-if="viewerDisplayMode === 'pdf'">
+            <iframe class="flex-1 w-full min-h-[min(70vh,32rem)] border-0 bg-slate-100 dark:bg-slate-900" :title="viewerTitle" :src="viewerAssetUrl()"></iframe>
+          </template>
+          <div x-show="viewerDisplayMode === 'download'" x-cloak class="flex-1 flex flex-col items-center justify-center gap-4 p-8 text-center min-h-[12rem]">
+            <i data-lucide="download-cloud" class="w-12 h-12 text-slate-300 dark:text-slate-600"></i>
+            <div>
+              <p class="text-sm font-medium text-slate-700 dark:text-slate-200">Preview isn’t available for this file type</p>
+              <p class="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-sm">Download it to open with an app on your device.</p>
+            </div>
+            <button type="button" @click="triggerFileDownload(viewerPath.dir, viewerPath.name)" class="px-4 py-2 text-sm font-medium rounded-lg bg-slate-800 dark:bg-slate-200 text-white dark:text-slate-900 hover:bg-slate-900 dark:hover:bg-white transition-colors">Download <span x-text="viewerTitle"></span></button>
+          </div>
+          <div x-show="viewerDisplayMode === 'error'" x-cloak class="flex-1 flex flex-col items-center justify-center gap-4 p-8 text-center min-h-[12rem]">
+            <i data-lucide="alert-circle" class="w-12 h-12 text-amber-500 dark:text-amber-400"></i>
+            <div>
+              <p class="text-sm font-medium text-slate-700 dark:text-slate-200">Couldn’t load this file</p>
+              <p class="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-sm" x-text="viewerLoadError"></p>
+            </div>
+            <div class="flex flex-wrap gap-2 justify-center">
+              <button type="button" x-show="viewerPath" @click="viewFile(viewerPath.dir, viewerPath.name)" class="px-4 py-2 text-sm font-medium rounded-lg bg-slate-100 dark:bg-slate-700 text-slate-800 dark:text-slate-100 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors">Try again</button>
+              <button type="button" x-show="viewerPath" @click="triggerFileDownload(viewerPath.dir, viewerPath.name)" class="px-4 py-2 text-sm font-medium rounded-lg bg-slate-800 dark:bg-slate-200 text-white dark:text-slate-900 hover:bg-slate-900 dark:hover:bg-white transition-colors">Download</button>
+            </div>
+          </div>
+        </div>
+        <div x-show="editorOpen" x-cloak class="flex flex-col flex-1 min-h-0 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 shadow-sm overflow-hidden">
+          <div class="flex items-center justify-between px-4 py-3 border-b border-slate-200 dark:border-slate-700 shrink-0">
+            <span class="font-semibold text-slate-800 dark:text-slate-100 text-sm truncate pr-2" x-text="editorTitle"></span>
+            <button type="button" @click="editorOpen = false" class="icon-btn p-1.5 rounded-md text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 shrink-0" aria-label="Close">
+              <i data-lucide="x" class="w-5 h-5"></i>
+            </button>
+          </div>
+          <textarea x-model="editorContent" class="flex-1 p-4 text-xs text-slate-700 dark:text-slate-200 dark:bg-slate-800 font-mono resize-none focus:outline-none min-h-[240px]"></textarea>
+          <div class="flex justify-end gap-2 px-4 py-3 border-t border-slate-200 dark:border-slate-700 shrink-0">
+            <button type="button" @click="editorOpen = false" class="px-4 py-1.5 text-sm rounded-lg bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 transition-colors">Cancel</button>
+            <button type="button" @click="saveFile()" :disabled="editorSaving" class="px-4 py-1.5 text-sm rounded-lg bg-blue-600 hover:bg-blue-700 text-white transition-colors disabled:opacity-50" x-text="editorSaving ? 'Saving…' : 'Save'"></button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+  <!-- Chat panel: desktop -->
+  <aside x-show="chatOpen" x-cloak x-transition:enter="transition ease-out duration-200" x-transition:enter-start="translate-x-full" x-transition:enter-end="translate-x-0" x-transition:leave="transition ease-in duration-150" x-transition:leave-start="translate-x-0" x-transition:leave-end="translate-x-full"
+    class="hidden lg:flex flex-row fixed right-0 top-14 bottom-0 bg-white dark:bg-slate-800 border-l border-slate-200 dark:border-slate-700 shadow-xl z-40 overflow-hidden"
+    :style="{ width: chatPanelWidth + 'px' }">
+    <div class="group relative w-3 shrink-0 flex justify-center cursor-col-resize hover:bg-slate-100/80 dark:hover:bg-slate-700/50 transition-colors"
+      title="Drag to resize"
+      @mousedown.prevent="startResizeChat($event)">
+      <div class="absolute top-1/2 -translate-y-1/2 left-1/2 -translate-x-1/2 w-px h-8 rounded-full bg-slate-300/0 group-hover:bg-slate-300 dark:group-hover:bg-slate-500 transition-colors"></div>
+    </div>
+    <div class="flex flex-col flex-1 min-w-0 min-h-0">
+      <div class="flex items-center gap-2 px-2 py-2 border-b border-slate-200 dark:border-slate-700 shrink-0">
+        <button type="button" @click="openChatHistory()" class="text-xs font-medium px-2 py-1.5 rounded-md bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200 shrink-0">History</button>
+        <button type="button" @click="newChatConversation()" class="text-xs font-medium px-2 py-1.5 rounded-md bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200 shrink-0">New</button>
+        <span class="flex-1 min-w-0 text-xs font-semibold text-slate-700 dark:text-slate-200 truncate text-center" x-text="chatSessionTitle || 'Chat'"></span>
+        <button type="button" @click="closeChat()" class="icon-btn p-1.5 rounded-md text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 shrink-0" aria-label="Close chat">
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
+      </div>
+      <div class="flex flex-col flex-1 min-h-0 min-w-0">
+        <div class="flex-1 overflow-y-auto p-3 text-sm min-h-0 min-w-0" x-ref="chatScrollDesktop">
+          <template x-if="!chatMessages.length && !chatStreaming">
+            <p class="chat-md-placeholder text-slate-400 dark:text-slate-500 text-sm">Send a message to start this conversation.</p>
+          </template>
+          <div class="space-y-3">
+            <template x-for="m in chatMessages" :key="m.id">
+              <div class="flex" :class="m.role === 'user' ? 'justify-end' : 'justify-start'">
+                <div class="max-w-[min(100%,28rem)] min-w-0 rounded-2xl px-3 py-2 text-sm break-words shadow-sm"
+                  :class="m.role === 'user'
+                    ? 'bg-slate-800 dark:bg-slate-600 text-white chat-bubble-user'
+                    : (m.error ? 'bg-red-50 dark:bg-red-900/25 text-red-900 dark:text-red-200 border border-red-200 dark:border-red-800' : 'bg-slate-100 dark:bg-slate-700/80 text-slate-800 dark:text-slate-100')">
+                  <div class="chat-md-output" x-html="chatBubbleHtml(m)"></div>
+                </div>
+              </div>
+            </template>
+            <div x-show="chatStreaming && chatStreamDraft" class="flex justify-start">
+              <div class="max-w-[min(100%,28rem)] min-w-0 rounded-2xl px-3 py-2 text-sm bg-slate-100 dark:bg-slate-700/80 text-slate-800 dark:text-slate-100 chat-md-output break-words" x-html="streamingAssistantHtml()"></div>
+            </div>
+            <div x-show="chatStreaming && !chatStreamDraft" x-cloak class="flex justify-start">
+              <div class="max-w-[min(100%,28rem)] min-w-0 rounded-2xl px-3 py-2 text-xs font-medium bg-amber-50 dark:bg-amber-900/20 text-amber-900 dark:text-amber-200 border border-amber-200/80 dark:border-amber-800/60 flex items-center justify-between gap-3">
+                <span>Waiting for response…</span>
+                <span class="tabular-nums shrink-0 text-amber-800/90 dark:text-amber-300" x-text="chatElapsedSec + 's'"></span>
+              </div>
+            </div>
+            <div x-show="chatThinkingLog.length && chatStreaming" x-cloak class="flex justify-start">
+              <details class="max-w-[min(100%,28rem)] w-full min-w-0 text-xs border border-slate-200 dark:border-slate-600 rounded-2xl open:bg-slate-50/80 dark:open:bg-slate-800/50">
+                <summary class="cursor-pointer px-3 py-2 font-medium text-slate-600 dark:text-slate-400 list-inside">Activity</summary>
+                <div class="max-h-28 overflow-y-auto px-3 pb-2 font-mono text-[11px] text-slate-500 dark:text-slate-400 space-y-0.5 border-t border-slate-100 dark:border-slate-700">
+                  <template x-for="line in chatThinkingLog" :key="line.id">
+                    <div class="break-words" x-text="line.text"></div>
+                  </template>
+                </div>
+              </details>
+            </div>
+          </div>
+        </div>
+        <div x-show="!chatStreaming && chatMessages.length && chatMessages[chatMessages.length - 1].error" class="px-3 pt-1 shrink-0" x-cloak>
+          <button type="button" @click="retryLastChat()" class="text-xs font-medium text-blue-600 dark:text-blue-400 hover:underline">Retry send</button>
+        </div>
+        <div class="flex gap-2 p-3 border-t border-slate-200 dark:border-slate-700 shrink-0 bg-white dark:bg-slate-800">
+          <textarea x-ref="chatPromptDesktop" x-model="chatPrompt" @keydown.enter.prevent="!$event.shiftKey && submitChat()" rows="2" placeholder="Ask your agent… (Enter to send, Shift+Enter for newline)"
+            class="flex-1 min-w-0 text-base lg:text-sm rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 px-3 py-2.5 resize-none focus:outline-none focus:ring-2 focus:ring-slate-400 dark:focus:ring-slate-500 min-h-[44px]"></textarea>
+          <div class="flex flex-col gap-1 shrink-0">
+            <button type="button" @click="submitChat()" :disabled="chatStreaming || !chatPrompt.trim()" class="px-3 py-2 text-sm font-medium bg-slate-800 dark:bg-slate-200 text-white dark:text-slate-900 hover:bg-slate-900 dark:hover:bg-white rounded-lg disabled:opacity-50 min-h-[44px]">Send</button>
+            <button type="button" x-show="chatStreaming" @click="abortChat()" class="px-3 py-2 text-sm bg-slate-200 dark:bg-slate-700 rounded-lg">Stop</button>
+          </div>
+        </div>
+        <div class="px-3 pb-3 pt-0 border-t border-transparent shrink-0 bg-white dark:bg-slate-800">
+          <div class="flex flex-col sm:flex-row sm:items-center gap-2 pt-2">
+            <label class="sr-only" for="chat-agent-desktop">Agent</label>
+            <select id="chat-agent-desktop" x-model="chatAgent" @change="onChatAgentChange()" :disabled="chatMessages.length > 0" class="flex-1 min-w-0 text-xs sm:text-sm rounded-md border border-slate-200 dark:border-slate-600 bg-slate-50 dark:bg-slate-900/50 text-slate-800 dark:text-slate-100 px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-slate-400 dark:focus:ring-slate-500 disabled:opacity-60">
+              <template x-for="a in chatAgents" :key="a"><option :value="a" x-text="chatAgentDisplayName(a)"></option></template>
+            </select>
+            <div @dragover.prevent="chatDragActive = true" @dragleave="chatDragActive = false" @drop.prevent="handleChatDrop($event)"
+                 :class="chatDragActive ? 'border-slate-400 bg-slate-50 dark:bg-slate-700/40' : 'border-slate-200 dark:border-slate-600'"
+                 class="flex-1 min-w-0 border border-dashed rounded-md px-2 py-1.5 text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 transition-colors cursor-pointer text-center sm:text-left truncate"
+                 @click="$refs.chatFileInputDesktop.click()">
+              <span x-show="!chatFiles.length">Attach → team-inbox</span>
+              <span x-show="chatFiles.length" x-text="chatFiles.length + ' attached'"></span>
+            </div>
+          </div>
+          <input type="file" multiple class="hidden" x-ref="chatFileInputDesktop" @change="handleChatFileSelect($event)" />
+        </div>
+      </div>
+    </div>
+  </aside>
+</div>
+
+<!-- Mobile full-screen chat -->
+<div x-show="chatOpen" x-cloak x-transition class="lg:hidden fixed inset-0 z-[60] flex flex-col min-h-[100dvh] bg-white dark:bg-slate-800 overscroll-contain touch-pan-y chat-mobile-panel">
+  <div class="flex items-center gap-2 px-2 py-2 border-b border-slate-200 dark:border-slate-700 shrink-0 safe-top" style="padding-top: max(0.75rem, env(safe-area-inset-top));">
+    <button type="button" @click="openChatHistory()" class="text-xs font-medium px-2 py-2 rounded-md bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200 shrink-0 min-h-[44px]">History</button>
+    <button type="button" @click="newChatConversation()" class="text-xs font-medium px-2 py-2 rounded-md bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200 shrink-0 min-h-[44px]">New</button>
+    <span class="flex-1 min-w-0 text-xs font-semibold text-slate-800 dark:text-slate-100 truncate text-center" x-text="chatSessionTitle || 'Chat'"></span>
+    <button type="button" @click="closeChat()" class="icon-btn p-2 rounded-md text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-700 min-h-[44px] min-w-[44px] shrink-0" aria-label="Close chat">
+      <i data-lucide="x" class="w-5 h-5"></i>
+    </button>
+  </div>
+  <div class="flex flex-col flex-1 min-h-0 min-w-0">
+    <div class="flex-1 overflow-y-auto p-3 text-sm min-h-0 min-w-0" x-ref="chatScrollMobile">
+      <template x-if="!chatMessages.length && !chatStreaming">
+        <p class="chat-md-placeholder text-slate-400 dark:text-slate-500 text-sm">Send a message to start this conversation.</p>
+      </template>
+      <div class="space-y-3">
+        <template x-for="m in chatMessages" :key="'mb-'+m.id">
+          <div class="flex" :class="m.role === 'user' ? 'justify-end' : 'justify-start'">
+            <div class="max-w-[min(100%,28rem)] min-w-0 rounded-2xl px-3 py-2 text-sm break-words shadow-sm"
+              :class="m.role === 'user'
+                ? 'bg-slate-800 dark:bg-slate-600 text-white chat-bubble-user'
+                : (m.error ? 'bg-red-50 dark:bg-red-900/25 text-red-900 dark:text-red-200 border border-red-200 dark:border-red-800' : 'bg-slate-100 dark:bg-slate-700/80 text-slate-800 dark:text-slate-100')">
+              <div class="chat-md-output" x-html="chatBubbleHtml(m)"></div>
+            </div>
+          </div>
+        </template>
+        <div x-show="chatStreaming && chatStreamDraft" class="flex justify-start">
+          <div class="max-w-[min(100%,28rem)] min-w-0 rounded-2xl px-3 py-2 text-sm bg-slate-100 dark:bg-slate-700/80 text-slate-800 dark:text-slate-100 chat-md-output break-words" x-html="streamingAssistantHtml()"></div>
+        </div>
+        <div x-show="chatStreaming && !chatStreamDraft" x-cloak class="flex justify-start">
+          <div class="max-w-[min(100%,28rem)] min-w-0 rounded-2xl px-3 py-2 text-xs font-medium bg-amber-50 dark:bg-amber-900/20 text-amber-900 dark:text-amber-200 border border-amber-200/80 dark:border-amber-800/60 flex items-center justify-between gap-3">
+            <span>Waiting for response…</span>
+            <span class="tabular-nums shrink-0 text-amber-800/90 dark:text-amber-300" x-text="chatElapsedSec + 's'"></span>
+          </div>
+        </div>
+        <div x-show="chatThinkingLog.length && chatStreaming" x-cloak class="flex justify-start">
+          <details class="max-w-[min(100%,28rem)] w-full min-w-0 text-xs border border-slate-200 dark:border-slate-600 rounded-2xl open:bg-slate-50/80 dark:open:bg-slate-800/50">
+            <summary class="cursor-pointer px-3 py-2 font-medium text-slate-600 dark:text-slate-400 list-inside">Activity</summary>
+            <div class="max-h-28 overflow-y-auto px-3 pb-2 font-mono text-[11px] text-slate-500 dark:text-slate-400 space-y-0.5 border-t border-slate-100 dark:border-slate-700">
+              <template x-for="line in chatThinkingLog" :key="'m-'+line.id">
+                <div class="break-words" x-text="line.text"></div>
+              </template>
+            </div>
+          </details>
+        </div>
+      </div>
+    </div>
+    <div class="shrink-0 border-t border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+      <div x-show="!chatStreaming && chatMessages.length && chatMessages[chatMessages.length - 1].error" class="px-3 pt-2" x-cloak>
+        <button type="button" @click="retryLastChat()" class="text-xs font-medium text-blue-600 dark:text-blue-400">Retry send</button>
+      </div>
+      <div class="flex gap-2 p-3">
+        <textarea x-ref="chatPromptMobile" x-model="chatPrompt" @keydown.enter.prevent="!$event.shiftKey && submitChat()" rows="2" placeholder="Ask… (Enter send, Shift+Enter newline)"
+          class="flex-1 min-w-0 text-base rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 px-3 py-2.5 resize-none focus:outline-none focus:ring-2 focus:ring-slate-400 dark:focus:ring-slate-500 min-h-[44px] max-h-40"></textarea>
+        <div class="flex flex-col gap-1 shrink-0">
+          <button type="button" @click="submitChat()" :disabled="chatStreaming || !chatPrompt.trim()" class="px-3 py-2 text-sm font-medium bg-slate-800 dark:bg-slate-200 text-white dark:text-slate-900 rounded-lg disabled:opacity-50 min-h-[44px]">Send</button>
+          <button type="button" x-show="chatStreaming" @click="abortChat()" class="px-3 py-2 text-sm bg-slate-200 dark:bg-slate-700 rounded-lg">Stop</button>
+        </div>
+      </div>
+      <div class="px-3 pb-2 flex flex-col gap-2">
+        <label class="sr-only" for="chat-agent-mobile">Agent</label>
+        <select id="chat-agent-mobile" x-model="chatAgent" @change="onChatAgentChange()" :disabled="chatMessages.length > 0" class="w-full text-sm rounded-md border border-slate-200 dark:border-slate-600 bg-slate-50 dark:bg-slate-900/50 px-2 py-2 focus:outline-none focus:ring-2 focus:ring-slate-400 dark:focus:ring-slate-500 disabled:opacity-60">
+          <template x-for="a in chatAgents" :key="'m-'+a"><option :value="a" x-text="chatAgentDisplayName(a)"></option></template>
+        </select>
+        <div @dragover.prevent="chatDragActive = true" @dragleave="chatDragActive = false" @drop.prevent="handleChatDrop($event)"
+             :class="chatDragActive ? 'border-slate-400 bg-slate-50 dark:bg-slate-700/40' : 'border-slate-200 dark:border-slate-600'"
+             class="border border-dashed rounded-md px-2 py-2 text-xs text-slate-500 dark:text-slate-400 text-center" @click="$refs.chatFileInputMobile.click()">
+          <span x-show="!chatFiles.length">Tap to attach → team-inbox</span>
+          <span x-show="chatFiles.length" x-text="chatFiles.length + ' attached'"></span>
+        </div>
+        <input type="file" multiple class="hidden" x-ref="chatFileInputMobile" @change="handleChatFileSelect($event)" />
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Chat conversation history -->
+<div x-show="chatHistoryOpen" x-cloak @keydown.escape.window="chatHistoryOpen = false" @click.self="chatHistoryOpen = false" class="fixed inset-0 z-[70] flex items-stretch justify-center bg-black/40 p-0 sm:p-4">
+  <div class="flex flex-col w-full max-w-md sm:max-h-[85vh] sm:rounded-xl bg-white dark:bg-slate-800 shadow-xl border-0 sm:border border-slate-200 dark:border-slate-700 overflow-hidden min-h-0" @click.stop>
+    <div class="flex items-center justify-between gap-2 px-4 py-3 border-b border-slate-200 dark:border-slate-700 shrink-0 safe-top" style="padding-top: max(0.75rem, env(safe-area-inset-top));">
+      <span class="text-sm font-semibold text-slate-800 dark:text-slate-100">Conversations</span>
+      <button type="button" @click="chatHistoryOpen = false" class="icon-btn p-2 rounded-md text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-700 min-h-[44px] min-w-[44px]" aria-label="Close">
+        <i data-lucide="x" class="w-5 h-5"></i>
+      </button>
+    </div>
+    <div class="flex-1 overflow-y-auto min-h-0">
+      <template x-if="!chatConversations.length">
+        <p class="text-sm text-slate-400 dark:text-slate-500 p-4">No conversations yet.</p>
+      </template>
+      <template x-for="c in chatConversations" :key="'hist-'+c.id">
+        <div class="flex items-stretch gap-1 border-b border-slate-100 dark:border-slate-700/80 hover:bg-slate-50 dark:hover:bg-slate-700/30">
+          <button type="button" @click="openConversation(c.id)" class="flex-1 min-w-0 text-left px-4 py-3">
+            <div class="text-sm font-medium text-slate-800 dark:text-slate-100 truncate" x-text="c.title"></div>
+            <div class="text-xs text-slate-400 dark:text-slate-500 mt-0.5" x-text="chatAgentDisplayName(c.agent)"></div>
+          </button>
+          <button type="button" @click="deleteConversation(c.id, $event)" class="icon-btn shrink-0 px-3 text-slate-400 hover:text-red-600 dark:hover:text-red-400" title="Delete" aria-label="Delete conversation">
+            <i data-lucide="trash-2" class="w-4 h-4"></i>
+          </button>
+        </div>
+      </template>
+    </div>
+  </div>
+</div>
+
+<!-- ── FILE VIEWER MODAL (mobile / &lt;lg; desktop uses inline pane) ── -->
+<div x-show="viewerOpen" x-cloak @keydown.escape.window="closeViewer()" class="lg:hidden fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" @click.self="closeViewer()">
+  <div class="bg-white dark:bg-slate-800 rounded-xl shadow-xl w-full max-w-4xl max-h-[85vh] flex flex-col min-h-0" @click.stop>
+    <div class="flex items-center justify-between gap-2 px-4 py-3 border-b border-slate-200 dark:border-slate-700 shrink-0">
+      <span class="font-semibold text-slate-800 dark:text-slate-100 text-sm truncate min-w-0" x-text="viewerTitle"></span>
+      <div class="flex items-center gap-1 shrink-0">
+        <button type="button" x-show="viewerPath && viewerDisplayMode !== 'download'" @click="triggerFileDownload(viewerPath.dir, viewerPath.name)" class="text-xs font-medium px-2.5 py-1.5 rounded-md bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200">Download</button>
+        <button type="button" x-show="viewerPath && fileIsEditable(viewerPath.name)" @click="editFromViewer()" class="text-xs font-medium px-2.5 py-1.5 rounded-md bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200">Edit</button>
+        <button type="button" @click="closeViewer()" class="icon-btn p-1.5 rounded-md text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700" aria-label="Close">
+          <i data-lucide="x" class="w-5 h-5"></i>
+        </button>
+      </div>
+    </div>
+    <div x-show="viewerDisplayMode === 'markdown'" class="flex-1 overflow-auto p-5 text-sm text-slate-700 dark:text-slate-200 min-h-0 chat-md-output" x-html="viewerMarkdownHtml()"></div>
+    <pre x-show="viewerDisplayMode === 'text'" x-cloak class="flex-1 overflow-auto p-5 text-xs text-slate-700 dark:text-slate-200 font-mono whitespace-pre-wrap min-h-0" x-text="viewerContent"></pre>
+    <template x-if="viewerDisplayMode === 'pdf'">
+      <iframe class="flex-1 w-full min-h-[50vh] border-0 bg-slate-100 dark:bg-slate-900" :title="viewerTitle" :src="viewerAssetUrl()"></iframe>
+    </template>
+    <div x-show="viewerDisplayMode === 'download'" x-cloak class="flex-1 flex flex-col items-center justify-center gap-4 p-8 text-center min-h-[14rem]">
+      <i data-lucide="download-cloud" class="w-12 h-12 text-slate-300 dark:text-slate-600"></i>
+      <div>
+        <p class="text-sm font-medium text-slate-700 dark:text-slate-200">Preview isn’t available for this file type</p>
+        <p class="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-sm">Download it to open with an app on your device.</p>
+      </div>
+      <button type="button" @click="triggerFileDownload(viewerPath.dir, viewerPath.name)" class="px-4 py-2 text-sm font-medium rounded-lg bg-slate-800 dark:bg-slate-200 text-white dark:text-slate-900">Download <span x-text="viewerTitle"></span></button>
+    </div>
+    <div x-show="viewerDisplayMode === 'error'" x-cloak class="flex-1 flex flex-col items-center justify-center gap-4 p-8 text-center min-h-[14rem]">
+      <i data-lucide="alert-circle" class="w-12 h-12 text-amber-500 dark:text-amber-400"></i>
+      <div>
+        <p class="text-sm font-medium text-slate-700 dark:text-slate-200">Couldn’t load this file</p>
+        <p class="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-sm" x-text="viewerLoadError"></p>
+      </div>
+      <div class="flex flex-wrap gap-2 justify-center">
+        <button type="button" x-show="viewerPath" @click="viewFile(viewerPath.dir, viewerPath.name)" class="px-4 py-2 text-sm font-medium rounded-lg bg-slate-100 dark:bg-slate-700 text-slate-800 dark:text-slate-100">Try again</button>
+        <button type="button" x-show="viewerPath" @click="triggerFileDownload(viewerPath.dir, viewerPath.name)" class="px-4 py-2 text-sm font-medium rounded-lg bg-slate-800 dark:bg-slate-200 text-white dark:text-slate-900">Download</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── FILE EDITOR MODAL (mobile / &lt;lg) ── -->
+<div x-show="editorOpen" x-cloak @keydown.escape.window="editorOpen = false" class="lg:hidden fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" @click.self="editorOpen = false">
+  <div class="bg-white dark:bg-slate-800 rounded-xl shadow-xl w-full max-w-4xl max-h-[85vh] flex flex-col" @click.stop>
+    <div class="flex items-center justify-between px-5 py-3 border-b border-slate-200 dark:border-slate-700">
+      <span class="font-semibold text-slate-800 dark:text-slate-100 text-sm" x-text="editorTitle"></span>
+      <button type="button" @click="editorOpen = false" class="icon-btn p-1.5 rounded-md text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700" aria-label="Close">
+        <i data-lucide="x" class="w-5 h-5"></i>
+      </button>
+    </div>
+    <textarea x-model="editorContent" class="flex-1 p-5 text-xs text-slate-700 dark:text-slate-200 dark:bg-slate-800 font-mono resize-none focus:outline-none min-h-[200px]"></textarea>
+    <div class="flex justify-end gap-2 px-5 py-3 border-t border-slate-200 dark:border-slate-700">
+      <button type="button" @click="editorOpen = false" class="px-4 py-1.5 text-sm rounded-lg bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 transition-colors">Cancel</button>
+      <button type="button" @click="saveFile()" :disabled="editorSaving" class="px-4 py-1.5 text-sm rounded-lg bg-blue-600 hover:bg-blue-700 text-white transition-colors disabled:opacity-50" x-text="editorSaving ? 'Saving…' : 'Save'"></button>
+    </div>
+  </div>
+</div>
+
+<!-- ── DROP OVERLAY ── -->
+<div x-show="dropOverlayVisible" x-cloak class="fixed inset-0 z-50 bg-slate-500/15 backdrop-blur-sm flex items-center justify-center pointer-events-none">
+  <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl px-10 py-8 text-center border border-dashed border-slate-300 dark:border-slate-600 flex flex-col items-center gap-3">
+    <i data-lucide="folder-open" class="w-12 h-12 text-slate-400 dark:text-slate-500"></i>
+    <div class="text-sm font-medium text-slate-600 dark:text-slate-300">Drop files to upload to team-inbox</div>
+  </div>
+</div>
+
+<!-- ── UPLOAD TOAST ── -->
+<div x-show="uploadToast" x-cloak class="fixed bottom-4 right-4 z-[60] text-white text-sm px-4 py-2 rounded-lg shadow-lg transition-opacity max-w-sm" :class="uploadToastClass" x-text="uploadToast"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/lucide@0.469.0/dist/umd/lucide.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked@12.0.0/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.8/dist/purify.min.js"></script>
+<script src="dashboard-app.js"></script>
+<!-- Load Alpine synchronously after dashboard-app.js so alpine:init runs before DOM init (defer can race and leave x-data="app" without scope). -->
+<script src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.8/dist/cdn.min.js"></script>
+</body>
+</html>

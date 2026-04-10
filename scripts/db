@@ -1,0 +1,78 @@
+#!/bin/sh
+# db — thin database layer for all agents
+#
+# Usage:
+#   db query  <dbname> "<sql>"         — read query, returns rows as JSON
+#   db exec   <dbname> "<sql>"         — write statement (INSERT/UPDATE/DELETE)
+#   db script <dbname> <filepath.sql>  — run a .sql file
+#
+# Routing:
+#   Inside Fly container (/data/<name>.db exists) → direct sqlite3
+#   Running locally                               → POST to BRAIN_APP_URL/api/db
+#
+# Local setup (add to ~/.zshrc):
+#   export BRAIN_APP_URL="https://my-brain-dashboard.fly.dev"
+#   export BRAIN_API_TOKEN="<token from fly secrets>"
+
+set -e
+
+MODE="$1"
+DBNAME="$2"
+SQL="$3"
+
+if [ -z "$MODE" ] || [ -z "$DBNAME" ]; then
+  echo "Usage: db <query|exec|script> <dbname> <sql or filepath>" >&2
+  exit 1
+fi
+
+DB_FILE="/data/${DBNAME}.db"
+
+if [ -f "$DB_FILE" ]; then
+  # ── Inside container: direct SQLite access ──────────────────────────────────
+  case "$MODE" in
+    query|exec)
+      sqlite3 -json "$DB_FILE" "$SQL"
+      ;;
+    script)
+      sqlite3 "$DB_FILE" < "$SQL"
+      ;;
+    *)
+      echo "Unknown mode: $MODE. Use query, exec, or script." >&2
+      exit 1
+      ;;
+  esac
+
+else
+  # ── Running locally: call the API ────────────────────────────────────────────
+  if [ -z "$BRAIN_APP_URL" ]; then
+    echo "Error: BRAIN_APP_URL is not set. Add it to ~/.zshrc:" >&2
+    echo "  export BRAIN_APP_URL=\"https://my-brain-dashboard.fly.dev\"" >&2
+    exit 1
+  fi
+  if [ -z "$BRAIN_API_TOKEN" ]; then
+    echo "Error: BRAIN_API_TOKEN is not set. Add it to ~/.zshrc:" >&2
+    echo "  export BRAIN_API_TOKEN=\"<token>\"" >&2
+    exit 1
+  fi
+
+  case "$MODE" in
+    query|exec)
+      PAYLOAD=$(printf '{"db":"%s","sql":%s}' "$DBNAME" "$(printf '%s' "$SQL" | jq -Rs .)")
+      curl -sf -X POST "${BRAIN_APP_URL}/api/db" \
+        -H "Content-Type: application/json" \
+        -H "Authorization: Bearer ${BRAIN_API_TOKEN}" \
+        -d "$PAYLOAD"
+      ;;
+    script)
+      PAYLOAD=$(printf '{"db":"%s","sql":%s}' "$DBNAME" "$(jq -Rs . < "$SQL")")
+      curl -sf -X POST "${BRAIN_APP_URL}/api/db" \
+        -H "Content-Type: application/json" \
+        -H "Authorization: Bearer ${BRAIN_API_TOKEN}" \
+        -d "$PAYLOAD"
+      ;;
+    *)
+      echo "Unknown mode: $MODE. Use query, exec, or script." >&2
+      exit 1
+      ;;
+  esac
+fi

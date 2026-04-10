@@ -1,0 +1,13 @@
+.git
+.gitignore
+.cursor
+**/.DS_Store
+node_modules
+data/*.db
+data/*-shm
+data/*-wal
+owners-inbox
+team-inbox
+*.log
+.env
+.env.*

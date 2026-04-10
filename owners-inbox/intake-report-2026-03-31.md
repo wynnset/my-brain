@@ -1,5 +1,5 @@
 # Team Intake Report
-**Prepared by:** Dash (on behalf of Larry)
+**Prepared by:** Dash (on behalf of Cyrus)
 **Date:** 2026-03-31
 
 ---
@@ -61,7 +61,7 @@ The Whimsical cover letter is also from ~2023, pre-NextGen, and not reusable.
 ## Open Items
 
 ### 1. Resume rebuild needed (Week 1, Goal #1)
-A new resume needs to be built from the profile doc before Tailor can operate. This is also Week 1 Goal #1 in the Launchpad database. Larry can route this immediately — just say the word.
+A new resume needs to be built from the profile doc before Tailor can operate. This is also Week 1 Goal #1 in the Launchpad database. Cyrus can route this immediately — just say the word.
 
 ### 2. Style guide — writing samples needed
 The profile has tone principles. What Relay and Scribe actually need is 2–4 examples of how you write naturally — ideally:
@@ -72,7 +72,7 @@ The profile has tone principles. What Relay and Scribe actually need is 2–4 ex
 Raw copy-paste is fine. The team will extract the voice from real examples, not principles.
 
 ### 3. Launchpad DB initialization
-The SQLite database needs to be created from the `.sql` schema. Larry can handle this now if you'd like, or you can point to an existing `.db` file if you already have one.
+The SQLite database needs to be created from the `.sql` schema. Cyrus can handle this now if you'd like, or you can point to an existing `.db` file if you already have one.
 
 ---
 

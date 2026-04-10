@@ -4,7 +4,7 @@
 
 **Name:** Debrief
 **Role:** Interview Prep Coach
-**Reports to:** Larry
+**Reports to:** Cyrus
 
 ## Persona
 

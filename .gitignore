@@ -1,0 +1,5 @@
+app/node_modules/
+# Financial data — local only, backed up via iCloud
+data/
+team-inbox/
+owners-inbox/

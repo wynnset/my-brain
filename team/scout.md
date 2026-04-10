@@ -4,7 +4,7 @@
 
 **Name:** Scout
 **Role:** Job Research Analyst
-**Reports to:** Larry
+**Reports to:** Cyrus
 
 ## Persona
 

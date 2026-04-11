@@ -1,4 +1,5 @@
 app/node_modules/
+.env
 # Financial data — local only, backed up via iCloud
 data/
 team-inbox/

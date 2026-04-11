@@ -16,7 +16,7 @@ tailwind.config = {
 <body class="bg-slate-50 dark:bg-slate-900 text-slate-800 dark:text-slate-100 min-h-screen transition-colors duration-200" x-data="app" x-init="init()">
 
 <!-- TOP NAV -->
-<nav class="bg-white dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 sticky top-0 z-50 shadow-sm transition-[padding-right] duration-200 ease-out" :style="chatPanelInsetStyle()">
+<nav class="bg-white dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 sticky top-0 z-50 shadow-sm transition-[width] duration-200 ease-out max-w-full" :style="chatNavStyle()">
   <div class="max-w-7xl mx-auto px-4">
     <div class="flex items-center justify-between h-14">
       <div class="flex items-center gap-6">
@@ -53,11 +53,11 @@ tailwind.config = {
             </g>
           </svg>
         </button>
-        <button type="button" @click="mobileMenuOpen = !mobileMenuOpen" class="sm:hidden p-2 rounded-md text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-700 icon-btn" aria-label="Menu">
-          <i data-lucide="menu" class="w-5 h-5"></i>
-        </button>
-        <button type="button" @click="toggleChat()" :class="chatOpen ? 'bg-slate-100 dark:bg-slate-700 text-slate-900 dark:text-white' : 'text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-700'" class="icon-btn p-2 rounded-md transition-colors" title="Toggle chat" aria-label="Toggle chat">
+        <button type="button" @click="toggleChat()" :class="chatOpen ? 'bg-slate-100 dark:bg-slate-700 text-slate-900 dark:text-white' : 'text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-700'" class="hidden sm:flex icon-btn p-2 rounded-md transition-colors" title="Toggle chat" aria-label="Toggle chat">
           <i data-lucide="message-square" class="w-5 h-5"></i>
+        </button>
+        <button type="button" @click="mobileMenuOpen = !mobileMenuOpen" class="sm:hidden p-2 rounded-md text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-700 icon-btn shrink-0" aria-label="Menu">
+          <i data-lucide="menu" class="w-5 h-5"></i>
         </button>
       </div>
     </div>
@@ -72,7 +72,8 @@ tailwind.config = {
   </div>
 </nav>
 
-<button type="button" x-show="!chatOpen" @click="openChat()" class="lg:hidden fixed bottom-6 right-6 z-40 w-14 h-14 bg-slate-800 dark:bg-slate-700 hover:bg-slate-900 dark:hover:bg-slate-600 text-white rounded-full shadow-lg icon-btn" aria-label="Open chat">
+<!-- Chat FAB: hamburger layout only (&lt; sm); open chat (close is in the mobile chat header). -->
+<button type="button" x-show="!chatOpen" x-cloak @click="openChat()" class="sm:hidden fixed bottom-6 right-6 z-40 w-14 h-14 bg-slate-800 dark:bg-slate-700 hover:bg-slate-900 dark:hover:bg-slate-600 text-white rounded-full shadow-lg icon-btn" aria-label="Open chat">
   <i data-lucide="message-square" class="w-6 h-6"></i>
 </button>
 
@@ -510,9 +511,9 @@ tailwind.config = {
 
   <!-- ── FILES PAGE ── -->
   <div id="page-files" x-show="page === 'files'" x-cloak x-transition.opacity.duration.150ms>
-    <div class="flex flex-col lg:flex-row lg:items-stretch lg:gap-0 lg:min-h-[calc(100vh-8rem)]">
-      <!-- File list (sidebar on lg+) -->
-      <div class="flex flex-col min-h-0 lg:w-80 xl:w-[22rem] shrink-0 lg:pr-5 lg:border-r border-slate-200 dark:border-slate-700">
+    <div class="flex flex-col lg:flex-row lg:items-stretch lg:gap-0 lg:min-h-[calc(100vh-8rem)] min-w-0">
+      <!-- File list (sidebar on lg+); width resizable on desktop -->
+      <div class="flex flex-col min-h-0 w-full shrink-0 lg:min-w-0 lg:pr-4 lg:border-r border-slate-200 dark:border-slate-700" :style="filesListAsideStyle()">
         <div class="mb-6 flex items-center justify-between gap-3 shrink-0">
           <div class="min-w-0">
             <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Files</h1>
@@ -587,8 +588,14 @@ tailwind.config = {
         </div>
       </div>
 
+      <div class="hidden lg:flex group relative w-3 shrink-0 justify-center cursor-col-resize hover:bg-slate-100/80 dark:hover:bg-slate-700/50 transition-colors self-stretch"
+        title="Drag to resize file list"
+        @mousedown.prevent="startResizeFilesList($event)">
+        <div class="absolute top-1/2 -translate-y-1/2 left-1/2 -translate-x-1/2 w-px h-8 rounded-full bg-slate-300/0 group-hover:bg-slate-300 dark:group-hover:bg-slate-500 transition-colors"></div>
+      </div>
+
       <!-- Desktop: viewer / editor pane -->
-      <div class="hidden lg:flex flex-1 flex-col min-w-0 min-h-0 mt-6 lg:mt-0 lg:pl-5">
+      <div class="hidden lg:flex flex-1 flex-col min-w-0 min-h-0 mt-6 lg:mt-0 lg:pl-4">
         <div x-show="!viewerOpen && !editorOpen" class="flex-1 flex flex-col items-center justify-center rounded-xl border border-dashed border-slate-200 dark:border-slate-600 bg-slate-50/50 dark:bg-slate-800/30 text-slate-400 dark:text-slate-500 text-sm px-6 py-16 text-center">
           <i data-lucide="file-text" class="w-10 h-10 mb-3 opacity-50"></i>
           <p>Select a file in the list to open it here. Use <strong class="font-medium text-slate-500 dark:text-slate-400">Edit</strong> in the toolbar when previewing an editable file.</p>
@@ -750,27 +757,36 @@ tailwind.config = {
 
 </main>
 
-  <!-- Chat panel: desktop -->
+</div>
+
+<!-- Chat panel: desktop (sibling of main layout wrapper — full viewport height, not clipped by content flex) -->
   <aside x-show="chatOpen" x-cloak x-transition:enter="transition ease-out duration-200" x-transition:enter-start="translate-x-full" x-transition:enter-end="translate-x-0" x-transition:leave="transition ease-in duration-150" x-transition:leave-start="translate-x-0" x-transition:leave-end="translate-x-full"
-    class="hidden lg:flex flex-row fixed right-0 top-14 bottom-0 bg-white dark:bg-slate-800 border-l border-slate-200 dark:border-slate-700 shadow-xl z-40 overflow-hidden"
+    class="hidden lg:flex flex-row fixed right-0 top-0 bottom-0 bg-white dark:bg-slate-800 border-l border-slate-200 dark:border-slate-700 shadow-xl z-40 overflow-hidden"
     :style="{ width: chatPanelWidth + 'px' }">
-    <div class="group relative w-3 shrink-0 flex justify-center cursor-col-resize hover:bg-slate-100/80 dark:hover:bg-slate-700/50 transition-colors"
+    <div class="group relative w-3 shrink-0 flex justify-center cursor-col-resize hover:bg-slate-100/80 dark:hover:bg-slate-700/50 transition-colors self-stretch"
       title="Drag to resize"
       @mousedown.prevent="startResizeChat($event)">
       <div class="absolute top-1/2 -translate-y-1/2 left-1/2 -translate-x-1/2 w-px h-8 rounded-full bg-slate-300/0 group-hover:bg-slate-300 dark:group-hover:bg-slate-500 transition-colors"></div>
     </div>
     <div class="flex flex-col flex-1 min-w-0 min-h-0">
-      <div class="flex items-center gap-2 px-2 py-2 border-b border-slate-200 dark:border-slate-700 shrink-0">
-        <button type="button" @click="openChatHistory()" class="text-xs font-medium px-2 py-1.5 rounded-md bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200 shrink-0">History</button>
-        <button type="button" @click="newChatConversation()" class="text-xs font-medium px-2 py-1.5 rounded-md bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200 shrink-0">New</button>
-        <span class="flex-1 min-w-0 text-xs font-semibold text-slate-700 dark:text-slate-200 truncate text-center" x-text="chatSessionTitle || 'Chat'"></span>
-        <button type="button" @click="closeChat()" class="icon-btn p-1.5 rounded-md text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 shrink-0" aria-label="Close chat">
-          <i data-lucide="x" class="w-4 h-4"></i>
+      <div class="flex items-center gap-2 px-3 py-2.5 border-b border-slate-200 dark:border-slate-700 shrink-0 bg-white/95 dark:bg-slate-800/95 backdrop-blur-sm">
+        <div class="flex items-center gap-2 min-w-0 flex-1">
+          <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-slate-100 dark:bg-slate-700/80 text-slate-500 dark:text-slate-400" aria-hidden="true">
+            <i data-lucide="message-square" class="w-4 h-4"></i>
+          </span>
+          <span class="min-w-0 text-sm font-semibold text-slate-800 dark:text-slate-100 truncate" x-text="chatSessionTitle || 'Chat'"></span>
+        </div>
+        <button type="button" @click="openChatHistory()" class="icon-btn h-9 w-9 shrink-0 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700/80 transition-colors" title="Conversation history" aria-label="Conversation history">
+          <i data-lucide="history" class="w-4 h-4"></i>
+        </button>
+        <button type="button" @click="newChatConversation()" class="inline-flex items-center justify-center gap-1.5 shrink-0 rounded-lg bg-gradient-to-b from-indigo-500 to-indigo-600 px-3 py-2 text-xs font-semibold text-white shadow-sm shadow-indigo-500/30 ring-1 ring-inset ring-white/15 hover:from-indigo-400 hover:to-indigo-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-800 transition-[box-shadow,transform] active:scale-[0.98]" title="Start a new conversation" aria-label="New conversation">
+          <i data-lucide="message-square-plus" class="w-4 h-4"></i>
+          <span>New</span>
         </button>
       </div>
       <div class="flex flex-col flex-1 min-h-0 min-w-0">
         <div class="flex-1 overflow-y-auto p-3 text-sm min-h-0 min-w-0" x-ref="chatScrollDesktop">
-          <template x-if="!chatMessages.length && !chatStreaming">
+          <template x-if="!chatMessages.length && !chatStreaming && !chatOutboundInFlight && !chatOutboundQueue.length">
             <p class="chat-md-placeholder text-slate-400 dark:text-slate-500 text-sm">Send a message to start this conversation.</p>
           </template>
           <div class="space-y-3">
@@ -785,71 +801,126 @@ tailwind.config = {
               </div>
             </template>
             <div x-show="chatStreaming && chatStreamDraft" class="flex justify-start">
-              <div class="max-w-[min(100%,28rem)] min-w-0 rounded-2xl px-3 py-2 text-sm bg-slate-100 dark:bg-slate-700/80 text-slate-800 dark:text-slate-100 chat-md-output break-words" x-html="streamingAssistantHtml()"></div>
-            </div>
-            <div x-show="chatStreaming && !chatStreamDraft" x-cloak class="flex justify-start">
-              <div class="max-w-[min(100%,28rem)] min-w-0 rounded-2xl px-3 py-2 text-xs font-medium bg-amber-50 dark:bg-amber-900/20 text-amber-900 dark:text-amber-200 border border-amber-200/80 dark:border-amber-800/60 flex items-center justify-between gap-3">
-                <span>Waiting for response…</span>
-                <span class="tabular-nums shrink-0 text-amber-800/90 dark:text-amber-300" x-text="chatElapsedSec + 's'"></span>
+              <div class="max-w-[min(100%,28rem)] min-w-0 rounded-2xl px-3 py-2 text-sm bg-slate-100 dark:bg-slate-700/80 text-slate-800 dark:text-slate-100 border border-slate-200/70 dark:border-slate-600/60 shadow-sm flex items-end gap-1">
+                <div class="chat-md-output break-words flex-1 min-w-0" x-html="streamingAssistantHtml()"></div>
+                <span class="chat-stream-cursor shrink-0" aria-hidden="true"></span>
               </div>
             </div>
-            <div x-show="chatThinkingLog.length && chatStreaming" x-cloak class="flex justify-start">
-              <details class="max-w-[min(100%,28rem)] w-full min-w-0 text-xs border border-slate-200 dark:border-slate-600 rounded-2xl open:bg-slate-50/80 dark:open:bg-slate-800/50">
-                <summary class="cursor-pointer px-3 py-2 font-medium text-slate-600 dark:text-slate-400 list-inside">Activity</summary>
-                <div class="max-h-28 overflow-y-auto px-3 pb-2 font-mono text-[11px] text-slate-500 dark:text-slate-400 space-y-0.5 border-t border-slate-100 dark:border-slate-700">
-                  <template x-for="line in chatThinkingLog" :key="line.id">
-                    <div class="break-words" x-text="line.text"></div>
-                  </template>
-                </div>
-              </details>
-            </div>
+            <template x-if="chatWorkPanels.length">
+              <div class="space-y-3" role="log" aria-live="polite">
+                <template x-for="(panel, widx) in chatWorkPanels" :key="panel.id">
+                  <div class="flex justify-start gap-2.5 items-start chat-work-panel-row" :class="panel.done ? 'opacity-95' : ''">
+                    <div class="shrink-0 mt-0.5 w-8 h-8 rounded-full bg-indigo-100 dark:bg-indigo-950/55 flex items-center justify-center border border-indigo-200/70 dark:border-indigo-800/50 text-indigo-700 dark:text-indigo-200 text-xs font-bold select-none" x-text="workPanelAvatarLetter(panel.agentId)"></div>
+                    <div class="max-w-[min(100%,28rem)] min-w-0 flex-1 rounded-2xl border border-slate-200/80 dark:border-slate-600/70 bg-gradient-to-br from-slate-50 to-slate-100/90 dark:from-slate-800/90 dark:to-slate-800/70 text-slate-800 dark:text-slate-100 shadow-sm overflow-hidden">
+                      <button type="button" class="w-full text-left px-3.5 py-2.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-indigo-400/50" @click="toggleWorkPanelExpanded(panel)">
+                        <div class="flex items-center gap-2 min-w-0">
+                          <div class="flex items-center gap-2 min-w-0 flex-1 text-slate-700 dark:text-slate-200">
+                            <span class="font-medium truncate" x-text="workPanelDisplayName(panel.agentId)"></span>
+                            <span class="text-slate-500 dark:text-slate-400 shrink-0 text-xs font-normal" x-show="!panel.done">is working</span>
+                            <span class="text-emerald-600 dark:text-emerald-400 shrink-0 text-xs font-medium" x-show="panel.done" x-cloak>Done</span>
+                            <span class="chat-thinking-dots text-indigo-500 dark:text-indigo-300 shrink-0" x-show="!panel.done && chatStreaming && widx === chatWorkPanels.length - 1" aria-hidden="true"><span></span><span></span><span></span></span>
+                          </div>
+                          <div class="flex items-center gap-1.5 shrink-0">
+                            <span class="text-[11px] text-slate-400 dark:text-slate-500 tabular-nums whitespace-nowrap" x-text="'Elapsed ' + workPanelElapsedLabel(panel)"></span>
+                            <i data-lucide="chevron-down" class="w-4 h-4 text-slate-400 transition-transform duration-200" :class="panel.expanded ? 'rotate-180' : ''" aria-hidden="true"></i>
+                          </div>
+                        </div>
+                      </button>
+                      <div x-show="panel.expanded" class="border-t border-slate-100 dark:border-slate-700 max-h-36 overflow-y-auto px-3 py-2 font-mono text-[11px] text-slate-500 dark:text-slate-400 space-y-1 chat-work-panel-log">
+                        <template x-for="line in panel.lines" :key="line.id">
+                          <div class="break-words" x-text="line.text"></div>
+                        </template>
+                      </div>
+                    </div>
+                  </div>
+                </template>
+                <p x-show="chatStreaming" x-cloak class="text-[11px] text-slate-400 dark:text-slate-500 pl-11">Stop anytime · tap a card to expand full activity</p>
+              </div>
+            </template>
           </div>
         </div>
         <div x-show="!chatStreaming && chatMessages.length && chatMessages[chatMessages.length - 1].error" class="px-3 pt-1 shrink-0" x-cloak>
           <button type="button" @click="retryLastChat()" class="text-xs font-medium text-blue-600 dark:text-blue-400 hover:underline">Retry send</button>
         </div>
-        <div class="flex gap-2 p-3 border-t border-slate-200 dark:border-slate-700 shrink-0 bg-white dark:bg-slate-800">
-          <textarea x-ref="chatPromptDesktop" x-model="chatPrompt" @keydown.enter.prevent="!$event.shiftKey && submitChat()" rows="2" placeholder="Ask your agent… (Enter to send, Shift+Enter for newline)"
-            class="flex-1 min-w-0 text-base lg:text-sm rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 px-3 py-2.5 resize-none focus:outline-none focus:ring-2 focus:ring-slate-400 dark:focus:ring-slate-500 min-h-[44px]"></textarea>
-          <div class="flex flex-col gap-1 shrink-0">
-            <button type="button" @click="submitChat()" :disabled="chatStreaming || !chatPrompt.trim()" class="px-3 py-2 text-sm font-medium bg-slate-800 dark:bg-slate-200 text-white dark:text-slate-900 hover:bg-slate-900 dark:hover:bg-white rounded-lg disabled:opacity-50 min-h-[44px]">Send</button>
-            <button type="button" x-show="chatStreaming" @click="abortChat()" class="px-3 py-2 text-sm bg-slate-200 dark:bg-slate-700 rounded-lg">Stop</button>
-          </div>
+        <div x-show="chatOutboundQueue.length" x-cloak class="px-3 pt-1.5 shrink-0 text-xs text-slate-500 dark:text-slate-400 border-t border-slate-100 dark:border-slate-700/80 bg-white dark:bg-slate-800" role="status">
+          <span class="font-medium text-slate-600 dark:text-slate-300" x-text="chatOutboundQueue.length + (chatOutboundQueue.length === 1 ? ' message queued' : ' messages queued')"></span>
+          <span class="text-slate-400 dark:text-slate-500"> — sends automatically after the current reply.</span>
         </div>
-        <div class="px-3 pb-3 pt-0 border-t border-transparent shrink-0 bg-white dark:bg-slate-800">
-          <div class="flex flex-col sm:flex-row sm:items-center gap-2 pt-2">
-            <label class="sr-only" for="chat-agent-desktop">Agent</label>
-            <select id="chat-agent-desktop" x-model="chatAgent" @change="onChatAgentChange()" :disabled="chatMessages.length > 0" class="flex-1 min-w-0 text-xs sm:text-sm rounded-md border border-slate-200 dark:border-slate-600 bg-slate-50 dark:bg-slate-900/50 text-slate-800 dark:text-slate-100 px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-slate-400 dark:focus:ring-slate-500 disabled:opacity-60">
-              <template x-for="a in chatAgents" :key="a"><option :value="a" x-text="chatAgentDisplayName(a)"></option></template>
-            </select>
-            <div @dragover.prevent="chatDragActive = true" @dragleave="chatDragActive = false" @drop.prevent="handleChatDrop($event)"
-                 :class="chatDragActive ? 'border-slate-400 bg-slate-50 dark:bg-slate-700/40' : 'border-slate-200 dark:border-slate-600'"
-                 class="flex-1 min-w-0 border border-dashed rounded-md px-2 py-1.5 text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 transition-colors cursor-pointer text-center sm:text-left truncate"
-                 @click="$refs.chatFileInputDesktop.click()">
-              <span x-show="!chatFiles.length">Attach → team-inbox</span>
-              <span x-show="chatFiles.length" x-text="chatFiles.length + ' attached'"></span>
+        <div x-show="chatOutboundInFlight" x-cloak class="chat-composer-progress-track shrink-0" aria-hidden="true"><div class="chat-composer-progress-bar"></div></div>
+        <div
+          class="p-3 pb-3 border-t border-slate-200 dark:border-slate-700 shrink-0 bg-white dark:bg-slate-800 space-y-2"
+          @dragover.prevent="chatDragActive = true"
+          @dragleave="chatDragActive = false"
+          @drop.prevent="handleChatDrop($event)"
+          :class="chatDragActive ? 'ring-2 ring-inset ring-indigo-400/60 dark:ring-indigo-500/50 rounded-b-lg' : ''"
+        >
+          <textarea x-ref="chatPromptDesktop" x-model="chatPrompt" @keydown.enter.prevent="!$event.shiftKey && submitChat()" rows="2" placeholder="Ask your agent… (Enter to send, Shift+Enter for newline)"
+            class="w-full text-base lg:text-sm rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 px-3 py-2.5 resize-none focus:outline-none focus:ring-2 focus:ring-slate-400 dark:focus:ring-slate-500 min-h-[44px]"></textarea>
+          <div class="flex items-center gap-2 min-w-0">
+            <div class="flex-1 min-w-0">
+              <button type="button" id="chat-agent-desktop"
+                @click="toggleChatAgentPicker()"
+                :disabled="chatMessages.length > 0"
+                :aria-expanded="chatAgentPickerOpen"
+                aria-haspopup="dialog"
+                aria-controls="chat-agent-picker-panel"
+                class="flex w-full min-w-0 h-10 items-center gap-2 rounded-lg border border-slate-200 dark:border-slate-600 bg-slate-50 dark:bg-slate-900/50 px-2 text-left transition-colors hover:bg-slate-100 dark:hover:bg-slate-800/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 dark:focus-visible:ring-slate-500 disabled:opacity-60 disabled:pointer-events-none"
+                :title="chatMessages.length ? 'Agent is fixed after the first message in this chat' : 'Choose agent — see everyone’s role'">
+                <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-indigo-100 dark:bg-indigo-950/55 text-xs font-bold text-indigo-700 dark:text-indigo-200" x-text="workPanelAvatarLetter(chatAgent)"></div>
+                <div class="min-w-0 flex-1 py-0.5">
+                  <div class="text-xs sm:text-sm font-semibold text-slate-800 dark:text-slate-100 leading-tight truncate" x-text="chatAgentDisplayName(chatAgent)"></div>
+                  <div class="text-[10px] sm:text-[11px] text-slate-500 dark:text-slate-400 leading-tight truncate" x-text="chatAgentSummaryLine(chatAgent)"></div>
+                </div>
+                <i data-lucide="chevrons-up-down" class="w-4 h-4 shrink-0 text-slate-400" aria-hidden="true"></i>
+              </button>
             </div>
+            <button type="button" @click="$refs.chatFileInputDesktop.click()" :title="chatFiles.length ? (chatFiles.length + ' file(s) — team-inbox') : 'Attach files (team-inbox)'" :aria-label="chatFiles.length ? chatFiles.length + ' files attached, add more' : 'Attach files to team-inbox'"
+              class="icon-btn relative shrink-0 h-10 w-10 rounded-lg border transition-colors"
+              :class="chatFiles.length ? 'border-indigo-300 bg-indigo-50 text-indigo-700 dark:border-indigo-700 dark:bg-indigo-950/50 dark:text-indigo-200' : 'border-slate-200 dark:border-slate-600 text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-700/60'">
+              <i data-lucide="paperclip" class="w-5 h-5"></i>
+              <span x-show="chatFiles.length" x-cloak class="absolute -top-1 -right-1 min-w-[1.125rem] h-[1.125rem] px-0.5 flex items-center justify-center rounded-full bg-indigo-600 text-[10px] font-bold text-white leading-none" x-text="chatFiles.length"></span>
+            </button>
+            <button type="button" x-show="!chatStreaming" x-cloak @click="submitChat()" :disabled="!chatPrompt.trim()" title="Send" aria-label="Send message"
+              class="icon-btn shrink-0 h-10 w-10 rounded-lg bg-slate-800 dark:bg-slate-200 text-white dark:text-slate-900 hover:bg-slate-900 dark:hover:bg-white disabled:opacity-40 disabled:pointer-events-none transition-colors">
+              <i data-lucide="send-horizontal" class="w-5 h-5"></i>
+            </button>
+            <button type="button" x-show="chatStreaming" x-cloak @click="abortChat()" title="Stop" aria-label="Stop generating"
+              class="icon-btn shrink-0 h-10 w-10 rounded-lg bg-amber-600 hover:bg-amber-700 text-white transition-colors">
+              <i data-lucide="square" class="w-3.5 h-3.5 fill-current stroke-[2.5]"></i>
+            </button>
+          </div>
+          <div class="flex justify-end pt-0.5">
+            <button type="button" @click="openChatAgentProfile()" class="inline-flex items-center gap-1 text-[11px] sm:text-xs font-semibold text-indigo-600 dark:text-indigo-400 hover:text-indigo-500 dark:hover:text-indigo-300 transition-colors" title="Full agent brief" aria-label="View full agent profile">
+              <i data-lucide="user-circle" class="w-3.5 h-3.5 sm:w-4 sm:h-4 opacity-90" aria-hidden="true"></i>
+              <span>Profile</span>
+            </button>
           </div>
           <input type="file" multiple class="hidden" x-ref="chatFileInputDesktop" @change="handleChatFileSelect($event)" />
         </div>
       </div>
     </div>
   </aside>
-</div>
 
-<!-- Mobile full-screen chat -->
-<div x-show="chatOpen" x-cloak x-transition class="lg:hidden fixed inset-0 z-[60] flex flex-col min-h-[100dvh] bg-white dark:bg-slate-800 overscroll-contain touch-pan-y chat-mobile-panel">
-  <div class="flex items-center gap-2 px-2 py-2 border-b border-slate-200 dark:border-slate-700 shrink-0 safe-top" style="padding-top: max(0.75rem, env(safe-area-inset-top));">
-    <button type="button" @click="openChatHistory()" class="text-xs font-medium px-2 py-2 rounded-md bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200 shrink-0 min-h-[44px]">History</button>
-    <button type="button" @click="newChatConversation()" class="text-xs font-medium px-2 py-2 rounded-md bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200 shrink-0 min-h-[44px]">New</button>
-    <span class="flex-1 min-w-0 text-xs font-semibold text-slate-800 dark:text-slate-100 truncate text-center" x-text="chatSessionTitle || 'Chat'"></span>
-    <button type="button" @click="closeChat()" class="icon-btn p-2 rounded-md text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-700 min-h-[44px] min-w-[44px] shrink-0" aria-label="Close chat">
-      <i data-lucide="x" class="w-5 h-5"></i>
+<!-- Mobile chat (below top nav so header chat toggle stays usable) -->
+<div x-show="chatOpen" x-cloak x-transition class="lg:hidden fixed left-0 right-0 bottom-0 top-14 z-[60] flex flex-col min-h-0 bg-white dark:bg-slate-800 overscroll-contain touch-pan-y chat-mobile-panel border-t border-slate-200/80 dark:border-slate-700/80">
+  <div class="flex items-center gap-2 px-3 py-2 border-b border-slate-200 dark:border-slate-700 shrink-0 bg-white/95 dark:bg-slate-800/95 backdrop-blur-sm">
+    <div class="flex items-center gap-2 min-w-0 flex-1">
+      <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-100 dark:bg-slate-700/80 text-slate-500 dark:text-slate-400" aria-hidden="true">
+        <i data-lucide="message-square" class="w-[18px] h-[18px]"></i>
+      </span>
+      <span class="min-w-0 text-sm font-semibold text-slate-800 dark:text-slate-100 truncate" x-text="chatSessionTitle || 'Chat'"></span>
+    </div>
+    <button type="button" @click="openChatHistory()" class="icon-btn h-10 w-10 shrink-0 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700/80 transition-colors" title="Conversation history" aria-label="Conversation history">
+      <i data-lucide="history" class="w-[18px] h-[18px]"></i>
+    </button>
+    <button type="button" @click="newChatConversation()" class="inline-flex items-center justify-center gap-1.5 shrink-0 min-h-10 rounded-lg bg-gradient-to-b from-indigo-500 to-indigo-600 px-3 py-2 text-xs font-semibold text-white shadow-sm shadow-indigo-500/30 ring-1 ring-inset ring-white/15 hover:from-indigo-400 hover:to-indigo-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-800 active:scale-[0.98]" title="Start a new conversation" aria-label="New conversation">
+      <i data-lucide="message-square-plus" class="w-[18px] h-[18px]"></i>
+      <span>New</span>
     </button>
   </div>
   <div class="flex flex-col flex-1 min-h-0 min-w-0">
     <div class="flex-1 overflow-y-auto p-3 text-sm min-h-0 min-w-0" x-ref="chatScrollMobile">
-      <template x-if="!chatMessages.length && !chatStreaming">
+      <template x-if="!chatMessages.length && !chatStreaming && !chatOutboundInFlight && !chatOutboundQueue.length">
         <p class="chat-md-placeholder text-slate-400 dark:text-slate-500 text-sm">Send a message to start this conversation.</p>
       </template>
       <div class="space-y-3">
@@ -864,51 +935,176 @@ tailwind.config = {
           </div>
         </template>
         <div x-show="chatStreaming && chatStreamDraft" class="flex justify-start">
-          <div class="max-w-[min(100%,28rem)] min-w-0 rounded-2xl px-3 py-2 text-sm bg-slate-100 dark:bg-slate-700/80 text-slate-800 dark:text-slate-100 chat-md-output break-words" x-html="streamingAssistantHtml()"></div>
-        </div>
-        <div x-show="chatStreaming && !chatStreamDraft" x-cloak class="flex justify-start">
-          <div class="max-w-[min(100%,28rem)] min-w-0 rounded-2xl px-3 py-2 text-xs font-medium bg-amber-50 dark:bg-amber-900/20 text-amber-900 dark:text-amber-200 border border-amber-200/80 dark:border-amber-800/60 flex items-center justify-between gap-3">
-            <span>Waiting for response…</span>
-            <span class="tabular-nums shrink-0 text-amber-800/90 dark:text-amber-300" x-text="chatElapsedSec + 's'"></span>
+          <div class="max-w-[min(100%,28rem)] min-w-0 rounded-2xl px-3 py-2 text-sm bg-slate-100 dark:bg-slate-700/80 text-slate-800 dark:text-slate-100 border border-slate-200/70 dark:border-slate-600/60 shadow-sm flex items-end gap-1">
+            <div class="chat-md-output break-words flex-1 min-w-0" x-html="streamingAssistantHtml()"></div>
+            <span class="chat-stream-cursor shrink-0" aria-hidden="true"></span>
           </div>
         </div>
-        <div x-show="chatThinkingLog.length && chatStreaming" x-cloak class="flex justify-start">
-          <details class="max-w-[min(100%,28rem)] w-full min-w-0 text-xs border border-slate-200 dark:border-slate-600 rounded-2xl open:bg-slate-50/80 dark:open:bg-slate-800/50">
-            <summary class="cursor-pointer px-3 py-2 font-medium text-slate-600 dark:text-slate-400 list-inside">Activity</summary>
-            <div class="max-h-28 overflow-y-auto px-3 pb-2 font-mono text-[11px] text-slate-500 dark:text-slate-400 space-y-0.5 border-t border-slate-100 dark:border-slate-700">
-              <template x-for="line in chatThinkingLog" :key="'m-'+line.id">
-                <div class="break-words" x-text="line.text"></div>
-              </template>
-            </div>
-          </details>
-        </div>
+        <template x-if="chatWorkPanels.length">
+          <div class="space-y-3" role="log" aria-live="polite">
+            <template x-for="(panel, widx) in chatWorkPanels" :key="'mw-'+panel.id">
+              <div class="flex justify-start gap-2.5 items-start chat-work-panel-row" :class="panel.done ? 'opacity-95' : ''">
+                <div class="shrink-0 mt-0.5 w-8 h-8 rounded-full bg-indigo-100 dark:bg-indigo-950/55 flex items-center justify-center border border-indigo-200/70 dark:border-indigo-800/50 text-indigo-700 dark:text-indigo-200 text-xs font-bold select-none" x-text="workPanelAvatarLetter(panel.agentId)"></div>
+                <div class="max-w-[min(100%,28rem)] min-w-0 flex-1 rounded-2xl border border-slate-200/80 dark:border-slate-600/70 bg-gradient-to-br from-slate-50 to-slate-100/90 dark:from-slate-800/90 dark:to-slate-800/70 text-slate-800 dark:text-slate-100 shadow-sm overflow-hidden">
+                  <button type="button" class="w-full text-left px-3.5 py-2.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-indigo-400/50 min-h-[44px]" @click="toggleWorkPanelExpanded(panel)">
+                    <div class="flex items-center gap-2 min-w-0">
+                      <div class="flex items-center gap-2 min-w-0 flex-1 text-slate-700 dark:text-slate-200">
+                        <span class="font-medium truncate" x-text="workPanelDisplayName(panel.agentId)"></span>
+                        <span class="text-slate-500 dark:text-slate-400 shrink-0 text-xs font-normal" x-show="!panel.done">is working</span>
+                        <span class="text-emerald-600 dark:text-emerald-400 shrink-0 text-xs font-medium" x-show="panel.done" x-cloak>Done</span>
+                        <span class="chat-thinking-dots text-indigo-500 dark:text-indigo-300 shrink-0" x-show="!panel.done && chatStreaming && widx === chatWorkPanels.length - 1" aria-hidden="true"><span></span><span></span><span></span></span>
+                      </div>
+                      <div class="flex items-center gap-1.5 shrink-0">
+                        <span class="text-[11px] text-slate-400 dark:text-slate-500 tabular-nums whitespace-nowrap" x-text="'Elapsed ' + workPanelElapsedLabel(panel)"></span>
+                        <i data-lucide="chevron-down" class="w-4 h-4 text-slate-400 transition-transform duration-200" :class="panel.expanded ? 'rotate-180' : ''" aria-hidden="true"></i>
+                      </div>
+                    </div>
+                  </button>
+                  <div x-show="panel.expanded" class="border-t border-slate-100 dark:border-slate-700 max-h-36 overflow-y-auto px-3 py-2 font-mono text-[11px] text-slate-500 dark:text-slate-400 space-y-1 chat-work-panel-log">
+                    <template x-for="line in panel.lines" :key="'ml-'+line.id">
+                      <div class="break-words" x-text="line.text"></div>
+                    </template>
+                  </div>
+                </div>
+              </div>
+            </template>
+            <p x-show="chatStreaming" x-cloak class="text-[11px] text-slate-400 dark:text-slate-500 pl-11">Stop anytime · tap a card for full activity</p>
+          </div>
+        </template>
       </div>
     </div>
     <div class="shrink-0 border-t border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
       <div x-show="!chatStreaming && chatMessages.length && chatMessages[chatMessages.length - 1].error" class="px-3 pt-2" x-cloak>
         <button type="button" @click="retryLastChat()" class="text-xs font-medium text-blue-600 dark:text-blue-400">Retry send</button>
       </div>
-      <div class="flex gap-2 p-3">
-        <textarea x-ref="chatPromptMobile" x-model="chatPrompt" @keydown.enter.prevent="!$event.shiftKey && submitChat()" rows="2" placeholder="Ask… (Enter send, Shift+Enter newline)"
-          class="flex-1 min-w-0 text-base rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 px-3 py-2.5 resize-none focus:outline-none focus:ring-2 focus:ring-slate-400 dark:focus:ring-slate-500 min-h-[44px] max-h-40"></textarea>
-        <div class="flex flex-col gap-1 shrink-0">
-          <button type="button" @click="submitChat()" :disabled="chatStreaming || !chatPrompt.trim()" class="px-3 py-2 text-sm font-medium bg-slate-800 dark:bg-slate-200 text-white dark:text-slate-900 rounded-lg disabled:opacity-50 min-h-[44px]">Send</button>
-          <button type="button" x-show="chatStreaming" @click="abortChat()" class="px-3 py-2 text-sm bg-slate-200 dark:bg-slate-700 rounded-lg">Stop</button>
-        </div>
+      <div x-show="chatOutboundQueue.length" x-cloak class="px-3 pt-2 shrink-0 text-xs text-slate-500 dark:text-slate-400 border-t border-slate-100 dark:border-slate-700/80 bg-white dark:bg-slate-800" role="status">
+        <span class="font-medium text-slate-600 dark:text-slate-300" x-text="chatOutboundQueue.length + (chatOutboundQueue.length === 1 ? ' message queued' : ' messages queued')"></span>
+        <span class="text-slate-400 dark:text-slate-500"> — sends after the current reply.</span>
       </div>
-      <div class="px-3 pb-2 flex flex-col gap-2">
-        <label class="sr-only" for="chat-agent-mobile">Agent</label>
-        <select id="chat-agent-mobile" x-model="chatAgent" @change="onChatAgentChange()" :disabled="chatMessages.length > 0" class="w-full text-sm rounded-md border border-slate-200 dark:border-slate-600 bg-slate-50 dark:bg-slate-900/50 px-2 py-2 focus:outline-none focus:ring-2 focus:ring-slate-400 dark:focus:ring-slate-500 disabled:opacity-60">
-          <template x-for="a in chatAgents" :key="'m-'+a"><option :value="a" x-text="chatAgentDisplayName(a)"></option></template>
-        </select>
-        <div @dragover.prevent="chatDragActive = true" @dragleave="chatDragActive = false" @drop.prevent="handleChatDrop($event)"
-             :class="chatDragActive ? 'border-slate-400 bg-slate-50 dark:bg-slate-700/40' : 'border-slate-200 dark:border-slate-600'"
-             class="border border-dashed rounded-md px-2 py-2 text-xs text-slate-500 dark:text-slate-400 text-center" @click="$refs.chatFileInputMobile.click()">
-          <span x-show="!chatFiles.length">Tap to attach → team-inbox</span>
-          <span x-show="chatFiles.length" x-text="chatFiles.length + ' attached'"></span>
+      <div x-show="chatOutboundInFlight" x-cloak class="chat-composer-progress-track shrink-0" aria-hidden="true"><div class="chat-composer-progress-bar"></div></div>
+      <div
+        class="p-3 space-y-2"
+        @dragover.prevent="chatDragActive = true"
+        @dragleave="chatDragActive = false"
+        @drop.prevent="handleChatDrop($event)"
+        :class="chatDragActive ? 'ring-2 ring-inset ring-indigo-400/60 dark:ring-indigo-500/50' : ''"
+      >
+        <textarea x-ref="chatPromptMobile" x-model="chatPrompt" @keydown.enter.prevent="!$event.shiftKey && submitChat()" rows="2" placeholder="Ask… (Enter send, Shift+Enter newline)"
+          class="w-full text-base rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 px-3 py-2.5 resize-none focus:outline-none focus:ring-2 focus:ring-slate-400 dark:focus:ring-slate-500 min-h-[44px] max-h-40"></textarea>
+        <div class="flex items-center gap-2 min-w-0">
+          <button type="button" @click="closeChat()" class="icon-btn shrink-0 h-11 w-11 rounded-lg border border-slate-200 dark:border-slate-600 text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700/50 hover:text-slate-800 dark:hover:text-slate-100 transition-colors" title="Back" aria-label="Close chat">
+            <i data-lucide="arrow-left" class="w-5 h-5"></i>
+          </button>
+          <div class="flex-1 min-w-0">
+            <button type="button" id="chat-agent-mobile"
+              @click="toggleChatAgentPicker()"
+              :disabled="chatMessages.length > 0"
+              :aria-expanded="chatAgentPickerOpen"
+              aria-haspopup="dialog"
+              aria-controls="chat-agent-picker-panel"
+              class="flex w-full min-w-0 h-11 items-center gap-2 rounded-lg border border-slate-200 dark:border-slate-600 bg-slate-50 dark:bg-slate-900/50 px-2.5 text-left transition-colors hover:bg-slate-100 dark:hover:bg-slate-800/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 dark:focus-visible:ring-slate-500 disabled:opacity-60 disabled:pointer-events-none"
+              :title="chatMessages.length ? 'Agent is fixed after the first message in this chat' : 'Choose agent — see everyone’s role'">
+              <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-indigo-100 dark:bg-indigo-950/55 text-xs font-bold text-indigo-700 dark:text-indigo-200" x-text="workPanelAvatarLetter(chatAgent)"></div>
+              <div class="min-w-0 flex-1 py-0.5">
+                <div class="text-sm font-semibold text-slate-800 dark:text-slate-100 leading-tight truncate" x-text="chatAgentDisplayName(chatAgent)"></div>
+                <div class="text-[11px] text-slate-500 dark:text-slate-400 leading-tight truncate" x-text="chatAgentSummaryLine(chatAgent)"></div>
+              </div>
+              <i data-lucide="chevrons-up-down" class="w-4 h-4 shrink-0 text-slate-400" aria-hidden="true"></i>
+            </button>
+          </div>
+          <button type="button" @click="$refs.chatFileInputMobile.click()" :title="chatFiles.length ? (chatFiles.length + ' file(s) — team-inbox') : 'Attach files (team-inbox)'" :aria-label="chatFiles.length ? chatFiles.length + ' files attached, add more' : 'Attach files to team-inbox'"
+            class="icon-btn relative shrink-0 h-11 w-11 rounded-lg border transition-colors"
+            :class="chatFiles.length ? 'border-indigo-300 bg-indigo-50 text-indigo-700 dark:border-indigo-700 dark:bg-indigo-950/50 dark:text-indigo-200' : 'border-slate-200 dark:border-slate-600 text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-700/60'">
+            <i data-lucide="paperclip" class="w-5 h-5"></i>
+            <span x-show="chatFiles.length" x-cloak class="absolute -top-0.5 -right-0.5 min-w-[1.125rem] h-[1.125rem] px-0.5 flex items-center justify-center rounded-full bg-indigo-600 text-[10px] font-bold text-white leading-none" x-text="chatFiles.length"></span>
+          </button>
+          <button type="button" x-show="!chatStreaming" x-cloak @click="submitChat()" :disabled="!chatPrompt.trim()" title="Send" aria-label="Send message"
+            class="icon-btn shrink-0 h-11 w-11 rounded-lg bg-slate-800 dark:bg-slate-200 text-white dark:text-slate-900 hover:bg-slate-900 dark:hover:bg-white disabled:opacity-40 disabled:pointer-events-none transition-colors">
+            <i data-lucide="send-horizontal" class="w-5 h-5"></i>
+          </button>
+          <button type="button" x-show="chatStreaming" x-cloak @click="abortChat()" title="Stop" aria-label="Stop generating"
+            class="icon-btn shrink-0 h-11 w-11 rounded-lg bg-amber-600 hover:bg-amber-700 text-white transition-colors">
+            <i data-lucide="square" class="w-4 h-4 fill-current stroke-[2.5]"></i>
+          </button>
+        </div>
+        <div class="flex justify-end pl-[3.25rem]">
+          <button type="button" @click="openChatAgentProfile()" class="inline-flex items-center gap-1 text-[11px] font-semibold text-indigo-600 dark:text-indigo-400" title="Full agent brief" aria-label="View full agent profile">
+            <i data-lucide="user-circle" class="w-3.5 h-3.5 opacity-90" aria-hidden="true"></i>
+            Profile
+          </button>
         </div>
         <input type="file" multiple class="hidden" x-ref="chatFileInputMobile" @change="handleChatFileSelect($event)" />
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- Agent picker: list all agents with roles (replaces native select) -->
+<div x-show="chatAgentPickerOpen" x-cloak @keydown.escape.window="chatAgentPickerOpen && closeChatAgentPicker()"
+  class="fixed inset-0 z-[72] flex items-end sm:items-center justify-center sm:p-4 bg-slate-900/50 backdrop-blur-[1px]"
+  @click.self="closeChatAgentPicker()"
+  role="dialog" aria-modal="true" aria-labelledby="chat-agent-picker-title">
+  <div id="chat-agent-picker-panel" class="w-full sm:max-w-md sm:mx-4 max-h-[min(28rem,85vh)] flex flex-col rounded-t-2xl sm:rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 shadow-2xl overflow-hidden min-h-0" @click.stop>
+    <div class="flex items-center justify-between gap-2 px-4 py-3 border-b border-slate-200 dark:border-slate-700 shrink-0">
+      <h2 id="chat-agent-picker-title" class="text-sm font-semibold text-slate-900 dark:text-white">Choose an agent</h2>
+      <button type="button" @click="closeChatAgentPicker()" class="icon-btn p-2 rounded-lg text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 dark:text-slate-400" aria-label="Close agent list">
+        <i data-lucide="x" class="w-5 h-5"></i>
+      </button>
+    </div>
+    <div class="overflow-y-auto flex-1 min-h-0 p-2 space-y-1">
+      <template x-for="a in chatAgents" :key="'pick-'+a">
+        <button type="button"
+          @click="selectChatAgentFromPicker(a)"
+          class="w-full flex items-start gap-3 rounded-xl px-3 py-2.5 text-left transition-colors border focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900"
+          :class="isActiveChatAgentPick(a)
+            ? 'bg-indigo-50 dark:bg-indigo-950/35 border-indigo-200 dark:border-indigo-800'
+            : 'border-transparent hover:bg-slate-50 dark:hover:bg-slate-800/70'">
+          <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-indigo-100 dark:bg-indigo-950/55 text-sm font-bold text-indigo-700 dark:text-indigo-200" x-text="workPanelAvatarLetter(a)"></div>
+          <div class="min-w-0 flex-1 pt-0.5">
+            <span class="font-semibold text-sm text-slate-900 dark:text-slate-100" x-text="chatAgentDisplayName(a)"></span>
+            <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5 leading-snug" x-text="chatAgentSummaryLine(a)"></p>
+          </div>
+          <i x-show="isActiveChatAgentPick(a)" x-cloak data-lucide="check" class="w-5 h-5 shrink-0 text-indigo-600 dark:text-indigo-400 mt-1" aria-hidden="true"></i>
+        </button>
+      </template>
+    </div>
+    <div class="px-3 py-2.5 border-t border-slate-200 dark:border-slate-700 shrink-0 bg-slate-50/90 dark:bg-slate-800/90">
+      <button type="button" @click="closeChatAgentPicker(); openChatAgentProfile()" class="w-full text-center text-xs font-semibold text-indigo-600 dark:text-indigo-400 hover:underline py-1">
+        Full profile for current agent
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Agent profile (full brief markdown) -->
+<div x-show="chatAgentProfileOpen" x-cloak @keydown.escape.window="closeChatAgentProfile()" class="fixed inset-0 z-[75] flex items-end sm:items-center justify-center sm:p-4 bg-slate-900/60 backdrop-blur-[2px]" @click.self="closeChatAgentProfile()" role="dialog" aria-modal="true" :aria-labelledby="'agent-profile-title-' + chatAgent">
+  <div class="w-full sm:max-w-2xl sm:max-h-[88vh] max-h-[92vh] flex flex-col rounded-t-2xl sm:rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-slate-600/80 shadow-2xl shadow-slate-900/20 dark:shadow-black/40 overflow-hidden min-h-0" @click.stop>
+    <div class="agent-profile-hero relative shrink-0 px-4 pt-5 pb-4 sm:px-6 sm:pt-6 border-b border-indigo-200/40 dark:border-indigo-900/50 overflow-hidden">
+      <div class="absolute inset-0 bg-gradient-to-br from-indigo-500/15 via-violet-500/10 to-fuchsia-500/10 dark:from-indigo-500/20 dark:via-slate-900 dark:to-violet-950/40 pointer-events-none" aria-hidden="true"></div>
+      <div class="absolute -right-8 -top-12 w-40 h-40 rounded-full bg-indigo-400/20 dark:bg-indigo-400/10 blur-2xl pointer-events-none" aria-hidden="true"></div>
+      <div class="relative flex items-start gap-4">
+        <div class="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-600 to-violet-600 text-lg font-bold text-white shadow-lg shadow-indigo-600/25 ring-2 ring-white/30 dark:ring-slate-900/30 select-none" x-text="workPanelAvatarLetter(chatAgent)"></div>
+        <div class="min-w-0 flex-1 pt-0.5">
+          <h2 :id="'agent-profile-title-' + chatAgent" class="text-lg sm:text-xl font-bold tracking-tight text-slate-900 dark:text-white" x-text="chatAgentDisplayName(chatAgent)"></h2>
+          <p class="text-sm text-indigo-800/90 dark:text-indigo-200/90 font-medium mt-0.5 line-clamp-2" x-text="chatAgentSummaryLine(chatAgent)"></p>
+          <p class="text-[11px] text-slate-500 dark:text-slate-400 mt-1.5">Full brief from your repo — same file the model uses as its system prompt in chat.</p>
+        </div>
+        <button type="button" @click="closeChatAgentProfile()" class="icon-btn shrink-0 -mt-1 -mr-1 p-2 rounded-xl text-slate-500 hover:bg-slate-900/5 dark:hover:bg-white/10 dark:text-slate-400" aria-label="Close profile">
+          <i data-lucide="x" class="w-5 h-5"></i>
+        </button>
+      </div>
+    </div>
+    <div class="flex-1 min-h-0 overflow-y-auto px-4 py-4 sm:px-6 sm:py-5">
+      <template x-if="chatAgentProfileLoading">
+        <p class="text-sm text-slate-500 dark:text-slate-400 flex items-center gap-2">
+          <span class="inline-block h-4 w-4 rounded-full border-2 border-indigo-400 border-t-transparent animate-spin" aria-hidden="true"></span>
+          Loading full profile…
+        </p>
+      </template>
+      <template x-if="!chatAgentProfileLoading && chatAgentProfileError">
+        <p class="text-sm text-red-600 dark:text-red-400" x-text="chatAgentProfileError"></p>
+      </template>
+      <div x-show="!chatAgentProfileLoading && !chatAgentProfileError && chatAgentProfileHtml" x-cloak class="chat-md-output agent-profile-md text-slate-700 dark:text-slate-200" x-html="chatAgentProfileHtml"></div>
     </div>
   </div>
 </div>

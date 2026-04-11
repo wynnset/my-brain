@@ -7,6 +7,17 @@ const fs       = require('fs');
 const crypto   = require('crypto');
 const { spawn }  = require('child_process');
 const multer   = require('multer');
+const { pathToFileURL } = require('url');
+
+/** Repo root `.env` — set ANTHROPIC_API_KEY, BRAIN_CHAT_BACKEND, etc. without shell exports. */
+(function loadDotenv() {
+  try {
+    const envPath = path.join(__dirname, '..', '.env');
+    if (fs.existsSync(envPath)) require('dotenv').config({ path: envPath });
+  } catch (e) {
+    if (e && e.code !== 'MODULE_NOT_FOUND') console.warn('[env] .env load failed:', e.message);
+  }
+})();
 
 const SESS_COOKIE = 'brain_sess';
 const SESS_MAX_AGE_SEC = 60 * 60 * 24 * 14; // 14 days
@@ -71,6 +82,25 @@ function clearSessionCookie(res) {
   const parts = [`${SESS_COOKIE}=`, 'HttpOnly', 'Path=/', 'Max-Age=0', 'SameSite=Lax'];
   if (secure) parts.push('Secure');
   res.setHeader('Set-Cookie', parts.join('; '));
+}
+
+/** Keep in sync with appendAssistantStreamChunk in dashboard-app.js (stream chunk join for .!? boundaries). */
+function appendAssistantStreamChunk(existing, chunk) {
+  const e = String(existing || '');
+  const c = String(chunk || '');
+  if (!c) return e;
+  if (!e) return c;
+  const fc = c.charCodeAt(0);
+  if (fc === 32 || fc === 10 || fc === 13 || fc === 9) return e + c;
+  const t = e.replace(/[\s\u00a0]+$/g, '');
+  if (!t) return e + c;
+  let j = t.length - 1;
+  while (j >= 0 && /['")\]\u2019\u201d]/.test(t[j])) j -= 1;
+  const punct = j >= 0 ? t[j] : '';
+  if (punct === '.' || punct === '!' || punct === '?' || punct === '\u2026') {
+    if (/[A-Za-z]/.test(c[0])) return `${e} ${c}`;
+  }
+  return e + c;
 }
 
 const app     = express();
@@ -411,6 +441,8 @@ const CHAT_LIST_LIMIT = 200;
 const CHAT_HEARTBEAT_MS = Number(process.env.BRAIN_CHAT_HEARTBEAT_MS) || 20000;
 const CHAT_MAX_TRANSCRIPT_CHARS = Number(process.env.BRAIN_CHAT_MAX_TRANSCRIPT_CHARS) || 100000;
 const CHAT_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+/** `cli` (default): spawn Claude Code. `sdk`: Claude Agent SDK in-process. */
+const BRAIN_CHAT_BACKEND = String(process.env.BRAIN_CHAT_BACKEND || 'cli').toLowerCase();
 
 function ensureChatSessionsDir() {
   try {
@@ -471,8 +503,52 @@ function titleFromPrompt(prompt) {
   return line.length > 80 ? `${line.slice(0, 77)}…` : line;
 }
 
+function lastUserContent(messages) {
+  const arr = Array.isArray(messages) ? messages : [];
+  for (let i = arr.length - 1; i >= 0; i--) {
+    const m = arr[i];
+    if (m && m.role === 'user') return String(m.content || '').trim();
+  }
+  return '';
+}
+
+function mergeAgentSdkSessionIntoSession(conversationId, sessionId) {
+  if (!CHAT_ID_RE.test(String(conversationId || '')) || !sessionId) return;
+  const p = chatSessionPath(conversationId);
+  if (!p) return;
+  const fresh = readChatSession(conversationId);
+  if (!fresh) return;
+  fresh.agentSdkSessionId = sessionId;
+  fresh.updatedAt = new Date().toISOString();
+  try {
+    atomicWriteChatSession(p, fresh);
+  } catch (e) {
+    console.warn('[chat-sdk] could not persist agentSdkSessionId', e.message);
+  }
+}
+
 // ─── POST /api/chat — spawn claude with agent system prompt ───────────────────
-const CLAUDE_BIN = process.env.CLAUDE_BIN || 'claude';
+/** CLI spawn target; SDK uses `pathToClaudeCodeExecutable` (same search order). */
+function resolveClaudeCodeExecutablePath() {
+  const a = (process.env.CLAUDE_BIN || '').trim();
+  const b = (process.env.CLAUDE_CODE_EXECUTABLE || '').trim();
+  if (a || b) return a || b;
+  const nodeDir = path.dirname(process.execPath);
+  const candidates = [
+    path.join(nodeDir, 'claude'),
+    path.join(nodeDir, 'claude.cmd'),
+  ];
+  for (const p of candidates) {
+    try {
+      if (!fs.existsSync(p)) continue;
+      if (process.platform === 'win32') return p;
+      fs.accessSync(p, fs.constants.X_OK);
+      return p;
+    } catch (_) {}
+  }
+  return '';
+}
+const CLAUDE_BIN = resolveClaudeCodeExecutablePath() || 'claude';
 
 /** Fly has no macOS keychain; Claude needs an API key, bearer token, OAuth token, or cloud-provider env. */
 function claudeAuthConfiguredOnFly() {
@@ -641,26 +717,19 @@ app.post('/api/chat', (req, res) => {
     return res.status(500).json({ error: `Could not save message: ${err.message}` });
   }
 
-  const transcript = formatTranscriptFromMessages(sess.messages, CHAT_MAX_TRANSCRIPT_CHARS);
-  const fullPrompt = `${systemPrompt}\n\n---\n\n${transcript}`;
-
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
 
-  console.log(`[chat] agent=${sessionAgent} conversation=${conversationId}`);
-
-  const proc = spawn(CLAUDE_BIN, ['-p', '--dangerously-skip-permissions'], {
-    env: envForClaudeChat(),
-    cwd: DATA_DIR,
-    stdio: ['pipe', 'pipe', 'pipe'],
-  });
+  console.log(`[chat] backend=${BRAIN_CHAT_BACKEND} agent=${sessionAgent} conversation=${conversationId}`);
 
   const startedAt = Date.now();
   let heartbeatTimer = null;
   let streamEnded = false;
   let assistantBuf = '';
   let assistantSaved = false;
+  let proc = null;
+  const chatAbort = new AbortController();
 
   function clearHeartbeat() {
     if (heartbeatTimer) {
@@ -716,11 +785,104 @@ app.post('/api/chat', (req, res) => {
     }
   }, CHAT_HEARTBEAT_MS);
 
-  proc.stdin.write(fullPrompt);
-  proc.stdin.end();
+  res.on('close', () => {
+    clearHeartbeat();
+    try {
+      chatAbort.abort();
+    } catch (_) {}
+    if (proc && proc.exitCode === null && !proc.killed) {
+      try { proc.kill(); } catch (_) {}
+    }
+  });
+
+  if (BRAIN_CHAT_BACKEND === 'sdk') {
+    (async () => {
+      try {
+        const runner = await import(pathToFileURL(path.join(__dirname, 'chat-sdk-runner.mjs')).href);
+        const freshSess = readChatSession(conversationId) || sess;
+        const useResume = Boolean(freshSess.agentSdkSessionId && process.env.BRAIN_CHAT_RESUME !== '0');
+        let promptText = useResume
+          ? lastUserContent(freshSess.messages)
+          : formatTranscriptFromMessages(freshSess.messages, CHAT_MAX_TRANSCRIPT_CHARS);
+        if (useResume && !String(promptText || '').trim()) {
+          promptText = formatTranscriptFromMessages(freshSess.messages, CHAT_MAX_TRANSCRIPT_CHARS);
+        }
+        const allowedRaw = (process.env.BRAIN_CHAT_ALLOWED_TOOLS || '').trim();
+        const allowedTools = allowedRaw ? allowedRaw.split(',').map((t) => t.trim()).filter(Boolean) : undefined;
+        const chatEnv = envForClaudeChat();
+        const perm = runner.parsePermissionOptions(process.env.BRAIN_CHAT_PERMISSION_MODE);
+        const out = await runner.runAgentSdkQuery({
+          prompt: promptText,
+          systemPrompt,
+          resume: useResume ? freshSess.agentSdkSessionId : undefined,
+          cwd: DATA_DIR,
+          env: chatEnv,
+          tools: runner.parseToolsOption(process.env.BRAIN_CHAT_TOOLS),
+          allowedTools,
+          permissionMode: perm.permissionMode,
+          allowDangerouslySkipPermissions: perm.allowDangerouslySkipPermissions,
+          enableMcpBrainDb: process.env.BRAIN_CHAT_MCP_DB === '1',
+          dbDir: DB_DIR,
+          auditLogPath: path.join(DB_DIR, 'chat-tool-audit.log'),
+          auditTools: process.env.BRAIN_CHAT_AUDIT_TOOLS !== '0',
+          maxTurns: Number(process.env.BRAIN_CHAT_MAX_TURNS) || 100,
+          pathToClaudeCodeExecutable: resolveClaudeCodeExecutablePath() || undefined,
+          abortSignal: chatAbort.signal,
+          onTextChunk: (t) => {
+            if (!t) return;
+            assistantBuf = appendAssistantStreamChunk(assistantBuf, t);
+            try {
+              res.write(`data: ${JSON.stringify({ text: t })}\n\n`);
+            } catch (_) {}
+          },
+          onTool: ({ tool, detail }) => {
+            try {
+              res.write(`data: ${JSON.stringify({ tool, toolDetail: detail || '' })}\n\n`);
+            } catch (_) {}
+          },
+          onSegmentAgent: (agentId) => {
+            try {
+              if (agentId) res.write(`data: ${JSON.stringify({ segmentAgent: String(agentId) })}\n\n`);
+            } catch (_) {}
+          },
+          onInitSession: (sid) => mergeAgentSdkSessionIntoSession(conversationId, sid),
+        });
+        if (!assistantSaved) {
+          let content = (out.finalText || assistantBuf || '').trim();
+          if (!content && out.errors && out.errors.length) content = out.errors.join('\n');
+          if (!content && out.hadError) content = '[Agent SDK finished with errors]';
+          appendAssistantToSession(content || '', Boolean(out.hadError));
+        }
+        if (out.sessionId) mergeAgentSdkSessionIntoSession(conversationId, out.sessionId);
+      } catch (err) {
+        const errText = err && err.message ? err.message : String(err);
+        console.error('[chat-sdk]', err);
+        try {
+          res.write(`data: ${JSON.stringify({ error: errText })}\n\n`);
+        } catch (_) {}
+        appendAssistantToSession(`[Error] ${errText}`, true);
+      } finally {
+        endSSE();
+      }
+    })();
+    return;
+  }
+
+  const transcript = formatTranscriptFromMessages(sess.messages, CHAT_MAX_TRANSCRIPT_CHARS);
+  const fullPrompt = `${systemPrompt}\n\n---\n\n${transcript}`;
+
+  proc = spawn(CLAUDE_BIN, ['-p', '--dangerously-skip-permissions'], {
+    env: envForClaudeChat(),
+    cwd: DATA_DIR,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
 
   proc.on('error', (err) => {
-    const errText = `Failed to start claude: ${err.message}. Set CLAUDE_BIN env var to the full path.`;
+    const tried = CLAUDE_BIN === 'claude' ? '`claude` on PATH' : CLAUDE_BIN;
+    const errText =
+      `Failed to start Claude Code (${err.message}). Tried: ${tried}. ` +
+      'Set **CLAUDE_BIN** or **CLAUDE_CODE_EXECUTABLE** to the full path of the `claude` binary (same shell or IDE env as Node), ' +
+      'or use **BRAIN_CHAT_BACKEND=sdk** (SDK also needs that binary unless the SDK finds it automatically).';
     try {
       res.write(`data: ${JSON.stringify({ error: errText })}\n\n`);
     } catch (_) {}
@@ -730,7 +892,7 @@ app.post('/api/chat', (req, res) => {
 
   proc.stdout.on('data', chunk => {
     const t = chunk.toString();
-    assistantBuf += t;
+    assistantBuf = appendAssistantStreamChunk(assistantBuf, t);
     try {
       res.write(`data: ${JSON.stringify({ text: t })}\n\n`);
     } catch (_) {}
@@ -752,13 +914,6 @@ app.post('/api/chat', (req, res) => {
       appendAssistantToSession(content, errFlag);
     }
     endSSE();
-  });
-
-  res.on('close', () => {
-    clearHeartbeat();
-    if (proc.exitCode === null && !proc.killed) {
-      try { proc.kill(); } catch (_) {}
-    }
   });
 });
 

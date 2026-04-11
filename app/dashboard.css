@@ -90,3 +90,103 @@ body { touch-action: manipulation; }
 .chat-bubble-user .chat-md-output p { margin: 0.25em 0; }
 .chat-bubble-user .chat-md-output p:first-child { margin-top: 0; }
 .chat-bubble-user .chat-md-output p:last-child { margin-bottom: 0; }
+/* Chat: streaming / “agent working” affordances (Cursor / Claude Code–style) */
+.chat-thinking-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 2px;
+  vertical-align: middle;
+}
+.chat-thinking-dots span {
+  display: block;
+  width: 4px;
+  height: 4px;
+  border-radius: 9999px;
+  background: currentColor;
+  opacity: 0.4;
+  animation: chat-dot 1.05s ease-in-out infinite;
+}
+.chat-thinking-dots span:nth-child(2) { animation-delay: 0.14s; }
+.chat-thinking-dots span:nth-child(3) { animation-delay: 0.28s; }
+@keyframes chat-dot {
+  0%, 70%, 100% { transform: translateY(0); opacity: 0.35; }
+  35% { transform: translateY(-4px); opacity: 1; }
+}
+.chat-stream-cursor {
+  display: inline-block;
+  width: 2px;
+  min-height: 1em;
+  align-self: flex-end;
+  margin-bottom: 0.2em;
+  border-radius: 1px;
+  background: rgb(99 102 241);
+  animation: chat-cursor-blink 1s step-end infinite;
+}
+.dark .chat-stream-cursor {
+  background: rgb(165 180 252);
+}
+@keyframes chat-cursor-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+.chat-composer-progress-track {
+  height: 2px;
+  overflow: hidden;
+  background: rgb(226 232 240);
+}
+.dark .chat-composer-progress-track {
+  background: rgb(51 65 85);
+}
+.chat-composer-progress-bar {
+  height: 100%;
+  width: 38%;
+  border-radius: 9999px;
+  background: linear-gradient(90deg, rgb(99 102 241), rgb(129 140 248), rgb(99 102 241));
+  animation: chat-bar-sweep 1.35s ease-in-out infinite;
+}
+.dark .chat-composer-progress-bar {
+  background: linear-gradient(90deg, rgb(129 140 248), rgb(165 180 252), rgb(129 140 248));
+}
+@keyframes chat-bar-sweep {
+  0% { transform: translateX(-120%); }
+  100% { transform: translateX(320%); }
+}
+
+/* Full agent profile modal — slightly richer typography than chat bubbles */
+.agent-profile-md > *:first-child {
+  margin-top: 0;
+}
+.agent-profile-md h1 {
+  font-size: 1.35rem;
+  letter-spacing: -0.02em;
+  margin-top: 1.25rem;
+  padding-bottom: 0.35rem;
+  border-bottom: 1px solid rgb(226 232 240);
+}
+.dark .agent-profile-md h1 {
+  border-color: rgb(51 65 85);
+}
+.agent-profile-md h2 {
+  font-size: 1.1rem;
+  margin-top: 1.1rem;
+  color: rgb(51 65 85);
+}
+.dark .agent-profile-md h2 {
+  color: rgb(203 213 225);
+}
+.agent-profile-md hr {
+  margin: 1.25rem 0;
+  border: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgb(203 213 225), transparent);
+}
+.dark .agent-profile-md hr {
+  background: linear-gradient(90deg, transparent, rgb(71 85 105), transparent);
+}
+.agent-profile-md strong {
+  color: rgb(15 23 42);
+}
+.dark .agent-profile-md strong {
+  color: rgb(248 250 252);
+}

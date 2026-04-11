@@ -81,6 +81,14 @@ This applies to named team members (e.g. Ledger) and to any subagent or Task-sty
 | `launchpad.db` | Same directory as finance.db, filename `launchpad.db` | Career pipeline — jobs, outreach, tasks (Dash) |
 | `brain.db` | `brain_db_path` | Shared cross-domain action items — written by all agents, read by Dash |
 
+## Reference Docs
+
+Key reference files agents should be aware of. When briefing finance agents, include the relevant path explicitly.
+
+| File | Path | Purpose |
+|------|------|---------|
+| Sign Convention | `docs/finance-sign-convention.md` | Defines positive/negative sign rules for all account types in finance.db. All agents writing transactions must follow this. |
+
 ## Team Roster
 
 See `/team/` for individual team member profiles.

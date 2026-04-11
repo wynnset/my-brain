@@ -15,6 +15,7 @@ RUN npm install --omit=dev
 
 # App code
 COPY app/server.js ./
+COPY app/chat-sdk-runner.mjs app/mcp-brain-db.mjs ./
 COPY app/dashboard.html app/login.html app/dashboard.css app/dashboard-app.js app/favicon.svg ./
 
 # Seed files — copied to /data volume on first boot only

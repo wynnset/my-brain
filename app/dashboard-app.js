@@ -56,6 +56,35 @@ function esc(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
+/**
+ * Join SSE text chunks so sentence boundaries do not glue (e.g. "now." + "Good" → "now. Good").
+ * Only inserts a space when the prior text ends in . ! ? (ignoring trailing closers) and the chunk starts with a letter without leading whitespace.
+ */
+function appendAssistantStreamChunk(existing, chunk) {
+  var e = String(existing || '');
+  var c = String(chunk || '');
+  if (!c) return e;
+  if (!e) return c;
+  var fc = c.charCodeAt(0);
+  if (fc === 32 || fc === 10 || fc === 13 || fc === 9) return e + c;
+  var t = e.replace(/[\s\u00a0]+$/g, '');
+  if (!t) return e + c;
+  var j = t.length - 1;
+  while (j >= 0 && /['")\]\u2019\u201d]/.test(t[j])) j--;
+  var punct = j >= 0 ? t[j] : '';
+  if (punct === '.' || punct === '!' || punct === '?' || punct === '\u2026') {
+    var ch = c[0];
+    if (/[A-Za-z]/.test(ch)) return e + ' ' + c;
+  }
+  return e + c;
+}
+
+/** Claude Code / Agent SDK may emit `Task` or `Agent` for subagent delegation. */
+function isChatDelegationToolName(tool) {
+  var t = String(tool || '').trim().toLowerCase();
+  return t === 'task' || t === 'agent';
+}
+
 /** Default domain for team-inbox upload tags (must match server defaultUploadDomainForAgent). */
 function uploadDefaultDomainForAgent(agentId) {
   var a = String(agentId || '').toLowerCase();
@@ -208,6 +237,21 @@ function renderChatMarkdown(raw) {
   return esc(raw).replace(/\n/g, '<br>');
 }
 
+/** One-line role from team brief / CYRUS.md (`**Role:**` preferred, else H1 subtitle after em dash). */
+function parseAgentBriefSummary(md) {
+  if (!md) return '';
+  var text = String(md).replace(/^\ufeff/, '');
+  var roleLine = text.match(/^\s*\*\*Role:\*\*\s*(.+)$/im);
+  if (roleLine) return roleLine[1].replace(/\s*#+\s*$/, '').trim();
+  var h1 = text.match(/^#\s+(.+)$/m);
+  if (!h1) return '';
+  var title = h1[1].trim();
+  var splitRe = /\s[—–-]\s/;
+  var idx = title.search(splitRe);
+  if (idx >= 0) return title.slice(idx).replace(splitRe, '').trim();
+  return title;
+}
+
 var BRAIN_FILE_DIRS_RE = '(owners-inbox|team-inbox|team|docs)';
 
 function brainFileHash(dir, fileName) {
@@ -217,6 +261,29 @@ function brainFileHash(dir, fileName) {
 /** Strip trailing punctuation / stray backticks models often glue to paths */
 function trimBrainPathSegment(seg) {
   return String(seg || '').replace(/[`'")\].,;:]+$/g, '').replace(/^[`'"(]+/g, '').trim();
+}
+
+/**
+ * Fix hash segments when markdown linkification glues `](...)` into the path or leaves `[` on the dir.
+ * Used when parsing #/files/dir/name from the location bar or a clicked href.
+ */
+function sanitizeBrainHashDir(dir) {
+  var d = String(dir || '').trim();
+  try {
+    d = decodeURIComponent(d);
+  } catch (_) {}
+  return d.replace(/^\[+/, '').replace(/\]+$/, '').trim();
+}
+
+function sanitizeBrainHashFileName(name) {
+  var n = String(name || '').trim();
+  try {
+    n = decodeURIComponent(n);
+  } catch (_) {}
+  n = n.replace(/^\[+/, '');
+  n = n.replace(/\]\([^)]*\)\s*$/g, '');
+  n = n.replace(/\]+$/, '').trim();
+  return n;
 }
 
 /**
@@ -257,12 +324,16 @@ function linkifyBrainFileReferences(raw) {
     return '[' + label + '](' + brainFileHash(dir, name) + ')';
   });
 
-  // Bare dir/file — skip if already inside a markdown link label (after '[')
-  s = s.replace(new RegExp('(?<!\\[)\\b' + BRAIN_FILE_DIRS_RE + '/([^\\s\\]\\)\\>\\<"\'\\,`]+)', 'gi'), function(full, dir, rest) {
-    var file = trimBrainPathSegment(rest);
-    if (!file) return full;
-    return '[' + dir + '/' + file + '](' + brainFileHash(dir, file) + ')';
-  });
+  // Bare dir/file — skip inside markdown link labels (after '[') and skip paths already under #/files/…
+  // (otherwise `[label](#/files/owners-inbox/x.md)` gets a second link wrapped inside the URL and corrupts the hash).
+  s = s.replace(
+    new RegExp('(?<!\\[)(?<!/files/)\\b' + BRAIN_FILE_DIRS_RE + '/([^\\s\\]\\)\\>\\<"\'\\,`]+)', 'gi'),
+    function(full, dir, rest) {
+      var file = trimBrainPathSegment(rest);
+      if (!file) return full;
+      return '[' + dir + '/' + file + '](' + brainFileHash(dir, file) + ')';
+    }
+  );
 
   s = s.replace(/(?<!\[)\b(LARRY\.md|CYRUS\.md)\b/gi, function() {
     return '[CYRUS.md](#/files/root/CYRUS.md)';
@@ -326,6 +397,16 @@ document.addEventListener('alpine:init', function() {
         var w = parseInt(localStorage.getItem('chat_panel_width') || '384', 10);
         return isNaN(w) ? 384 : Math.min(720, Math.max(280, w));
       } catch (_) { return 384; }
+    })(),
+    /** Desktop breakpoint (lg); used so file list width style only applies when layout is side-by-side. */
+    viewportLg: (function() {
+      try { return typeof window !== 'undefined' && window.innerWidth >= 1024; } catch (_) { return false; }
+    })(),
+    filesListPanelWidth: (function() {
+      try {
+        var w = parseInt(localStorage.getItem('files_list_panel_width') || '320', 10);
+        return isNaN(w) ? 320 : Math.min(560, Math.max(220, w));
+      } catch (_) { return 320; }
     })(),
     mobileMenuOpen: false,
     theme: (typeof localStorage !== 'undefined' && localStorage.getItem('theme')) || 'system',
@@ -401,8 +482,18 @@ document.addEventListener('alpine:init', function() {
     chatSessionTitle: '',
     chatHistoryOpen: false,
     chatStreaming: false,
+    /** True from start of a turn (upload + stream) until turn finishes and queue is empty. */
+    chatOutboundInFlight: false,
+    /** Pending turns while a reply is in progress: { id, prompt, files: File[] } */
+    chatOutboundQueue: [],
     chatStreamDraft: '',
-    chatThinkingLog: [],
+    /**
+     * Per-agent work segments for the current turn (merged activity + “is working” UI).
+     * Each { id, agentId, lines: [{id,text}], expanded, done, startedAt, endedAt }.
+     */
+    chatWorkPanels: [],
+    /** Bumped every second while streaming so elapsed labels stay reactive. */
+    chatUiTick: 0,
     chatWorkingStartedAt: null,
     chatElapsedSec: 0,
     _chatElapsedTimer: null,
@@ -410,6 +501,16 @@ document.addEventListener('alpine:init', function() {
     chatRetryPrompt: '',
     chatFiles: [],
     chatDragActive: false,
+    /** Per slug: { status, summary, markdown?, error? } — full markdown for profile modal. */
+    chatAgentMeta: {},
+    /** slug -> Promise while `ensureChatAgentMeta` is in flight (dedupe concurrent loads). */
+    _chatAgentMetaInflight: {},
+    /** Custom agent picker modal (name + role per agent). */
+    chatAgentPickerOpen: false,
+    chatAgentProfileOpen: false,
+    chatAgentProfileLoading: false,
+    chatAgentProfileError: '',
+    chatAgentProfileHtml: '',
     _osMqListener: null,
     loginRequired: false,
     lastActionError: '',
@@ -461,12 +562,23 @@ document.addEventListener('alpine:init', function() {
       }, 60000);
       this.loadChatAgents().finally(function() {
         self.bootstrapChat().finally(function() {
+          self.ensureChatAgentMeta(self.chatAgent);
+          self.prefetchAllChatAgentMeta();
           self.$nextTick(function() {
             if (self.chatOpen) self.focusChatPrompt();
             self.refreshIcons();
           });
         });
       });
+      if (typeof this.$watch === 'function') {
+        this.$watch('chatAgent', function (v) {
+          self.ensureChatAgentMeta(v);
+        });
+      }
+      this._onResizeViewport = function() {
+        self.viewportLg = typeof window !== 'undefined' && window.innerWidth >= 1024;
+      };
+      window.addEventListener('resize', this._onResizeViewport);
       self.pollOwnersInbox();
       self._ownersInboxPollTimer = setInterval(function() { self.pollOwnersInbox(); }, 30000);
     },
@@ -541,6 +653,13 @@ document.addEventListener('alpine:init', function() {
       return { paddingRight: this.chatPanelWidth + 'px' };
     },
 
+    /** Shrink top nav horizontally so it does not paint over the fixed chat column (chat stays flush to the top). */
+    chatNavStyle() {
+      if (!this.chatOpen || !this.viewportLg) return {};
+      var w = this.chatPanelWidth;
+      return { width: 'calc(100% - ' + w + 'px)' };
+    },
+
     startResizeChat(e) {
       var startX = e.clientX;
       var startW = this.chatPanelWidth;
@@ -558,6 +677,33 @@ document.addEventListener('alpine:init', function() {
         document.body.style.cursor = '';
         document.body.style.userSelect = '';
         try { localStorage.setItem('chat_panel_width', String(self.chatPanelWidth)); } catch (_) {}
+      }
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    },
+
+    filesListAsideStyle() {
+      if (!this.viewportLg) return {};
+      return { width: this.filesListPanelWidth + 'px' };
+    },
+
+    startResizeFilesList(e) {
+      var startX = e.clientX;
+      var startW = this.filesListPanelWidth;
+      var self = this;
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+      function onMove(ev) {
+        var dx = ev.clientX - startX;
+        var w = Math.min(560, Math.max(220, startW + dx));
+        self.filesListPanelWidth = w;
+      }
+      function onUp() {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+        try { localStorage.setItem('files_list_panel_width', String(self.filesListPanelWidth)); } catch (_) {}
       }
       document.addEventListener('mousemove', onMove);
       document.addEventListener('mouseup', onUp);
@@ -614,7 +760,9 @@ document.addEventListener('alpine:init', function() {
 
     closeChat() {
       this.chatOpen = false;
+      this.chatAgentPickerOpen = false;
       this._lockBodyForMobileChat(false);
+      this.$nextTick(function() { this.refreshIcons(); }.bind(this));
     },
 
     chatBubbleHtml(m) {
@@ -631,6 +779,146 @@ document.addEventListener('alpine:init', function() {
 
     streamingAssistantHtml() {
       return renderAssistantMarkdown(this.chatStreamDraft || '');
+    },
+
+    /** Latest line for the “working” bubble (tool / heartbeat / connection). */
+    normalizeWorkPanelAgentId(id) {
+      if (id === '_delegate') return '_delegate';
+      return this.normalizeChatAgentId(id);
+    },
+
+    workPanelDisplayName(agentId) {
+      if (agentId === '_delegate') return 'Sub-task';
+      return this.chatAgentDisplayName(agentId);
+    },
+
+    workPanelAvatarLetter(agentId) {
+      var n = this.workPanelDisplayName(agentId) || 'A';
+      return String(n).charAt(0).toUpperCase();
+    },
+
+    workPanelElapsedLabel(panel) {
+      var _tick = this.chatUiTick;
+      void _tick;
+      if (!panel || !panel.startedAt) return '';
+      if (panel.done && panel.endedAt) {
+        var s = Math.max(0, Math.round((panel.endedAt - panel.startedAt) / 1000));
+        return s + 's';
+      }
+      return Math.floor((Date.now() - panel.startedAt) / 1000) + 's';
+    },
+
+    initChatWorkPanelsForTurn() {
+      this.chatWorkPanels = [];
+      this._appendWorkPanel(this.normalizeWorkPanelAgentId(this.chatAgent), true);
+    },
+
+    _appendWorkPanel(agentId, expanded) {
+      var panels = this.chatWorkPanels || [];
+      for (var i = 0; i < panels.length; i++) {
+        if (!panels[i].done) panels[i].expanded = false;
+      }
+      this.chatWorkPanels.push({
+        id: 'wp-' + Date.now() + '-' + Math.random().toString(36).slice(2, 9),
+        agentId: agentId,
+        lines: [],
+        expanded: expanded !== false,
+        done: false,
+        startedAt: Date.now(),
+        endedAt: null,
+      });
+    },
+
+    openNewWorkPanelForAgent(rawId) {
+      var aid = rawId === '_delegate' ? '_delegate' : this.normalizeChatAgentId(rawId);
+      this._appendWorkPanel(aid, true);
+      this.chatUiTick = Date.now();
+      this.$nextTick(function() { this.scrollChatToBottom(); }.bind(this));
+    },
+
+    /** Server/SDK detected a delegated agent; upgrade an empty placeholder panel when applicable. */
+    applySegmentAgentFromStream(agentId) {
+      if (agentId == null || !String(agentId).trim()) return;
+      var aid = this.normalizeWorkPanelAgentId(String(agentId).trim().toLowerCase().replace(/\s+/g, '_'));
+      var panels = this.chatWorkPanels;
+      var last = panels.length ? panels[panels.length - 1] : null;
+      if (last && !last.done && last.agentId === aid) {
+        this.chatUiTick = Date.now();
+        return;
+      }
+      if (last && last.agentId === '_delegate') {
+        last.agentId = aid;
+        last.startedAt = Date.now();
+        this.chatUiTick = Date.now();
+        return;
+      }
+      this.openNewWorkPanelForAgent(aid);
+    },
+
+    appendWorkLineToCurrentPanel(text, idSuffix) {
+      var panels = this.chatWorkPanels;
+      if (!panels.length) this.initChatWorkPanelsForTurn();
+      var p = panels[panels.length - 1];
+      if (p.done) return;
+      p.lines.push({
+        id: 'wl-' + Date.now() + '-' + (idSuffix || 'x') + '-' + Math.random().toString(36).slice(2, 6),
+        text: text,
+      });
+      if (p.lines.length > 120) p.lines.shift();
+      this.scrollChatToBottom();
+    },
+
+    guessWorkAgentFromTaskDetail(detail) {
+      var raw = String(detail || '');
+      var dl = raw.toLowerCase();
+      var agents = this.chatAgents || [];
+      for (var i = 0; i < agents.length; i++) {
+        var a = String(agents[i] || '').toLowerCase();
+        if (a && dl.indexOf(a) >= 0) return this.normalizeChatAgentId(agents[i]);
+      }
+      try {
+        if (/^\s*\{/.test(raw)) {
+          var o = JSON.parse(raw);
+          var sub =
+            o.subagent_type != null
+              ? o.subagent_type
+              : o.subagentType != null
+                ? o.subagentType
+                : o.agent != null
+                  ? o.agent
+                  : o.agent_id != null
+                    ? o.agent_id
+                    : o.agentId;
+          if (sub != null && String(sub).trim()) {
+            var id = this.normalizeChatAgentId(String(sub).trim());
+            if (id) return id;
+          }
+        }
+      } catch (_) {}
+      var m =
+        raw.match(/\byou are\s+([A-Za-z][A-Za-z0-9_-]*)\s*,/i) ||
+        raw.match(/\byou are\s+([A-Za-z][A-Za-z0-9_-]*)\b/i);
+      if (m) return this.normalizeChatAgentId(m[1]);
+      return null;
+    },
+
+    finalizeChatWorkPanels() {
+      var now = Date.now();
+      (this.chatWorkPanels || []).forEach(function(p) {
+        p.done = true;
+        if (!p.endedAt) p.endedAt = now;
+        p.expanded = false;
+      });
+    },
+
+    toggleWorkPanelExpanded(panel) {
+      if (!panel) return;
+      panel.expanded = !panel.expanded;
+      var self = this;
+      this.$nextTick(function() {
+        self.refreshIcons();
+        self.scrollChatToBottom();
+      });
     },
 
     viewerAssetUrl() {
@@ -687,6 +975,9 @@ document.addEventListener('alpine:init', function() {
       this.chatConversationId = null;
       this.chatMessages = [];
       this.chatSessionTitle = 'New chat';
+      this.chatOutboundQueue = [];
+      this.chatOutboundInFlight = false;
+      this.chatWorkPanels = [];
       try { localStorage.removeItem('brain_last_chat_id'); } catch (_) {}
     },
 
@@ -727,6 +1018,9 @@ document.addEventListener('alpine:init', function() {
           this.chatAgent = this.normalizeChatAgentId(sess.agent);
           this.chatMessages = sess.messages || [];
           this.chatSessionTitle = sess.title || 'Chat';
+          this.chatOutboundQueue = [];
+          this.chatOutboundInFlight = false;
+          this.chatWorkPanels = [];
           return;
         }
         try { localStorage.removeItem('brain_last_chat_id'); } catch (_) {}
@@ -740,6 +1034,7 @@ document.addEventListener('alpine:init', function() {
     },
 
     openChatHistory() {
+      this.chatAgentPickerOpen = false;
       this.chatHistoryOpen = true;
       this.loadConversationList();
       var self = this;
@@ -756,6 +1051,9 @@ document.addEventListener('alpine:init', function() {
       this.chatSessionTitle = sess.title || 'Chat';
       try { localStorage.setItem('brain_last_chat_id', id); } catch (_) {}
       this.chatHistoryOpen = false;
+      this.chatOutboundQueue = [];
+      this.chatOutboundInFlight = false;
+      this.chatWorkPanels = [];
       await this.loadConversationList();
       this.$nextTick(function() { this.scrollChatToBottom(); this.refreshIcons(); }.bind(this));
     },
@@ -770,6 +1068,7 @@ document.addEventListener('alpine:init', function() {
     },
 
     async newChatConversation() {
+      this.chatAgentPickerOpen = false;
       try {
         if (this.chatConversationId && this.chatMessages.length === 0) {
           try {
@@ -798,6 +1097,7 @@ document.addEventListener('alpine:init', function() {
       try {
         await this.loadConversationList();
       } catch (_) {}
+      this.ensureChatAgentMeta(this.chatAgent);
     },
 
     async deleteConversation(id, ev) {
@@ -853,8 +1153,8 @@ document.addEventListener('alpine:init', function() {
       }
       var fileMatch = raw.match(/^files\/([^/]+)\/(.+)$/);
       if (fileMatch) {
-        var fd = decodeURIComponent(fileMatch[1]);
-        var fn = decodeURIComponent(fileMatch[2]);
+        var fd = sanitizeBrainHashDir(fileMatch[1]);
+        var fn = sanitizeBrainHashFileName(fileMatch[2]);
         if (fd === 'root' && fn === 'LARRY.md') {
           fn = 'CYRUS.md';
           history.replaceState(null, '', '#/files/root/' + encodeURIComponent(fn));
@@ -1720,6 +2020,152 @@ document.addEventListener('alpine:init', function() {
       if (!a) return 'cyrus';
       return a === 'larry' ? 'cyrus' : a;
     },
+
+    chatAgentSummaryLine(agentId) {
+      var id = this.normalizeChatAgentId(agentId);
+      var row = this.chatAgentMeta[id];
+      if (!row || !row.status) return '';
+      if (row.status === 'loading') return 'Loading role…';
+      if (row.status === 'err') return row.error || 'Could not load role.';
+      return row.summary || '';
+    },
+
+    isActiveChatAgentPick(slug) {
+      return this.normalizeChatAgentId(this.chatAgent) === this.normalizeChatAgentId(slug);
+    },
+
+    toggleChatAgentPicker() {
+      if (this.chatMessages.length > 0) return;
+      this.chatAgentPickerOpen = !this.chatAgentPickerOpen;
+      if (this.chatAgentPickerOpen) this.prefetchAllChatAgentMeta();
+      var self = this;
+      this.$nextTick(function () {
+        self.refreshIcons();
+      });
+    },
+
+    closeChatAgentPicker() {
+      if (!this.chatAgentPickerOpen) return;
+      this.chatAgentPickerOpen = false;
+      var self = this;
+      this.$nextTick(function () {
+        self.refreshIcons();
+      });
+    },
+
+    async selectChatAgentFromPicker(slug) {
+      if (this.chatMessages.length > 0) return;
+      var next = this.normalizeChatAgentId(slug);
+      var cur = this.normalizeChatAgentId(this.chatAgent);
+      this.chatAgentPickerOpen = false;
+      var self = this;
+      if (next === cur) {
+        this.$nextTick(function () {
+          self.refreshIcons();
+        });
+        return;
+      }
+      this.chatAgent = next;
+      await this.onChatAgentChange();
+      this.$nextTick(function () {
+        self.refreshIcons();
+      });
+    },
+
+    async fetchChatAgentMarkdownRaw(agentId) {
+      var id = this.normalizeChatAgentId(agentId);
+      var url = id === 'cyrus' ? '/api/cyrus' : '/api/files/team/' + encodeURIComponent(id + '.md');
+      var r = await fetchWithAuth(url);
+      if (!r.ok) {
+        var msg = 'Could not load agent brief';
+        try {
+          var ej = await r.json();
+          if (ej && ej.error) msg = ej.error;
+        } catch (_) {}
+        throw new Error(msg);
+      }
+      return r.text();
+    },
+
+    async ensureChatAgentMeta(agentId) {
+      var id = this.normalizeChatAgentId(agentId);
+      var cur = this.chatAgentMeta[id];
+      if (cur && cur.status === 'ok' && cur.markdown) return;
+      var inflight = this._chatAgentMetaInflight[id];
+      if (inflight) return inflight;
+
+      if (!this.chatAgentMeta[id]) this.chatAgentMeta[id] = {};
+      this.chatAgentMeta[id].status = 'loading';
+      this.chatAgentMeta[id].summary = '';
+      this.chatAgentMeta[id].markdown = '';
+      delete this.chatAgentMeta[id].error;
+
+      var self = this;
+      var p = this.fetchChatAgentMarkdownRaw(id)
+        .then(function (md) {
+          var summary = parseAgentBriefSummary(md);
+          self.chatAgentMeta[id] = { status: 'ok', summary: summary, markdown: md };
+        })
+        .catch(function (e) {
+          self.chatAgentMeta[id] = {
+            status: 'err',
+            summary: '',
+            markdown: '',
+            error: e.message || String(e),
+          };
+        })
+        .finally(function () {
+          delete self._chatAgentMetaInflight[id];
+        });
+
+      this._chatAgentMetaInflight[id] = p;
+      return p;
+    },
+
+    prefetchAllChatAgentMeta() {
+      var agents = this.chatAgents || [];
+      for (var i = 0; i < agents.length; i++) this.ensureChatAgentMeta(agents[i]);
+    },
+
+    async openChatAgentProfile() {
+      this.chatAgentPickerOpen = false;
+      var id = this.normalizeChatAgentId(this.chatAgent);
+      this.chatAgentProfileOpen = true;
+      this.chatAgentProfileLoading = true;
+      this.chatAgentProfileError = '';
+      this.chatAgentProfileHtml = '';
+      var self = this;
+      this.$nextTick(function () {
+        self.refreshIcons();
+      });
+      try {
+        await this.ensureChatAgentMeta(id);
+        var row = this.chatAgentMeta[id];
+        if (!row || row.status !== 'ok' || !row.markdown) {
+          throw new Error((row && row.error) || 'No profile available');
+        }
+        this.chatAgentProfileHtml = renderAssistantMarkdown(row.markdown);
+      } catch (e) {
+        this.chatAgentProfileError = e.message || String(e);
+      } finally {
+        this.chatAgentProfileLoading = false;
+        this.$nextTick(function () {
+          self.refreshIcons();
+        });
+      }
+    },
+
+    closeChatAgentProfile() {
+      this.chatAgentProfileOpen = false;
+      this.chatAgentProfileLoading = false;
+      this.chatAgentProfileError = '';
+      this.chatAgentProfileHtml = '';
+      var self = this;
+      this.$nextTick(function () {
+        self.refreshIcons();
+      });
+    },
+
     async loadChatAgents() {
       try {
         var r = await fetchWithAuth('/api/files');
@@ -1733,141 +2179,182 @@ document.addEventListener('alpine:init', function() {
     },
 
     async submitChat() {
-      if (!this.chatPrompt.trim() || this.chatStreaming) return;
-      if (this.chatFiles.length > 0) {
-        var fd = new FormData();
-        this.chatFiles.forEach(function(f) { fd.append('files', f); });
-        var agentId = this.normalizeChatAgentId(this.chatAgent);
-        fd.append('createdBy', agentId);
-        fd.append('domain', uploadDefaultDomainForAgent(agentId));
-        await fetchWithAuth('/api/upload', { method: 'POST', body: fd });
+      if (!this.chatPrompt.trim()) return;
+      var prompt = this.chatPrompt.trim();
+      var files = this.chatFiles && this.chatFiles.length ? this.chatFiles.slice() : [];
+      if (this.chatOutboundInFlight) {
+        this.chatOutboundQueue.push({
+          id: 'q-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8),
+          prompt: prompt,
+          files: files,
+        });
+        this.chatPrompt = '';
         this.chatFiles = [];
-      }
-      this.maybeRequestNotificationPermission();
-      var self = this;
-      try {
-        await this.ensureChatConversation();
-      } catch (e) {
-        alert('Could not start chat: ' + e.message);
+        var self = this;
+        this.$nextTick(function() {
+          self.scrollChatToBottom();
+          self.refreshIcons();
+        });
         return;
       }
-      var prompt = this.chatPrompt.trim();
-      var optimisticId = 'local-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
-      this.chatThinkingLog = [];
-      this.chatStreamDraft = '';
-      this.chatWorkingStartedAt = Date.now();
-      this.chatElapsedSec = 0;
-      this._clearChatElapsedTimer();
-      this._chatElapsedTimer = setInterval(function() {
-        if (self.chatWorkingStartedAt) self.chatElapsedSec = Math.floor((Date.now() - self.chatWorkingStartedAt) / 1000);
-      }, 1000);
-      this.chatMessages.push({ id: optimisticId, role: 'user', content: prompt });
-      this.chatPrompt = '';
-      this.chatStreaming = true;
-      this.chatAbortController = new AbortController();
-      this.chatRetryPrompt = prompt;
-      var streamOk = false;
-      var acceptedByServer = false;
+      this.chatOutboundInFlight = true;
+      await this.runChatTurn(prompt, files);
+    },
+
+    /**
+     * Sends one user turn (optional team-inbox file upload, then chat stream).
+     * Serializes with the outbound queue: when this turn finishes, the next queued item runs automatically.
+     */
+    async runChatTurn(prompt, files) {
+      var self = this;
+      if (!this.chatOutboundInFlight) this.chatOutboundInFlight = true;
+      var skipQueueDrain = false;
+      files = files || [];
       try {
-        var res = await fetchWithAuth('/api/chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            agent: this.normalizeChatAgentId(this.chatAgent),
-            prompt: prompt,
-            conversationId: this.chatConversationId,
-          }),
-          signal: this.chatAbortController.signal,
-        });
-        if (!res.ok) {
-          this.chatMessages = this.chatMessages.filter(function(m) { return m.id !== optimisticId; });
-          this.chatPrompt = prompt;
-          var errMsg = 'Chat request failed: ' + res.status;
+        if (files.length > 0) {
           try {
-            var ej = await res.json();
-            if (ej && ej.error) errMsg = ej.error;
-          } catch (_) {}
-          this.chatMessages.push({
-            id: 'err-' + Date.now(),
-            role: 'assistant',
-            content: '[Error: ' + errMsg + ']',
-            error: true,
-          });
+            var fd = new FormData();
+            files.forEach(function(f) { fd.append('files', f); });
+            var agentId = this.normalizeChatAgentId(this.chatAgent);
+            fd.append('createdBy', agentId);
+            fd.append('domain', uploadDefaultDomainForAgent(agentId));
+            await fetchWithAuth('/api/upload', { method: 'POST', body: fd });
+          } catch (up) {
+            alert('Upload failed: ' + (up.message || String(up)));
+            skipQueueDrain = true;
+            return;
+          }
+        }
+        this.maybeRequestNotificationPermission();
+        try {
+          await this.ensureChatConversation();
+        } catch (e) {
+          alert('Could not start chat: ' + e.message);
+          skipQueueDrain = true;
           return;
         }
-        acceptedByServer = true;
-        var reader = res.body.getReader();
-        var decoder = new TextDecoder();
-        var buf = '';
-        while (true) {
-          var result = await reader.read();
-          if (result.done) break;
-          buf += decoder.decode(result.value, { stream: true });
-          var lines = buf.split('\n');
-          buf = lines.pop();
-          for (var i = 0; i < lines.length; i++) {
-            var line = lines[i];
-            if (!line.startsWith('data: ')) continue;
-            var payload = line.slice(6).trim();
-            if (payload === '[DONE]') { streamOk = true; break; }
-            try {
-              var msg = JSON.parse(payload);
-              if (msg.status === 'started') {
-                self.chatThinkingLog.push({
-                  id: 't-' + Date.now() + '-s',
-                  text: 'Connected — waiting for the model…',
-                });
-                if (self.chatThinkingLog.length > 40) self.chatThinkingLog.shift();
-              }
-              if (msg.heartbeat) {
-                self.chatThinkingLog.push({
-                  id: 't-' + Date.now() + '-h',
-                  text: 'Still working… (' + (msg.elapsedSec != null ? msg.elapsedSec + 's' : '') + ')',
-                });
-                if (self.chatThinkingLog.length > 40) self.chatThinkingLog.shift();
-              }
-              if (msg.text) self.chatStreamDraft += msg.text;
-              if (msg.error) {
-                self.chatThinkingLog.push({
-                  id: 't-' + Date.now() + '-e',
-                  text: '[stderr] ' + String(msg.error).trim().slice(0, 500),
-                });
-                if (self.chatThinkingLog.length > 40) self.chatThinkingLog.shift();
-              }
-            } catch (_) {}
-          }
-          self.scrollChatToBottom();
-          if (streamOk) break;
-        }
-        self.chatStreamDraft = '';
-        await self.refreshActiveConversation();
-        await self.loadConversationList();
-        if (streamOk) self.maybeNotifyChatComplete();
-      } catch (err) {
-        self.chatStreamDraft = '';
-        if (err.name === 'AbortError') {
-          await self.refreshActiveConversation();
-          await self.loadConversationList();
-        } else if (!acceptedByServer) {
-          self.chatMessages = self.chatMessages.filter(function(m) { return m.id !== optimisticId; });
-          self.chatPrompt = prompt;
-          self.chatMessages.push({
-            id: 'err-' + Date.now(),
-            role: 'assistant',
-            content: '[Error: ' + err.message + ']',
-            error: true,
+        var optimisticId = 'local-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+        this.initChatWorkPanelsForTurn();
+        this.chatStreamDraft = '';
+        this.chatWorkingStartedAt = Date.now();
+        this.chatElapsedSec = 0;
+        this.chatUiTick = Date.now();
+        this._clearChatElapsedTimer();
+        this._chatElapsedTimer = setInterval(function() {
+          if (self.chatWorkingStartedAt) self.chatElapsedSec = Math.floor((Date.now() - self.chatWorkingStartedAt) / 1000);
+          self.chatUiTick = Date.now();
+        }, 1000);
+        this.chatMessages.push({ id: optimisticId, role: 'user', content: prompt });
+        this.chatPrompt = '';
+        this.chatStreaming = true;
+        this.$nextTick(function() { self.refreshIcons(); });
+        this.chatAbortController = new AbortController();
+        this.chatRetryPrompt = prompt;
+        var streamOk = false;
+        var acceptedByServer = false;
+        try {
+          var res = await fetchWithAuth('/api/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              agent: this.normalizeChatAgentId(this.chatAgent),
+              prompt: prompt,
+              conversationId: this.chatConversationId,
+            }),
+            signal: this.chatAbortController.signal,
           });
-        } else {
+          if (!res.ok) {
+            this.chatMessages = this.chatMessages.filter(function(m) { return m.id !== optimisticId; });
+            this.chatPrompt = prompt;
+            var errMsg = 'Chat request failed: ' + res.status;
+            try {
+              var ej = await res.json();
+              if (ej && ej.error) errMsg = ej.error;
+            } catch (_) {}
+            this.chatMessages.push({
+              id: 'err-' + Date.now(),
+              role: 'assistant',
+              content: '[Error: ' + errMsg + ']',
+              error: true,
+            });
+            return;
+          }
+          acceptedByServer = true;
+          var reader = res.body.getReader();
+          var decoder = new TextDecoder();
+          var buf = '';
+          while (true) {
+            var result = await reader.read();
+            if (result.done) break;
+            buf += decoder.decode(result.value, { stream: true });
+            var lines = buf.split('\n');
+            buf = lines.pop();
+            for (var i = 0; i < lines.length; i++) {
+              var line = lines[i];
+              if (!line.startsWith('data: ')) continue;
+              var payload = line.slice(6).trim();
+              if (payload === '[DONE]') { streamOk = true; break; }
+              try {
+                var msg = JSON.parse(payload);
+                if (msg.segmentAgent) {
+                  self.applySegmentAgentFromStream(msg.segmentAgent);
+                }
+                if (msg.status === 'started') {
+                  self.appendWorkLineToCurrentPanel('Connected — waiting for the model…', 's');
+                }
+                if (msg.heartbeat) {
+                  self.appendWorkLineToCurrentPanel(
+                    'Still working… (' + (msg.elapsedSec != null ? msg.elapsedSec + 's' : '') + ')',
+                    'h'
+                  );
+                }
+                if (msg.text) self.chatStreamDraft = appendAssistantStreamChunk(self.chatStreamDraft, msg.text);
+                if (msg.error) {
+                  self.appendWorkLineToCurrentPanel('[stderr] ' + String(msg.error).trim().slice(0, 500), 'e');
+                }
+                if (msg.tool) {
+                  var td = msg.toolDetail ? String(msg.toolDetail).trim().slice(0, 240) : '';
+                  self.appendWorkLineToCurrentPanel(td ? msg.tool + ': ' + td : String(msg.tool), 'tool');
+                  if (isChatDelegationToolName(msg.tool)) {
+                    var guessed = self.guessWorkAgentFromTaskDetail(msg.toolDetail || '');
+                    self.openNewWorkPanelForAgent(guessed || '_delegate');
+                  }
+                }
+              } catch (_) {}
+            }
+            self.scrollChatToBottom();
+            if (streamOk) break;
+          }
+          self.chatStreamDraft = '';
           await self.refreshActiveConversation();
           await self.loadConversationList();
-          var last = self.chatMessages[self.chatMessages.length - 1];
-          if (!last || last.role !== 'assistant' || !String(last.content || '').trim()) {
+          if (streamOk) self.maybeNotifyChatComplete();
+        } catch (err) {
+          self.chatStreamDraft = '';
+          if (err.name === 'AbortError') {
+            await self.refreshActiveConversation();
+            await self.loadConversationList();
+          } else if (!acceptedByServer) {
+            self.chatMessages = self.chatMessages.filter(function(m) { return m.id !== optimisticId; });
+            self.chatPrompt = prompt;
             self.chatMessages.push({
               id: 'err-' + Date.now(),
               role: 'assistant',
               content: '[Error: ' + err.message + ']',
               error: true,
             });
+          } else {
+            await self.refreshActiveConversation();
+            await self.loadConversationList();
+            var last = self.chatMessages[self.chatMessages.length - 1];
+            if (!last || last.role !== 'assistant' || !String(last.content || '').trim()) {
+              self.chatMessages.push({
+                id: 'err-' + Date.now(),
+                role: 'assistant',
+                content: '[Error: ' + err.message + ']',
+                error: true,
+              });
+            }
           }
         }
       } finally {
@@ -1876,8 +2363,21 @@ document.addEventListener('alpine:init', function() {
         self.chatStreamDraft = '';
         self.chatAbortController = null;
         self.chatWorkingStartedAt = null;
+        self.finalizeChatWorkPanels();
         self.scrollChatToBottom();
         self.$nextTick(function() { self.refreshIcons(); });
+        if (skipQueueDrain) {
+          self.chatOutboundInFlight = false;
+        } else if (self.chatOutboundQueue.length) {
+          var next = self.chatOutboundQueue.shift();
+          self.$nextTick(function() {
+            self.runChatTurn(next.prompt, next.files || []).catch(function(e) {
+              console.warn('[chat] queued turn', e);
+            });
+          });
+        } else {
+          self.chatOutboundInFlight = false;
+        }
       }
     },
 
@@ -1889,6 +2389,8 @@ document.addEventListener('alpine:init', function() {
       this.chatDragActive = false;
       if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) {
         this.chatFiles = this.chatFiles.concat(Array.from(e.dataTransfer.files));
+        var self = this;
+        this.$nextTick(function() { self.refreshIcons(); });
       }
     },
 
@@ -1896,6 +2398,8 @@ document.addEventListener('alpine:init', function() {
       if (e.target.files && e.target.files.length) {
         this.chatFiles = this.chatFiles.concat(Array.from(e.target.files));
         e.target.value = '';
+        var self = this;
+        this.$nextTick(function() { self.refreshIcons(); });
       }
     },
 

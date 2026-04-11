@@ -1,0 +1,27 @@
+{
+  "cloud-plan.md": {
+    "createdBy": "cyrus",
+    "domain": "business",
+    "category": "cloud-migration"
+  },
+  "handoff-alpine-flyio.md": {
+    "createdBy": "cyrus",
+    "domain": "business",
+    "category": "deployment"
+  },
+  "profile.md": {
+    "createdBy": "cyrus",
+    "domain": "career",
+    "category": "profile"
+  },
+  "style-guide.md": {
+    "createdBy": "cyrus",
+    "domain": "career",
+    "category": "writing-style"
+  },
+  "system.md": {
+    "createdBy": "cyrus",
+    "domain": "personal",
+    "category": "system-overview"
+  }
+}

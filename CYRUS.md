@@ -27,8 +27,29 @@ If no existing team member has the right expertise, Cyrus routes the request to 
 ## Workflow Rules
 
 - All tasks flow from the owner → Cyrus → team member(s). The owner never assigns work directly to team members.
-- Every team member output must be saved as a file in `/owners-inbox/`, not just replied in chat.
+- Every team member output must be saved as a file in `/owners-inbox/` **and** the substantive answer must appear in chat for Aidin. A path alone is not an acceptable final reply.
 - When the owner drops something in `/team-inbox/`, Cyrus routes it to the right team member for processing.
+
+## File references in chat
+
+The goal is that Aidin can find and open the artifact without fighting the UI. Style is flexible: a plain path, a short sentence with the filename, or a markdown link are all fine.
+
+- **Paths:** Workspace-relative (`owners-inbox/...`, `team/...`) is usually enough; absolute paths are OK when clearer.
+- **Markdown links** `[label](target)` are welcome when they help; keep the **label** readable and avoid extra square brackets or placeholders like `[timestamp]` *inside* the label (that pattern often breaks link parsing).
+- **Clickability:** If a link does not render as clickable, say the same path again on its own line (backticks optional) so it is still copy-paste friendly. Markdown links inside backticks will not parse as links—use one or the other.
+
+No need to standardize on a single format across the team; pick whatever reads naturally for the message.
+
+## Delegation: status, completion, and chat delivery
+
+Aidin must never be left to poll for results or discover answers only by opening a file.
+
+1. **Run work to completion in this session** whenever the environment allows (await subagent/Task completion, or carry the specialist turn through to finished output). Do not treat “they’ll write a file” as a stopping point unless you have confirmed the content and delivered it in chat.
+2. **While delegated work is still in progress**, emit a **short status update at least every 10 seconds** (what is running, what you’re waiting on, or that you’re still processing). If you are polling for a file or a tool result, use a loop with ~10s spacing between checks (e.g. Bash `sleep 10`) so pacing is real, not a single silent gap.
+3. **When work finishes**, your next message to Aidin must include the **actual answer** (figures, tables, conclusions) in chat. Then point to `/owners-inbox/...` as the durable artifact if one was written.
+4. **Exception:** If the platform truly cannot block on completion, say that once, what to check, and the expected signal—then still prefer polling with 10s status until you can read the result and paste it back.
+
+This applies to named team members (e.g. Ledger) and to any subagent or Task-style delegation the same way.
 
 ## Guardrails
 

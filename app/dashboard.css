@@ -13,6 +13,52 @@
 .icon-btn { display: inline-flex; align-items: center; justify-content: center; }
 html { -webkit-text-size-adjust: 100%; touch-action: manipulation; }
 body { touch-action: manipulation; }
+/* Action items: circle checkbox + chevron */
+.action-item-check {
+  width: 1.375rem;
+  height: 1.375rem;
+  border-width: 2px;
+  border-style: solid;
+  border-radius: 9999px;
+  background: transparent;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease, border-color 0.15s ease;
+}
+.action-item-check:hover {
+  transform: scale(1.07);
+}
+.action-item-check:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgb(59 130 246 / 0.35);
+}
+.action-item-caret {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: 0.35rem;
+  margin: -0.35rem -0.2rem -0.35rem 0;
+  border: none;
+  border-radius: 0.5rem;
+  background: transparent;
+  color: rgb(148 163 184);
+  cursor: pointer;
+  transition: color 0.15s ease, background-color 0.15s ease, transform 0.15s ease;
+}
+.dark .action-item-caret {
+  color: rgb(100 116 139);
+}
+.action-item-caret:hover {
+  color: rgb(59 130 246);
+  background: rgb(239 246 255);
+}
+.dark .action-item-caret:hover {
+  color: rgb(96 165 250);
+  background: rgb(30 58 138 / 0.28);
+}
+.action-item-caret:active {
+  transform: translateX(1px);
+}
 /* Chat markdown output */
 .chat-md-output { word-break: break-word; }
 .chat-md-output .chat-md-placeholder { margin: 0; }

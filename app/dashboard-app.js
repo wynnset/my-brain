@@ -55,6 +55,15 @@ function esc(s) {
   if (!s) return '';
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
+
+/** Default domain for team-inbox upload tags (must match server defaultUploadDomainForAgent). */
+function uploadDefaultDomainForAgent(agentId) {
+  var a = String(agentId || '').toLowerCase();
+  if (a === 'ledger') return 'finance';
+  if (a === 'charter') return 'business';
+  if (a === 'owner') return 'personal';
+  return 'career';
+}
 /** Same-origin API calls; sends session cookie when DASHBOARD_PASSWORD auth is enabled. */
 function fetchWithAuth(url, init) {
   var cfg = init ? Object.assign({}, init) : {};
@@ -70,12 +79,6 @@ const DOMAIN_CLASSES = {
   business: 'bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300',
   personal: 'bg-orange-100 dark:bg-orange-900/40 text-orange-700 dark:text-orange-300',
   family:   'bg-pink-100 dark:bg-pink-900/40 text-pink-700 dark:text-pink-300',
-};
-const URGENCY_DOT = {
-  critical: 'bg-red-500',
-  high:     'bg-orange-400',
-  medium:   'bg-yellow-400',
-  low:      'bg-slate-300 dark:bg-slate-600',
 };
 function filterItems(items, range) {
   if (range === 'all') return items;
@@ -303,6 +306,10 @@ function renderAssistantMarkdown(raw) {
   } catch (_) {}
   return esc(raw).replace(/\n/g, '<br>');
 }
+/** Optional markdown body for dashboard action items (details field). */
+function renderActionItemMarkdown(raw) {
+  return renderAssistantMarkdown(raw || '');
+}
 
 document.addEventListener('alpine:init', function() {
   Alpine.data('app', function() { return {
@@ -361,6 +368,11 @@ document.addEventListener('alpine:init', function() {
     fileSections: [],
     filesLoading: false,
     filesLoadError: null,
+    filesFilterCreator: '',
+    filesFilterDomain: '',
+    fileMetaEditorOpen: false,
+    fileMetaSaving: false,
+    fileMetaDraft: { dir: '', name: '', createdBy: '', domain: '', category: '' },
     viewerOpen: false,
     viewerPath: null,
     viewerTitle: '',
@@ -375,6 +387,11 @@ document.addEventListener('alpine:init', function() {
     dropOverlayVisible: false,
     uploadToast: '',
     uploadToastClass: 'bg-slate-800 dark:bg-slate-700',
+    ownerInboxToasts: [],
+    _ownerInboxToastSeq: 0,
+    _ownersInboxKnown: null,
+    _ownersInboxBaselineReady: false,
+    _ownersInboxPollTimer: null,
     chatAgents: [],
     chatAgent: 'cyrus',
     chatPrompt: '',
@@ -395,6 +412,27 @@ document.addEventListener('alpine:init', function() {
     chatDragActive: false,
     _osMqListener: null,
     loginRequired: false,
+    lastActionError: '',
+    actionItemEditorOpen: false,
+    actionItemSaving: false,
+    actionItemError: '',
+    actionItemPageKey: 'home',
+    actionItemShowDomain: false,
+    actionItemShowCareerFields: false,
+    actionItemShowProjectCategory: false,
+    actionItemDraft: {
+      id: null,
+      title: '',
+      description: '',
+      details: '',
+      due_date: '',
+      urgency: 'medium',
+      domain: 'career',
+      project_category: '',
+      effort_hours: '',
+      project_week: '',
+    },
+    actionDetailExpanded: {},
 
     refreshHomeGreetingIfNeeded() {
       var key = localDateKey();
@@ -429,6 +467,60 @@ document.addEventListener('alpine:init', function() {
           });
         });
       });
+      self.pollOwnersInbox();
+      self._ownersInboxPollTimer = setInterval(function() { self.pollOwnersInbox(); }, 30000);
+    },
+
+    ownersInboxFileHash(name) {
+      return brainFileHash('owners-inbox', name);
+    },
+
+    pushOwnerInboxToast(name) {
+      var self = this;
+      var id = ++this._ownerInboxToastSeq;
+      var entry = { id: id, name: name, _timer: null };
+      entry._timer = setTimeout(function() { self.dismissOwnerInboxToast(id); }, 12000);
+      this.ownerInboxToasts.unshift(entry);
+      this.$nextTick(function() { self.refreshIcons(); });
+    },
+
+    dismissOwnerInboxToast(id) {
+      var self = this;
+      this.ownerInboxToasts.forEach(function(t) {
+        if (t.id === id && t._timer) {
+          clearTimeout(t._timer);
+          t._timer = null;
+        }
+      });
+      this.ownerInboxToasts = this.ownerInboxToasts.filter(function(t) { return t.id !== id; });
+      this.$nextTick(function() { self.refreshIcons(); });
+    },
+
+    async pollOwnersInbox() {
+      if (typeof document !== 'undefined' && document.hidden) return;
+      try {
+        var res = await fetchWithAuth('/api/files');
+        if (!res.ok) return;
+        var data = await res.json();
+        var files = data['owners-inbox'] || [];
+        var names = files.map(function(f) { return f.name; });
+        if (!this._ownersInboxBaselineReady) {
+          this._ownersInboxKnown = Object.create(null);
+          names.forEach(function(n) { this._ownersInboxKnown[n] = true; }, this);
+          this._ownersInboxBaselineReady = true;
+          return;
+        }
+        var self = this;
+        var anyNew = false;
+        names.forEach(function(name) {
+          if (!self._ownersInboxKnown[name]) {
+            self._ownersInboxKnown[name] = true;
+            anyNew = true;
+            self.pushOwnerInboxToast(name);
+          }
+        });
+        if (anyNew && self.page === 'files') self.loadFiles();
+      } catch (_) {}
     },
 
     refreshIcons() {
@@ -590,6 +682,14 @@ document.addEventListener('alpine:init', function() {
       } catch (_) {}
     },
 
+    /** Local-only chat shell: no server session until the user sends a message. */
+    enterDraftChatState() {
+      this.chatConversationId = null;
+      this.chatMessages = [];
+      this.chatSessionTitle = 'New chat';
+      try { localStorage.removeItem('brain_last_chat_id'); } catch (_) {}
+    },
+
     async createNewConversation() {
       var agent = this.normalizeChatAgentId(this.chatAgent);
       if (this.chatAgents.length && this.chatAgents.indexOf(agent) < 0) agent = this.chatAgents[0];
@@ -629,12 +729,9 @@ document.addEventListener('alpine:init', function() {
           this.chatSessionTitle = sess.title || 'Chat';
           return;
         }
+        try { localStorage.removeItem('brain_last_chat_id'); } catch (_) {}
       }
-      try {
-        await this.createNewConversation();
-      } catch (e) {
-        console.warn('[chat] bootstrap create', e);
-      }
+      this.enterDraftChatState();
     },
 
     async ensureChatConversation() {
@@ -674,7 +771,15 @@ document.addEventListener('alpine:init', function() {
 
     async newChatConversation() {
       try {
-        await this.createNewConversation();
+        if (this.chatConversationId && this.chatMessages.length === 0) {
+          try {
+            await fetchWithAuth('/api/chat/conversations/' + encodeURIComponent(this.chatConversationId), {
+              method: 'DELETE',
+            });
+          } catch (_) {}
+        }
+        this.enterDraftChatState();
+        await this.loadConversationList();
         this.$nextTick(function() { this.focusChatPrompt(); this.refreshIcons(); }.bind(this));
       } catch (e) {
         console.warn('[chat] new conversation', e.message || e);
@@ -689,11 +794,10 @@ document.addEventListener('alpine:init', function() {
           await fetchWithAuth('/api/chat/conversations/' + encodeURIComponent(old), { method: 'DELETE' });
         } catch (_) {}
       }
+      this.enterDraftChatState();
       try {
-        await this.createNewConversation();
-      } catch (e) {
-        console.warn(e);
-      }
+        await this.loadConversationList();
+      } catch (_) {}
     },
 
     async deleteConversation(id, ev) {
@@ -702,7 +806,7 @@ document.addEventListener('alpine:init', function() {
       try {
         var r = await fetchWithAuth('/api/chat/conversations/' + encodeURIComponent(id), { method: 'DELETE' });
         if (!r.ok) return;
-        if (this.chatConversationId === id) await this.createNewConversation();
+        if (this.chatConversationId === id) this.enterDraftChatState();
         await this.loadConversationList();
       } catch (_) {}
     },
@@ -841,7 +945,17 @@ document.addEventListener('alpine:init', function() {
       });
     },
     domainBadgeClass(d) { return DOMAIN_CLASSES[d] || ''; },
-    urgencyDotClass(item) { return URGENCY_DOT[item.urgency] || URGENCY_DOT.medium; },
+    /** Border/hover styles for the circular “complete” control. */
+    actionItemCheckboxRingClass(item) {
+      var u = (item && item.urgency) || 'medium';
+      var map = {
+        critical: 'border-red-500 hover:border-red-600 hover:bg-red-50 dark:hover:bg-red-950/35',
+        high: 'border-orange-400 hover:border-orange-500 hover:bg-orange-50 dark:hover:bg-orange-950/25',
+        medium: 'border-amber-400/90 dark:border-amber-500/70 hover:bg-amber-50/90 dark:hover:bg-amber-950/20',
+        low: 'border-slate-300 dark:border-slate-600 hover:bg-slate-100 dark:hover:bg-slate-700/50',
+      };
+      return map[u] || map.medium;
+    },
     urgencyBorderClass(item) {
       var days = daysFrom(item.due_date);
       if (days === null) return 'border-l-slate-200 dark:border-l-slate-600';
@@ -861,6 +975,130 @@ document.addEventListener('alpine:init', function() {
     coaTypeColor(type) {
       var typeColor = { asset: 'text-blue-600 dark:text-blue-400', liability: 'text-red-600 dark:text-red-400', equity: 'text-purple-600 dark:text-purple-400', revenue: 'text-emerald-600 dark:text-emerald-400', expense: 'text-orange-600 dark:text-orange-400' };
       return typeColor[type] || '';
+    },
+
+    actionItemDetailsHtml(item) {
+      return renderActionItemMarkdown(item && item.details);
+    },
+    toggleActionDetail(id) {
+      var key = id != null ? String(id) : '';
+      var cur = this.actionDetailExpanded[key];
+      this.actionDetailExpanded = Object.assign({}, this.actionDetailExpanded, { [key]: !cur });
+    },
+    isActionDetailOpen(id) {
+      return !!this.actionDetailExpanded[id != null ? String(id) : ''];
+    },
+    closeActionItemEditor() {
+      this.actionItemEditorOpen = false;
+      this.actionItemError = '';
+    },
+    openActionItemEditor(item, pageKey) {
+      var self = this;
+      if (!item || item.id == null) return;
+      this.actionItemPageKey = pageKey || 'home';
+      this.actionItemShowDomain = this.actionItemPageKey === 'home';
+      this.actionItemShowCareerFields = this.actionItemPageKey === 'career';
+      this.actionItemShowProjectCategory = true;
+      this.actionItemDraft = {
+        id: item.id,
+        title: item.title || '',
+        description: item.description != null ? String(item.description) : '',
+        details: item.details != null ? String(item.details) : '',
+        due_date: item.due_date || '',
+        urgency: item.urgency || 'medium',
+        domain: item.domain || 'career',
+        project_category: item.project_category != null ? String(item.project_category) : '',
+        effort_hours: item.effort_hours != null && item.effort_hours !== '' ? String(item.effort_hours) : '',
+        project_week: item.project_week != null ? String(item.project_week) : '',
+      };
+      this.actionItemError = '';
+      this.actionItemEditorOpen = true;
+      this.$nextTick(function() { self.refreshIcons(); });
+    },
+    saveActionItem() {
+      var self = this;
+      var d = this.actionItemDraft;
+      var title = (d.title || '').trim();
+      if (!title) {
+        this.actionItemError = 'Title is required';
+        return;
+      }
+      this.actionItemSaving = true;
+      this.actionItemError = '';
+      var body = {
+        title: title,
+        description: d.description ? String(d.description) : null,
+        details: d.details ? String(d.details) : null,
+        due_date: d.due_date || null,
+        urgency: d.urgency || 'medium',
+      };
+      if (this.actionItemShowDomain) body.domain = d.domain;
+      var cat = (d.project_category && String(d.project_category).trim()) ? String(d.project_category).trim() : null;
+      if (this.actionItemShowProjectCategory) body.project_category = cat;
+      if (this.actionItemShowCareerFields) {
+        body.effort_hours = d.effort_hours === '' || d.effort_hours == null ? null : Number(d.effort_hours);
+        body.project_week = d.project_week === '' ? null : parseInt(d.project_week, 10);
+        if (body.effort_hours != null && Number.isNaN(body.effort_hours)) {
+          this.actionItemSaving = false;
+          this.actionItemError = 'Invalid effort hours';
+          return;
+        }
+        if (body.project_week != null && !Number.isFinite(body.project_week)) {
+          this.actionItemSaving = false;
+          this.actionItemError = 'Invalid project week';
+          return;
+        }
+      }
+      fetchWithAuth('/api/action-items/' + d.id, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+        .then(function(res) {
+          if (!res.ok) {
+            return res.json().then(function(err) {
+              throw new Error((err && err.error) || 'HTTP ' + res.status);
+            });
+          }
+          self.actionItemEditorOpen = false;
+          self.lastActionError = '';
+          return self.loadPage(self.actionItemPageKey, true);
+        })
+        .catch(function(e) {
+          self.actionItemError = e.message || String(e);
+        })
+        .finally(function() {
+          self.actionItemSaving = false;
+          self.$nextTick(function() { self.refreshIcons(); });
+        });
+    },
+    completeActionItem(item, pageKey) {
+      var self = this;
+      if (!item || item.id == null) return;
+      var pk = pageKey || 'home';
+      fetchWithAuth('/api/action-items/' + item.id, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'done' }),
+      })
+        .then(function(res) {
+          if (!res.ok) {
+            return res.json().then(function(err) {
+              throw new Error((err && err.error) || 'HTTP ' + res.status);
+            });
+          }
+          var key = String(item.id);
+          if (self.actionDetailExpanded[key]) {
+            var next = Object.assign({}, self.actionDetailExpanded);
+            delete next[key];
+            self.actionDetailExpanded = next;
+          }
+          self.lastActionError = '';
+          return self.loadPage(pk, true);
+        })
+        .catch(function(e) {
+          self.lastActionError = e.message || String(e);
+        });
     },
 
     async loadPage(name, force) {
@@ -1149,6 +1387,83 @@ document.addEventListener('alpine:init', function() {
       var kb = (f.size / 1024).toFixed(1);
       return kb + ' KB · ' + new Date(f.modified).toLocaleDateString();
     },
+    fileMetaTags(f) {
+      if (!f) return '';
+      var bits = [];
+      if (f.createdBy) bits.push(this.chatAgentDisplayName(f.createdBy));
+      if (f.domain) bits.push(String(f.domain));
+      if (f.category) bits.push(String(f.category));
+      return bits.length ? bits.join(' · ') : '';
+    },
+    /** Tags, Details, and Archive only for these folders (matches server FILES_META_DIRS). */
+    fileMetaEnabled(dir) {
+      return ['docs', 'owners-inbox', 'team-inbox'].indexOf(dir) >= 0;
+    },
+
+    filesFilterActive() {
+      return !!(String(this.filesFilterCreator || '').trim() || String(this.filesFilterDomain || '').trim());
+    },
+
+    fileFilterCreatorOptions() {
+      var s = new Set();
+      this.fileSections.forEach(function(sec) {
+        (sec.files || []).forEach(function(f) {
+          if (f.createdBy) s.add(String(f.createdBy).trim());
+        });
+      });
+      return Array.from(s).sort(function(a, b) {
+        return a.toLowerCase().localeCompare(b.toLowerCase());
+      });
+    },
+
+    fileFilterDomainOptions() {
+      var s = new Set();
+      this.fileSections.forEach(function(sec) {
+        (sec.files || []).forEach(function(f) {
+          if (f.domain) s.add(String(f.domain).trim());
+        });
+      });
+      return Array.from(s).sort(function(a, b) {
+        return a.toLowerCase().localeCompare(b.toLowerCase());
+      });
+    },
+
+    filteredSectionFiles(sec) {
+      var files = sec.files || [];
+      var c = String(this.filesFilterCreator || '').trim().toLowerCase();
+      var d = String(this.filesFilterDomain || '').trim().toLowerCase();
+      if (!c && !d) return files;
+      return files.filter(function(f) {
+        if (c && String(f.createdBy || '').trim().toLowerCase() !== c) return false;
+        if (d && String(f.domain || '').trim().toLowerCase() !== d) return false;
+        return true;
+      });
+    },
+
+    sectionFileCountLabel(sec) {
+      var n = this.filteredSectionFiles(sec).length;
+      var t = (sec.files || []).length;
+      if (!this.filesFilterActive() || n === t) return String(n);
+      return n + ' / ' + t;
+    },
+
+    filesTotalCountAll() {
+      var n = 0;
+      this.fileSections.forEach(function(sec) { n += (sec.files || []).length; });
+      return n;
+    },
+
+    filesFilteredTotalCount() {
+      var self = this;
+      var n = 0;
+      this.fileSections.forEach(function(sec) { n += self.filteredSectionFiles(sec).length; });
+      return n;
+    },
+
+    clearFilesFilters() {
+      this.filesFilterCreator = '';
+      this.filesFilterDomain = '';
+    },
 
     fileTypeLabel(name) {
       var m = String(name || '').match(/\.([^.]+)$/);
@@ -1184,6 +1499,81 @@ document.addEventListener('alpine:init', function() {
     fileIsEditable(name) { return /\.(md|html|txt|json)$/i.test(name); },
     fileDownloadHref(dir, name) {
       return dir === 'root' ? '/api/cyrus' : '/api/files/' + encodeURIComponent(dir) + '/' + encodeURIComponent(name);
+    },
+
+    findFileEntry(dir, name) {
+      var sec = this.fileSections.find(function(s) { return s.dir === dir; });
+      if (!sec || !sec.files) return null;
+      return sec.files.find(function(f) { return f.name === name; }) || null;
+    },
+
+    openFileMetaEditor() {
+      var p = this.viewerPath || this.editorPath;
+      if (!p || !this.fileMetaEnabled(p.dir)) return;
+      var f = this.findFileEntry(p.dir, p.name);
+      this.fileMetaDraft = {
+        dir: p.dir,
+        name: p.name,
+        createdBy: f && f.createdBy ? f.createdBy : '',
+        domain: f && f.domain ? f.domain : '',
+        category: f && f.category ? f.category : '',
+      };
+      this.fileMetaEditorOpen = true;
+      var self = this;
+      this.$nextTick(function() { self.refreshIcons(); });
+    },
+
+    closeFileMetaEditor() {
+      this.fileMetaEditorOpen = false;
+    },
+
+    async saveFileMeta() {
+      var d = this.fileMetaDraft;
+      if (!d || !d.name) return;
+      this.fileMetaSaving = true;
+      try {
+        var url = '/api/files/' + encodeURIComponent(d.dir) + '/' + encodeURIComponent(d.name) + '/meta';
+        var r = await fetchWithAuth(url, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            createdBy: d.createdBy,
+            domain: d.domain,
+            category: d.category,
+          }),
+        });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        this.fileMetaEditorOpen = false;
+        await this.loadFiles();
+      } catch (err) {
+        alert('Could not save details: ' + (err && err.message ? err.message : String(err)));
+      } finally {
+        this.fileMetaSaving = false;
+      }
+    },
+
+    async archiveFile(dir, name) {
+      if (dir === 'root') return;
+      if (!confirm('Archive this file? It will be renamed with the _archived_ prefix and hidden from the list.')) return;
+      try {
+        var url = '/api/files/' + encodeURIComponent(dir) + '/' + encodeURIComponent(name) + '/archive';
+        var r = await fetchWithAuth(url, { method: 'POST' });
+        var errBody = null;
+        try {
+          errBody = await r.json();
+        } catch (_) {}
+        if (!r.ok) {
+          alert((errBody && errBody.error) ? errBody.error : 'Archive failed');
+          return;
+        }
+        this.viewerOpen = false;
+        this.viewerPath = null;
+        this.editorOpen = false;
+        this.editorPath = null;
+        await this.loadFiles();
+      } catch (e) {
+        alert('Archive failed: ' + (e && e.message ? e.message : String(e)));
+      }
     },
 
     async triggerFileDownload(dir, name) {
@@ -1321,6 +1711,7 @@ document.addEventListener('alpine:init', function() {
     chatAgentDisplayName(agentId) {
       var a = String(agentId || '').toLowerCase();
       if (a === 'cyrus' || a === 'larry') return 'Cyrus';
+      if (a === 'owner') return 'Owner';
       if (!a) return 'Cyrus';
       return a.charAt(0).toUpperCase() + a.slice(1);
     },
@@ -1346,6 +1737,9 @@ document.addEventListener('alpine:init', function() {
       if (this.chatFiles.length > 0) {
         var fd = new FormData();
         this.chatFiles.forEach(function(f) { fd.append('files', f); });
+        var agentId = this.normalizeChatAgentId(this.chatAgent);
+        fd.append('createdBy', agentId);
+        fd.append('domain', uploadDefaultDomainForAgent(agentId));
         await fetchWithAuth('/api/upload', { method: 'POST', body: fd });
         this.chatFiles = [];
       }
@@ -1540,6 +1934,8 @@ document.addEventListener('alpine:init', function() {
       this.uploadToastClass = 'bg-slate-800 dark:bg-slate-700';
       var formData = new FormData();
       for (var i = 0; i < files.length; i++) formData.append('files', files[i]);
+      formData.append('createdBy', 'owner');
+      formData.append('domain', uploadDefaultDomainForAgent('owner'));
       fetchWithAuth('/api/upload', { method: 'POST', body: formData })
         .then(function(r) { return r.json(); })
         .then(function(data) {

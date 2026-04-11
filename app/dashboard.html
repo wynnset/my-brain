@@ -79,6 +79,11 @@ tailwind.config = {
 <div class="flex relative min-w-0 max-w-full transition-[padding-right] duration-200 ease-out" :style="chatPanelInsetStyle()">
 <main class="flex-1 min-w-0 max-w-7xl mx-auto px-4 py-6">
 
+  <div x-show="lastActionError" x-cloak class="mb-4 flex items-start justify-between gap-3 rounded-lg border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20 px-3 py-2 text-sm text-red-800 dark:text-red-200">
+    <span x-text="lastActionError"></span>
+    <button type="button" class="shrink-0 text-red-600 dark:text-red-300 hover:underline" @click="lastActionError = ''">Dismiss</button>
+  </div>
+
   <!-- ── HOME PAGE ── -->
   <div id="page-home" x-show="page === 'home'" x-cloak x-transition.opacity.duration.150ms>
     <div class="mb-6">
@@ -131,16 +136,21 @@ tailwind.config = {
             </div>
             <div class="space-y-2">
               <template x-for="(item, idx) in grp.items" :key="item.id != null ? item.id : 'h-' + idx + '-' + (item.title || '')">
-                <div class="flex items-start gap-3 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 border-l-4 rounded-lg px-4 py-3" :class="urgencyBorderClass(item)">
-                  <span class="inline-block w-2 h-2 rounded-full flex-shrink-0 mt-1" :class="urgencyDotClass(item)"></span>
+                <div class="flex items-start gap-2 sm:gap-3 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 border-l-4 rounded-lg px-3 sm:px-4 py-3" :class="urgencyBorderClass(item)">
+                  <button type="button" @click.stop="completeActionItem(item, 'home')" class="action-item-check mt-0.5" :class="actionItemCheckboxRingClass(item)" title="Mark done" aria-label="Mark done"></button>
                   <div class="flex-1 min-w-0">
                     <div class="flex flex-wrap items-center gap-2">
                       <span class="text-sm font-medium text-slate-800 dark:text-slate-100" x-text="item.title"></span>
                       <span x-show="item.domain" class="text-xs font-medium px-2 py-0.5 rounded-full" :class="domainBadgeClass(item.domain)" x-text="item.domain"></span>
                       <span x-html="dueChipHtml(item)"></span>
                     </div>
-                    <p x-show="item.description" class="text-xs text-slate-500 dark:text-slate-400 mt-0.5 line-clamp-1" x-text="item.description"></p>
+                    <p x-show="item.description" class="text-xs text-slate-500 dark:text-slate-400 mt-0.5 line-clamp-2" x-text="item.description"></p>
+                    <button type="button" x-show="item.details" @click="toggleActionDetail(item.id)" class="mt-1 text-xs font-medium text-blue-600 dark:text-blue-400 hover:underline" x-text="isActionDetailOpen(item.id) ? 'Hide details' : 'Details'"></button>
+                    <div x-show="item.details && isActionDetailOpen(item.id)" x-cloak class="mt-2 pt-2 border-t border-slate-100 dark:border-slate-700 text-sm text-slate-700 dark:text-slate-200 chat-md-output max-w-none" x-html="actionItemDetailsHtml(item)"></div>
                   </div>
+                  <button type="button" @click="openActionItemEditor(item, 'home')" class="action-item-caret mt-0.5 self-start" title="Edit" aria-label="Edit">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18l6-6-6-6"/></svg>
+                  </button>
                 </div>
               </template>
             </div>
@@ -212,15 +222,20 @@ tailwind.config = {
             </div>
             <div class="space-y-2">
               <template x-for="(item, idx) in grp.items" :key="item.id != null ? item.id : 'c-' + idx + '-' + (item.title || '')">
-                <div class="flex items-start gap-3 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 border-l-4 rounded-lg px-4 py-3" :class="urgencyBorderClass(item)">
-                  <span class="inline-block w-2 h-2 rounded-full flex-shrink-0 mt-1" :class="urgencyDotClass(item)"></span>
+                <div class="flex items-start gap-2 sm:gap-3 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 border-l-4 rounded-lg px-3 sm:px-4 py-3" :class="urgencyBorderClass(item)">
+                  <button type="button" @click.stop="completeActionItem(item, 'career')" class="action-item-check mt-0.5" :class="actionItemCheckboxRingClass(item)" title="Mark done" aria-label="Mark done"></button>
                   <div class="flex-1 min-w-0">
                     <div class="flex flex-wrap items-center gap-2">
                       <span class="text-sm font-medium text-slate-800 dark:text-slate-100" x-text="item.title"></span>
                       <span x-html="dueChipHtml(item)"></span>
                     </div>
-                    <p x-show="item.description" class="text-xs text-slate-500 dark:text-slate-400 mt-0.5 line-clamp-1" x-text="item.description"></p>
+                    <p x-show="item.description" class="text-xs text-slate-500 dark:text-slate-400 mt-0.5 line-clamp-2" x-text="item.description"></p>
+                    <button type="button" x-show="item.details" @click="toggleActionDetail(item.id)" class="mt-1 text-xs font-medium text-blue-600 dark:text-blue-400 hover:underline" x-text="isActionDetailOpen(item.id) ? 'Hide details' : 'Details'"></button>
+                    <div x-show="item.details && isActionDetailOpen(item.id)" x-cloak class="mt-2 pt-2 border-t border-slate-100 dark:border-slate-700 text-sm text-slate-700 dark:text-slate-200 chat-md-output max-w-none" x-html="actionItemDetailsHtml(item)"></div>
                   </div>
+                  <button type="button" @click="openActionItemEditor(item, 'career')" class="action-item-caret mt-0.5 self-start" title="Edit" aria-label="Edit">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18l6-6-6-6"/></svg>
+                  </button>
                 </div>
               </template>
             </div>
@@ -308,15 +323,20 @@ tailwind.config = {
             </div>
             <div class="space-y-2">
               <template x-for="(item, idx) in grp.items" :key="item.id != null ? item.id : 'f-' + idx + '-' + (item.title || '')">
-                <div class="flex items-start gap-3 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 border-l-4 rounded-lg px-4 py-3" :class="urgencyBorderClass(item)">
-                  <span class="inline-block w-2 h-2 rounded-full flex-shrink-0 mt-1" :class="urgencyDotClass(item)"></span>
+                <div class="flex items-start gap-2 sm:gap-3 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 border-l-4 rounded-lg px-3 sm:px-4 py-3" :class="urgencyBorderClass(item)">
+                  <button type="button" @click.stop="completeActionItem(item, 'finance')" class="action-item-check mt-0.5" :class="actionItemCheckboxRingClass(item)" title="Mark done" aria-label="Mark done"></button>
                   <div class="flex-1 min-w-0">
                     <div class="flex flex-wrap items-center gap-2">
                       <span class="text-sm font-medium text-slate-800 dark:text-slate-100" x-text="item.title"></span>
                       <span x-html="dueChipHtml(item)"></span>
                     </div>
-                    <p x-show="item.description" class="text-xs text-slate-500 dark:text-slate-400 mt-0.5 line-clamp-1" x-text="item.description"></p>
+                    <p x-show="item.description" class="text-xs text-slate-500 dark:text-slate-400 mt-0.5 line-clamp-2" x-text="item.description"></p>
+                    <button type="button" x-show="item.details" @click="toggleActionDetail(item.id)" class="mt-1 text-xs font-medium text-blue-600 dark:text-blue-400 hover:underline" x-text="isActionDetailOpen(item.id) ? 'Hide details' : 'Details'"></button>
+                    <div x-show="item.details && isActionDetailOpen(item.id)" x-cloak class="mt-2 pt-2 border-t border-slate-100 dark:border-slate-700 text-sm text-slate-700 dark:text-slate-200 chat-md-output max-w-none" x-html="actionItemDetailsHtml(item)"></div>
                   </div>
+                  <button type="button" @click="openActionItemEditor(item, 'finance')" class="action-item-caret mt-0.5 self-start" title="Edit" aria-label="Edit">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18l6-6-6-6"/></svg>
+                  </button>
                 </div>
               </template>
             </div>
@@ -424,15 +444,20 @@ tailwind.config = {
             </div>
             <div class="space-y-2">
               <template x-for="(item, idx) in grp.items" :key="item.id != null ? item.id : 'b-' + idx + '-' + (item.title || '')">
-                <div class="flex items-start gap-3 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 border-l-4 rounded-lg px-4 py-3" :class="urgencyBorderClass(item)">
-                  <span class="inline-block w-2 h-2 rounded-full flex-shrink-0 mt-1" :class="urgencyDotClass(item)"></span>
+                <div class="flex items-start gap-2 sm:gap-3 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 border-l-4 rounded-lg px-3 sm:px-4 py-3" :class="urgencyBorderClass(item)">
+                  <button type="button" @click.stop="completeActionItem(item, 'business')" class="action-item-check mt-0.5" :class="actionItemCheckboxRingClass(item)" title="Mark done" aria-label="Mark done"></button>
                   <div class="flex-1 min-w-0">
                     <div class="flex flex-wrap items-center gap-2">
                       <span class="text-sm font-medium text-slate-800 dark:text-slate-100" x-text="item.title"></span>
                       <span x-html="dueChipHtml(item)"></span>
                     </div>
-                    <p x-show="item.description" class="text-xs text-slate-500 dark:text-slate-400 mt-0.5 line-clamp-1" x-text="item.description"></p>
+                    <p x-show="item.description" class="text-xs text-slate-500 dark:text-slate-400 mt-0.5 line-clamp-2" x-text="item.description"></p>
+                    <button type="button" x-show="item.details" @click="toggleActionDetail(item.id)" class="mt-1 text-xs font-medium text-blue-600 dark:text-blue-400 hover:underline" x-text="isActionDetailOpen(item.id) ? 'Hide details' : 'Details'"></button>
+                    <div x-show="item.details && isActionDetailOpen(item.id)" x-cloak class="mt-2 pt-2 border-t border-slate-100 dark:border-slate-700 text-sm text-slate-700 dark:text-slate-200 chat-md-output max-w-none" x-html="actionItemDetailsHtml(item)"></div>
                   </div>
+                  <button type="button" @click="openActionItemEditor(item, 'business')" class="action-item-caret mt-0.5 self-start" title="Edit" aria-label="Edit">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18l6-6-6-6"/></svg>
+                  </button>
                 </div>
               </template>
             </div>
@@ -498,6 +523,30 @@ tailwind.config = {
             <input type="file" multiple class="hidden" @change="handleFileInput($event)" />
           </label>
         </div>
+        <div class="mb-4 space-y-2 shrink-0" x-show="fileSections.length && !filesLoading" x-cloak>
+          <p class="text-xs font-medium text-slate-600 dark:text-slate-300">Filter by tag</p>
+          <div class="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-end">
+            <div class="flex-1 min-w-[8rem]">
+              <label class="block text-[11px] text-slate-500 dark:text-slate-400 mb-0.5">Creator</label>
+              <select x-model="filesFilterCreator" class="w-full text-xs rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 px-2 py-1.5 text-slate-800 dark:text-slate-100">
+                <option value="">All</option>
+                <template x-for="opt in fileFilterCreatorOptions()" :key="'fc-'+opt">
+                  <option :value="opt" x-text="chatAgentDisplayName(opt)"></option>
+                </template>
+              </select>
+            </div>
+            <div class="flex-1 min-w-[8rem]">
+              <label class="block text-[11px] text-slate-500 dark:text-slate-400 mb-0.5">Domain</label>
+              <select x-model="filesFilterDomain" class="w-full text-xs rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 px-2 py-1.5 text-slate-800 dark:text-slate-100">
+                <option value="">All</option>
+                <template x-for="opt in fileFilterDomainOptions()" :key="'fd-'+opt">
+                  <option :value="opt" x-text="opt"></option>
+                </template>
+              </select>
+            </div>
+            <button type="button" x-show="filesFilterActive()" @click="clearFilesFilters()" class="text-xs font-medium px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700/50 self-end sm:mb-0.5">Clear</button>
+          </div>
+        </div>
         <div class="flex-1 min-h-0 lg:overflow-y-auto lg:pr-1 -mr-1">
           <template x-if="filesLoadError">
             <div class="text-red-500 text-sm p-4" x-text="filesLoadError"></div>
@@ -508,23 +557,27 @@ tailwind.config = {
           <template x-if="!filesLoading && !filesLoadError && !fileSections.length">
             <div class="text-slate-400 dark:text-slate-500 text-sm p-4">No files found.</div>
           </template>
+          <template x-if="!filesLoading && !filesLoadError && filesFilterActive() && fileSections.length && filesTotalCountAll() > 0 && filesFilteredTotalCount() === 0">
+            <div class="text-amber-800 dark:text-amber-200/90 text-sm px-4 py-3 rounded-lg bg-amber-50 dark:bg-amber-900/25 border border-amber-200/80 dark:border-amber-800/50 mb-2">No files match the selected creator or domain.</div>
+          </template>
           <template x-for="sec in fileSections" :key="sec.dir">
-            <div class="mb-4">
+            <div class="mb-4" x-show="!filesFilterActive() || !sec.files.length || filteredSectionFiles(sec).length > 0">
               <button type="button" @click="sec.open = !sec.open" class="w-full flex items-center gap-2 px-1 py-2 rounded-lg text-left hover:bg-slate-100/80 dark:hover:bg-slate-700/50 transition-colors -mx-1">
                 <svg class="w-4 h-4 text-slate-400 shrink-0 transition-transform duration-200" :class="sec.open ? 'rotate-90' : ''" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
                 <h3 class="text-sm font-semibold text-slate-600 dark:text-slate-300 uppercase tracking-wide flex-1 min-w-0 truncate" x-text="sec.label"></h3>
-                <span class="text-xs text-slate-400 dark:text-slate-500 tabular-nums shrink-0" x-text="sec.files.length"></span>
+                <span class="text-xs text-slate-400 dark:text-slate-500 tabular-nums shrink-0" x-text="sectionFileCountLabel(sec)"></span>
               </button>
               <div x-show="sec.open" x-cloak class="mt-1 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 divide-y divide-slate-100 dark:divide-slate-700 overflow-hidden">
                 <template x-if="!sec.files.length">
                   <div class="px-4 py-6 text-sm text-slate-400 dark:text-slate-500 text-center">No files yet.</div>
                 </template>
-                <template x-for="f in sec.files" :key="sec.dir + '/' + f.name">
+                <template x-for="f in filteredSectionFiles(sec)" :key="sec.dir + '/' + f.name">
                   <div role="button" tabindex="0" @click="openFileRow(sec.dir, f.name)" @keydown.enter.prevent="openFileRow(sec.dir, f.name)" @keydown.space.prevent="openFileRow(sec.dir, f.name)" class="px-4 py-3 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700/40 active:bg-slate-100 dark:active:bg-slate-700/60 transition-colors">
                     <div class="min-w-0">
                       <span class="text-sm font-medium text-slate-800 dark:text-slate-100 truncate block" x-text="f.name"></span>
                       <span class="text-xs text-slate-500 dark:text-slate-400 mt-0.5 block" x-text="fileTypeLabel(f.name)"></span>
                       <span class="text-xs text-slate-400 dark:text-slate-500 mt-0.5 block" x-text="fileMetaLine(f)"></span>
+                      <span class="text-xs text-emerald-700/90 dark:text-emerald-400/90 mt-1 block truncate" x-show="fileMetaTags(f)" x-text="fileMetaTags(f)"></span>
                     </div>
                   </div>
                 </template>
@@ -542,9 +595,14 @@ tailwind.config = {
         </div>
         <div x-show="viewerOpen && !editorOpen" x-cloak class="flex flex-col flex-1 min-h-0 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 shadow-sm overflow-hidden">
           <div class="flex items-center justify-between gap-2 px-4 py-3 border-b border-slate-200 dark:border-slate-700 shrink-0">
-            <span class="font-semibold text-slate-800 dark:text-slate-100 text-sm truncate min-w-0" x-text="viewerTitle"></span>
-            <div class="flex items-center gap-1 shrink-0">
+            <div class="min-w-0">
+            <span class="font-semibold text-slate-800 dark:text-slate-100 text-sm truncate block" x-text="viewerTitle"></span>
+            <span class="text-xs text-slate-500 dark:text-slate-400 mt-0.5 block truncate" x-show="viewerPath && fileMetaEnabled(viewerPath.dir)" x-text="fileMetaTags(findFileEntry(viewerPath.dir, viewerPath.name)) || '—'"></span>
+            </div>
+            <div class="flex items-center gap-1 shrink-0 flex-wrap justify-end">
               <button type="button" x-show="viewerPath && viewerDisplayMode !== 'download'" @click="triggerFileDownload(viewerPath.dir, viewerPath.name)" class="text-xs font-medium px-2.5 py-1.5 rounded-md bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 transition-colors">Download</button>
+              <button type="button" x-show="viewerPath && fileMetaEnabled(viewerPath.dir)" @click="openFileMetaEditor()" class="text-xs font-medium px-2.5 py-1.5 rounded-md bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 transition-colors">Details</button>
+              <button type="button" x-show="viewerPath && fileMetaEnabled(viewerPath.dir)" @click="archiveFile(viewerPath.dir, viewerPath.name)" class="text-xs font-medium px-2.5 py-1.5 rounded-md bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 transition-colors">Archive</button>
               <button type="button" x-show="viewerPath && fileIsEditable(viewerPath.name)" @click="editFromViewer()" class="text-xs font-medium px-2.5 py-1.5 rounded-md bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 transition-colors">Edit</button>
               <button type="button" @click="closeViewer()" class="icon-btn p-1.5 rounded-md text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700" aria-label="Close">
                 <i data-lucide="x" class="w-5 h-5"></i>
@@ -577,11 +635,14 @@ tailwind.config = {
           </div>
         </div>
         <div x-show="editorOpen" x-cloak class="flex flex-col flex-1 min-h-0 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 shadow-sm overflow-hidden">
-          <div class="flex items-center justify-between px-4 py-3 border-b border-slate-200 dark:border-slate-700 shrink-0">
-            <span class="font-semibold text-slate-800 dark:text-slate-100 text-sm truncate pr-2" x-text="editorTitle"></span>
-            <button type="button" @click="editorOpen = false" class="icon-btn p-1.5 rounded-md text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 shrink-0" aria-label="Close">
-              <i data-lucide="x" class="w-5 h-5"></i>
-            </button>
+          <div class="flex items-center justify-between gap-2 px-4 py-3 border-b border-slate-200 dark:border-slate-700 shrink-0">
+            <span class="font-semibold text-slate-800 dark:text-slate-100 text-sm truncate pr-2 min-w-0" x-text="editorTitle"></span>
+            <div class="flex items-center gap-1 shrink-0">
+              <button type="button" x-show="editorPath && fileMetaEnabled(editorPath.dir)" @click="openFileMetaEditor()" class="text-xs font-medium px-2.5 py-1.5 rounded-md bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 transition-colors">Details</button>
+              <button type="button" @click="editorOpen = false" class="icon-btn p-1.5 rounded-md text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 shrink-0" aria-label="Close">
+                <i data-lucide="x" class="w-5 h-5"></i>
+              </button>
+            </div>
           </div>
           <textarea x-model="editorContent" class="flex-1 p-4 text-xs text-slate-700 dark:text-slate-200 dark:bg-slate-800 font-mono resize-none focus:outline-none min-h-[240px]"></textarea>
           <div class="flex justify-end gap-2 px-4 py-3 border-t border-slate-200 dark:border-slate-700 shrink-0">
@@ -589,6 +650,100 @@ tailwind.config = {
             <button type="button" @click="saveFile()" :disabled="editorSaving" class="px-4 py-1.5 text-sm rounded-lg bg-blue-600 hover:bg-blue-700 text-white transition-colors disabled:opacity-50" x-text="editorSaving ? 'Saving…' : 'Save'"></button>
           </div>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- File metadata -->
+  <div x-show="fileMetaEditorOpen" x-cloak @keydown.escape.window="closeFileMetaEditor()" class="fixed inset-0 z-[75] flex items-end sm:items-center justify-center p-4 sm:p-6" role="dialog" aria-modal="true" aria-labelledby="file-meta-editor-title">
+    <div class="absolute inset-0 bg-slate-900/50 dark:bg-black/60" @click="closeFileMetaEditor()"></div>
+    <div class="relative w-full max-w-md rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 shadow-xl p-5 text-left" @click.stop>
+      <h3 id="file-meta-editor-title" class="text-lg font-semibold text-slate-900 dark:text-white mb-1">File details</h3>
+      <p class="text-xs text-slate-500 dark:text-slate-400 mb-4 truncate" x-text="fileMetaDraft.name"></p>
+      <div class="space-y-3">
+        <div>
+          <label class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Created by (agent)</label>
+          <input type="text" x-model="fileMetaDraft.createdBy" class="w-full text-sm border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 rounded-lg px-3 py-2 text-slate-800 dark:text-slate-100" placeholder="e.g. cyrus" />
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Domain</label>
+          <input type="text" x-model="fileMetaDraft.domain" class="w-full text-sm border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 rounded-lg px-3 py-2 text-slate-800 dark:text-slate-100" placeholder="e.g. finance" />
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Category <span class="font-normal text-slate-400">(optional)</span></label>
+          <input type="text" x-model="fileMetaDraft.category" class="w-full text-sm border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 rounded-lg px-3 py-2 text-slate-800 dark:text-slate-100" placeholder="e.g. taxes" />
+        </div>
+      </div>
+      <p class="text-xs text-slate-500 dark:text-slate-400 mt-3">Clear a field and save to remove it. Tags are stored in <code class="text-[11px]">.files-meta.json</code> under <span class="font-medium">docs</span>, <span class="font-medium">owners-inbox</span>, or <span class="font-medium">team-inbox</span> only.</p>
+      <div class="flex justify-end gap-2 mt-5">
+        <button type="button" @click="closeFileMetaEditor()" class="px-4 py-1.5 text-sm rounded-lg bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 transition-colors">Cancel</button>
+        <button type="button" @click="saveFileMeta()" :disabled="fileMetaSaving" class="px-4 py-1.5 text-sm rounded-lg bg-blue-600 hover:bg-blue-700 text-white transition-colors disabled:opacity-50" x-text="fileMetaSaving ? 'Saving…' : 'Save'"></button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Action item editor -->
+  <div x-show="actionItemEditorOpen" x-cloak class="fixed inset-0 z-[70] flex items-end sm:items-center justify-center p-4 sm:p-6" role="dialog" aria-modal="true" aria-labelledby="action-item-editor-title">
+    <div class="absolute inset-0 bg-slate-900/50 dark:bg-black/60" @click="closeActionItemEditor()"></div>
+    <div class="relative w-full max-w-lg max-h-[min(90vh,40rem)] overflow-y-auto rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 shadow-xl p-5 text-left">
+      <h3 id="action-item-editor-title" class="text-lg font-semibold text-slate-900 dark:text-white mb-4">Edit action item</h3>
+      <div x-show="actionItemError" class="mb-3 text-sm text-red-600 dark:text-red-400" x-text="actionItemError"></div>
+      <div class="space-y-3">
+        <div x-show="actionItemShowDomain">
+          <label class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Domain</label>
+          <select x-model="actionItemDraft.domain" class="w-full text-sm border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 rounded-lg px-3 py-2 text-slate-800 dark:text-slate-100">
+            <option value="career">career</option>
+            <option value="finance">finance</option>
+            <option value="business">business</option>
+            <option value="personal">personal</option>
+            <option value="family">family</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Title</label>
+          <input type="text" x-model="actionItemDraft.title" class="w-full text-sm border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 rounded-lg px-3 py-2 text-slate-800 dark:text-slate-100" />
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Description <span class="font-normal text-slate-400">(short summary)</span></label>
+          <textarea x-model="actionItemDraft.description" rows="2" class="w-full text-sm border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 rounded-lg px-3 py-2 text-slate-800 dark:text-slate-100 resize-y min-h-[3rem]"></textarea>
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Details <span class="font-normal text-slate-400">(optional markdown)</span></label>
+          <textarea x-model="actionItemDraft.details" rows="6" placeholder="Notes, links, checklists…" class="w-full text-sm font-mono border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 rounded-lg px-3 py-2 text-slate-800 dark:text-slate-100 resize-y min-h-[6rem]"></textarea>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Due date</label>
+            <input type="date" x-model="actionItemDraft.due_date" class="w-full text-sm border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 rounded-lg px-3 py-2 text-slate-800 dark:text-slate-100" />
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Urgency</label>
+            <select x-model="actionItemDraft.urgency" class="w-full text-sm border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 rounded-lg px-3 py-2 text-slate-800 dark:text-slate-100">
+              <option value="critical">critical</option>
+              <option value="high">high</option>
+              <option value="medium">medium</option>
+              <option value="low">low</option>
+            </select>
+          </div>
+        </div>
+        <div x-show="actionItemShowProjectCategory">
+          <label class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Category / lane <span class="font-normal text-slate-400">(optional)</span></label>
+          <input type="text" x-model="actionItemDraft.project_category" placeholder="e.g. job_search, admin" class="w-full text-sm border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 rounded-lg px-3 py-2 text-slate-800 dark:text-slate-100" />
+        </div>
+        <div x-show="actionItemShowCareerFields" class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Est. hours</label>
+            <input type="text" x-model="actionItemDraft.effort_hours" inputmode="decimal" class="w-full text-sm border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 rounded-lg px-3 py-2 text-slate-800 dark:text-slate-100" />
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Plan week</label>
+            <input type="number" min="1" max="8" x-model="actionItemDraft.project_week" class="w-full text-sm border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 rounded-lg px-3 py-2 text-slate-800 dark:text-slate-100" />
+          </div>
+        </div>
+      </div>
+      <div class="flex justify-end gap-2 mt-6 pt-4 border-t border-slate-100 dark:border-slate-700">
+        <button type="button" @click="closeActionItemEditor()" class="px-4 py-2 text-sm rounded-lg bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 transition-colors">Cancel</button>
+        <button type="button" @click="saveActionItem()" :disabled="actionItemSaving" class="px-4 py-2 text-sm rounded-lg bg-blue-600 hover:bg-blue-700 text-white transition-colors disabled:opacity-50" x-text="actionItemSaving ? 'Saving…' : 'Save'"></button>
       </div>
     </div>
   </div>
@@ -790,9 +945,14 @@ tailwind.config = {
 <div x-show="viewerOpen" x-cloak @keydown.escape.window="closeViewer()" class="lg:hidden fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" @click.self="closeViewer()">
   <div class="bg-white dark:bg-slate-800 rounded-xl shadow-xl w-full max-w-4xl max-h-[85vh] flex flex-col min-h-0" @click.stop>
     <div class="flex items-center justify-between gap-2 px-4 py-3 border-b border-slate-200 dark:border-slate-700 shrink-0">
-      <span class="font-semibold text-slate-800 dark:text-slate-100 text-sm truncate min-w-0" x-text="viewerTitle"></span>
-      <div class="flex items-center gap-1 shrink-0">
+      <div class="min-w-0">
+        <span class="font-semibold text-slate-800 dark:text-slate-100 text-sm truncate block" x-text="viewerTitle"></span>
+        <span class="text-xs text-slate-500 dark:text-slate-400 mt-0.5 block truncate" x-show="viewerPath && fileMetaEnabled(viewerPath.dir)" x-text="fileMetaTags(findFileEntry(viewerPath.dir, viewerPath.name)) || '—'"></span>
+      </div>
+      <div class="flex items-center gap-1 shrink-0 flex-wrap justify-end">
         <button type="button" x-show="viewerPath && viewerDisplayMode !== 'download'" @click="triggerFileDownload(viewerPath.dir, viewerPath.name)" class="text-xs font-medium px-2.5 py-1.5 rounded-md bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200">Download</button>
+        <button type="button" x-show="viewerPath && fileMetaEnabled(viewerPath.dir)" @click="openFileMetaEditor()" class="text-xs font-medium px-2.5 py-1.5 rounded-md bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200">Details</button>
+        <button type="button" x-show="viewerPath && fileMetaEnabled(viewerPath.dir)" @click="archiveFile(viewerPath.dir, viewerPath.name)" class="text-xs font-medium px-2.5 py-1.5 rounded-md bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200">Archive</button>
         <button type="button" x-show="viewerPath && fileIsEditable(viewerPath.name)" @click="editFromViewer()" class="text-xs font-medium px-2.5 py-1.5 rounded-md bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200">Edit</button>
         <button type="button" @click="closeViewer()" class="icon-btn p-1.5 rounded-md text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700" aria-label="Close">
           <i data-lucide="x" class="w-5 h-5"></i>
@@ -829,11 +989,14 @@ tailwind.config = {
 <!-- ── FILE EDITOR MODAL (mobile / &lt;lg) ── -->
 <div x-show="editorOpen" x-cloak @keydown.escape.window="editorOpen = false" class="lg:hidden fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" @click.self="editorOpen = false">
   <div class="bg-white dark:bg-slate-800 rounded-xl shadow-xl w-full max-w-4xl max-h-[85vh] flex flex-col" @click.stop>
-    <div class="flex items-center justify-between px-5 py-3 border-b border-slate-200 dark:border-slate-700">
-      <span class="font-semibold text-slate-800 dark:text-slate-100 text-sm" x-text="editorTitle"></span>
-      <button type="button" @click="editorOpen = false" class="icon-btn p-1.5 rounded-md text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700" aria-label="Close">
-        <i data-lucide="x" class="w-5 h-5"></i>
-      </button>
+    <div class="flex items-center justify-between gap-2 px-5 py-3 border-b border-slate-200 dark:border-slate-700">
+      <span class="font-semibold text-slate-800 dark:text-slate-100 text-sm truncate min-w-0 pr-2" x-text="editorTitle"></span>
+      <div class="flex items-center gap-1 shrink-0">
+        <button type="button" x-show="editorPath && fileMetaEnabled(editorPath.dir)" @click="openFileMetaEditor()" class="text-xs font-medium px-2.5 py-1.5 rounded-md bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200">Details</button>
+        <button type="button" @click="editorOpen = false" class="icon-btn p-1.5 rounded-md text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700" aria-label="Close">
+          <i data-lucide="x" class="w-5 h-5"></i>
+        </button>
+      </div>
     </div>
     <textarea x-model="editorContent" class="flex-1 p-5 text-xs text-slate-700 dark:text-slate-200 dark:bg-slate-800 font-mono resize-none focus:outline-none min-h-[200px]"></textarea>
     <div class="flex justify-end gap-2 px-5 py-3 border-t border-slate-200 dark:border-slate-700">
@@ -851,8 +1014,34 @@ tailwind.config = {
   </div>
 </div>
 
-<!-- ── UPLOAD TOAST ── -->
-<div x-show="uploadToast" x-cloak class="fixed bottom-4 right-4 z-[60] text-white text-sm px-4 py-2 rounded-lg shadow-lg transition-opacity max-w-sm" :class="uploadToastClass" x-text="uploadToast"></div>
+<!-- ── OWNERS INBOX + UPLOAD TOASTS (fixed stack) ── -->
+<div class="fixed bottom-4 right-4 z-[60] flex flex-col gap-2 items-end max-w-sm pointer-events-none">
+  <template x-for="t in ownerInboxToasts" :key="t.id">
+    <div
+      class="pointer-events-auto flex items-start gap-3 rounded-xl border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 shadow-lg px-4 py-3 text-sm"
+      role="status"
+    >
+      <div class="min-w-0 flex-1">
+        <p class="font-medium text-slate-900 dark:text-white">New file in Owners Inbox</p>
+        <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5 truncate" x-text="t.name"></p>
+        <a
+          :href="ownersInboxFileHash(t.name)"
+          class="inline-flex mt-2 text-sm font-medium text-blue-600 dark:text-blue-400 hover:underline"
+          x-text="'Open ' + t.name"
+        ></a>
+      </div>
+      <button
+        type="button"
+        class="icon-btn shrink-0 p-1 rounded-md text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 hover:text-slate-600 dark:hover:text-slate-200"
+        @click="dismissOwnerInboxToast(t.id)"
+        aria-label="Dismiss"
+      >
+        <i data-lucide="x" class="w-4 h-4"></i>
+      </button>
+    </div>
+  </template>
+  <div x-show="uploadToast" x-cloak class="pointer-events-auto text-white text-sm px-4 py-2 rounded-lg shadow-lg transition-opacity max-w-sm" :class="uploadToastClass" x-text="uploadToast"></div>
+</div>
 
 <script src="https://cdn.jsdelivr.net/npm/lucide@0.469.0/dist/umd/lucide.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/marked@12.0.0/marked.min.js"></script>

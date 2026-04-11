@@ -154,6 +154,27 @@ function openDbReadonly(filename) {
     return null;
   }
 }
+
+/** Ensure optional markdown column exists (dashboard edits / richer notes). */
+function migrateBrainActionItemsDetails() {
+  const p = path.join(DB_DIR, 'brain.db');
+  if (!fs.existsSync(p)) return;
+  let rw;
+  try {
+    rw = new Database(p);
+    const names = new Set(rw.prepare(`PRAGMA table_info(action_items)`).all().map((c) => c.name));
+    if (!names.has('details')) {
+      rw.exec(`ALTER TABLE action_items ADD COLUMN details TEXT`);
+      console.log('brain.db: added column action_items.details');
+    }
+  } catch (err) {
+    console.warn('brain.db migration (action_items.details):', err.message);
+  } finally {
+    if (rw) try { rw.close(); } catch (_) {}
+  }
+}
+migrateBrainActionItemsDetails();
+
 brain     = openDbReadonly('brain.db');
 launchpad = openDbReadonly('launchpad.db');
 finance   = openDbReadonly('finance.db');
@@ -206,7 +227,7 @@ app.use((req, res, next) => {
   if (!dashboardAuthEnabled()) return next();
   const p = req.path;
   if (p === '/login.html' && req.method === 'GET') return next();
-  if (p === '/api/db' && req.method === 'POST') {
+  if ((p === '/api/db' || p === '/api/upload') && req.method === 'POST') {
     const token = (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
     if (process.env.BRAIN_API_TOKEN && token === process.env.BRAIN_API_TOKEN) return next();
   }
@@ -245,6 +266,103 @@ const upload = multer({
   }),
   limits: { fileSize: 50 * 1024 * 1024 }, // 50MB
 });
+
+const FILES_META_FILE = '.files-meta.json';
+const META_STRING_MAX = 240;
+
+function safeBrowseFileName(name) {
+  if (!name || typeof name !== 'string') return null;
+  const base = path.basename(name.trim());
+  if (!base || base !== name.trim() || base.includes('..') || base.includes('/') || base.includes('\\'))
+    return null;
+  return base;
+}
+
+function sanitizeMetaString(v) {
+  if (v == null) return '';
+  const s = String(v).trim();
+  if (!s) return '';
+  return s.length > META_STRING_MAX ? s.slice(0, META_STRING_MAX) : s;
+}
+
+function readFilesMetaMap(dirPath) {
+  const p = path.join(dirPath, FILES_META_FILE);
+  if (!fs.existsSync(p)) return {};
+  try {
+    const raw = JSON.parse(fs.readFileSync(p, 'utf8'));
+    return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function writeFilesMetaMap(dirPath, map) {
+  fs.writeFileSync(path.join(dirPath, FILES_META_FILE), JSON.stringify(map, null, 2), 'utf8');
+}
+
+function metaFieldsForFile(map, fileName) {
+  const m = map[fileName] || {};
+  return {
+    createdBy: typeof m.createdBy === 'string' ? m.createdBy : '',
+    domain: typeof m.domain === 'string' ? m.domain : '',
+    category: typeof m.category === 'string' ? m.category : '',
+  };
+}
+
+function attachMetaToEntries(dirPath, entries) {
+  const map = readFilesMetaMap(dirPath);
+  return entries.map((e) => {
+    const x = metaFieldsForFile(map, e.name);
+    return { ...e, createdBy: x.createdBy, domain: x.domain, category: x.category };
+  });
+}
+
+/** Tags (createdBy / domain / category), PATCH meta, and archive only apply under these folders. */
+const FILES_META_DIRS = new Set(['owners-inbox', 'team-inbox', 'docs']);
+
+function entriesWithoutMeta(entries) {
+  return entries.map((e) => ({
+    ...e,
+    createdBy: '',
+    domain: '',
+    category: '',
+  }));
+}
+
+const UPLOAD_FILENAME_AGENT_IDS = new Set([
+  'dash', 'scout', 'gauge', 'ledger', 'charter', 'arc', 'tailor', 'debrief',
+  'relay', 'scribe', 'mirror', 'nolan', 'pax', 'frame', 'vela', 'cyrus',
+]);
+
+function inferAgentIdFromUploadFilename(filename) {
+  const base = path.basename(String(filename || '')).toLowerCase();
+  const m = base.match(/^([a-z][a-z0-9]*)[-_.]/);
+  if (!m) return '';
+  const id = m[1];
+  return UPLOAD_FILENAME_AGENT_IDS.has(id) ? id : '';
+}
+
+function defaultUploadDomainForAgent(agentId) {
+  const a = String(agentId || '').toLowerCase();
+  if (a === 'ledger') return 'finance';
+  if (a === 'charter') return 'business';
+  if (a === 'owner') return 'personal';
+  return 'career';
+}
+
+/** Resolves createdBy + domain for team-inbox uploads (multipart body and/or headers, then filename). */
+function buildTeamInboxUploadMeta(filename, body, getHeader) {
+  const b = body && typeof body === 'object' ? body : {};
+  let createdBy = sanitizeMetaString(b.createdBy) || sanitizeMetaString(getHeader('x-created-by'));
+  let domain = sanitizeMetaString(b.domain) || sanitizeMetaString(getHeader('x-file-domain'));
+  let category = sanitizeMetaString(b.category) || sanitizeMetaString(getHeader('x-file-category'));
+  if (!createdBy) createdBy = inferAgentIdFromUploadFilename(filename);
+  if (!createdBy) createdBy = 'cyrus';
+  if (!domain) domain = defaultUploadDomainForAgent(createdBy);
+  const out = { createdBy, domain };
+  if (category) out.category = category;
+  return out;
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function q(db, sql, params = []) {
@@ -647,6 +765,23 @@ app.post('/api/chat', (req, res) => {
 // ─── POST /api/upload — save files to team-inbox ─────────────────────────────
 app.post('/api/upload', upload.array('files'), (req, res) => {
   if (!req.files?.length) return res.status(400).json({ error: 'No files received' });
+  const teamInboxPath = path.join(DATA_DIR, 'team-inbox');
+  const body = req.body || {};
+  const getHeader = (name) => req.get(name);
+  const map = readFilesMetaMap(teamInboxPath);
+  for (const f of req.files) {
+    const key = f.filename;
+    if (!safeBrowseFileName(key)) continue;
+    const built = buildTeamInboxUploadMeta(key, body, getHeader);
+    const prev = metaFieldsForFile(map, key);
+    const merged = { ...prev, ...built };
+    const next = {};
+    if (merged.createdBy) next.createdBy = merged.createdBy;
+    if (merged.domain) next.domain = merged.domain;
+    if (merged.category) next.category = merged.category;
+    map[key] = next;
+  }
+  writeFilesMetaMap(teamInboxPath, map);
   res.json({ uploaded: req.files.map(f => ({ name: f.originalname, size: f.size })) });
 });
 
@@ -654,29 +789,105 @@ app.post('/api/upload', upload.array('files'), (req, res) => {
 const BROWSABLE = ['owners-inbox', 'team-inbox', 'team', 'docs'];
 const EDITABLE_EXTS = ['.md', '.html', '.txt', '.json'];
 
+function resolveBrowseLocation(dir, name) {
+  const base = safeBrowseFileName(name);
+  if (!base) return null;
+  if (dir === 'root') {
+    const brief = resolveOrchestratorBriefPath();
+    if (!brief) return null;
+    const onDisk = path.basename(brief);
+    if (base !== onDisk && base !== ORCH_BRIEF_FILE && base !== ORCH_BRIEF_LEGACY) return null;
+    return { dirPath: path.dirname(brief), fileName: onDisk, fullPath: brief };
+  }
+  if (!BROWSABLE.includes(dir)) return null;
+  const dirPath = path.join(DATA_DIR, dir);
+  const fullPath = path.join(dirPath, base);
+  return { dirPath, fileName: base, fullPath };
+}
+
+function listVisibleFilesInDir(dirPath) {
+  if (!fs.existsSync(dirPath)) return [];
+  return fs.readdirSync(dirPath)
+    .filter((name) => !name.startsWith('.') && !name.startsWith('_archived_'))
+    .map((name) => {
+      const stat = fs.statSync(path.join(dirPath, name));
+      if (!stat.isFile()) return null;
+      return { name, size: stat.size, modified: stat.mtime };
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.modified - a.modified);
+}
+
 app.get('/api/files', (req, res) => {
   const result = {};
   for (const dir of BROWSABLE) {
     const dirPath = path.join(DATA_DIR, dir);
-    if (fs.existsSync(dirPath)) {
-      result[dir] = fs.readdirSync(dirPath)
-        .filter(name => !name.startsWith('.'))
-        .map(name => {
-          const stat = fs.statSync(path.join(dirPath, name));
-          if (!stat.isFile()) return null;
-          return { name, size: stat.size, modified: stat.mtime };
-        })
-        .filter(Boolean)
-        .sort((a, b) => b.modified - a.modified);
-    }
+    const listed = listVisibleFilesInDir(dirPath);
+    result[dir] = FILES_META_DIRS.has(dir) ? attachMetaToEntries(dirPath, listed) : entriesWithoutMeta(listed);
   }
-  // Orchestrator brief at repo / volume root
   const briefPath = resolveOrchestratorBriefPath();
   if (briefPath) {
     const stat = fs.statSync(briefPath);
-    result['root'] = [{ name: ORCH_BRIEF_FILE, size: stat.size, modified: stat.mtime }];
+    const rootName = path.basename(briefPath);
+    result['root'] = entriesWithoutMeta([{ name: rootName, size: stat.size, modified: stat.mtime }]);
   }
   res.json(result);
+});
+
+// ─── PATCH /api/files/:dir/:name/meta — createdBy, domain, category ───────────
+app.patch('/api/files/:dir/:name/meta', (req, res) => {
+  if (!FILES_META_DIRS.has(req.params.dir))
+    return res.status(403).json({ error: 'Metadata is only available for docs, owners-inbox, and team-inbox' });
+  const loc = resolveBrowseLocation(req.params.dir, req.params.name);
+  if (!loc) return res.status(400).json({ error: 'Invalid path' });
+  try {
+    if (!fs.existsSync(loc.fullPath) || !fs.statSync(loc.fullPath).isFile())
+      return res.status(404).json({ error: 'Not found' });
+  } catch (_) {
+    return res.status(404).json({ error: 'Not found' });
+  }
+  const body = req.body || {};
+  const map = readFilesMetaMap(loc.dirPath);
+  const cur = { ...metaFieldsForFile(map, loc.fileName) };
+  if ('createdBy' in body) cur.createdBy = sanitizeMetaString(body.createdBy);
+  if ('domain' in body) cur.domain = sanitizeMetaString(body.domain);
+  if ('category' in body) cur.category = sanitizeMetaString(body.category);
+  const next = {};
+  if (cur.createdBy) next.createdBy = cur.createdBy;
+  if (cur.domain) next.domain = cur.domain;
+  if (cur.category) next.category = cur.category;
+  if (Object.keys(next).length) map[loc.fileName] = next;
+  else delete map[loc.fileName];
+  writeFilesMetaMap(loc.dirPath, map);
+  res.json({ ok: true, meta: metaFieldsForFile(map, loc.fileName) });
+});
+
+// ─── POST /api/files/:dir/:name/archive — rename to _archived_<name> ──────────
+app.post('/api/files/:dir/:name/archive', (req, res) => {
+  if (!FILES_META_DIRS.has(req.params.dir))
+    return res.status(403).json({ error: 'Archive is only available for docs, owners-inbox, and team-inbox' });
+  const loc = resolveBrowseLocation(req.params.dir, req.params.name);
+  if (!loc) return res.status(400).json({ error: 'Invalid path' });
+  const { name } = req.params;
+  if (name.startsWith('_archived_'))
+    return res.status(400).json({ error: 'Already archived' });
+  try {
+    if (!fs.existsSync(loc.fullPath) || !fs.statSync(loc.fullPath).isFile())
+      return res.status(404).json({ error: 'Not found' });
+  } catch (_) {
+    return res.status(404).json({ error: 'Not found' });
+  }
+  const newName = `_archived_${name}`;
+  const newPath = path.join(loc.dirPath, newName);
+  if (fs.existsSync(newPath)) return res.status(409).json({ error: 'Archive name already exists' });
+  fs.renameSync(loc.fullPath, newPath);
+  const map = readFilesMetaMap(loc.dirPath);
+  if (map[name]) {
+    map[newName] = map[name];
+    delete map[name];
+  }
+  writeFilesMetaMap(loc.dirPath, map);
+  res.json({ ok: true, archivedAs: newName });
 });
 
 // ─── GET /api/files/:dir/:name — read/download a file ────────────────────────
@@ -727,7 +938,7 @@ app.put('/api/larry', express.text({ type: '*/*', limit: '2mb' }), putOrchestrat
 // ─── GET /api/dashboard ───────────────────────────────────────────────────────
 app.get('/api/dashboard', (req, res) => {
   const actionItems = q(brain, `
-    SELECT id, domain, urgency, title, description, due_date, source_agent
+    SELECT id, domain, urgency, title, description, details, due_date, source_agent
     FROM action_items
     WHERE status = 'open'
       AND (snoozed_until IS NULL OR snoozed_until <= date('now'))
@@ -749,7 +960,7 @@ app.get('/api/dashboard', (req, res) => {
 // ─── GET /api/career ──────────────────────────────────────────────────────────
 app.get('/api/career', (req, res) => {
   const actionItems = q(brain, `
-    SELECT id, urgency, title, description, due_date, effort_hours, project_category
+    SELECT id, urgency, title, description, details, due_date, effort_hours, project_category, project_week
     FROM action_items
     WHERE status = 'open' AND domain = 'career'
       AND (snoozed_until IS NULL OR snoozed_until <= date('now'))
@@ -809,7 +1020,7 @@ app.get('/api/career', (req, res) => {
 // ─── GET /api/finance ─────────────────────────────────────────────────────────
 app.get('/api/finance', (req, res) => {
   const actionItems = q(brain, `
-    SELECT id, urgency, title, description, due_date, effort_hours
+    SELECT id, urgency, title, description, details, due_date, effort_hours, project_category
     FROM action_items
     WHERE status = 'open' AND domain = 'finance'
       AND (snoozed_until IS NULL OR snoozed_until <= date('now'))
@@ -876,7 +1087,7 @@ app.get('/api/finance', (req, res) => {
 // ─── GET /api/business ────────────────────────────────────────────────────────
 app.get('/api/business', (req, res) => {
   const actionItems = q(brain, `
-    SELECT id, urgency, title, description, due_date, effort_hours
+    SELECT id, urgency, title, description, details, due_date, effort_hours, project_category
     FROM action_items
     WHERE status = 'open' AND domain = 'business'
       AND (snoozed_until IS NULL OR snoozed_until <= date('now'))
@@ -926,6 +1137,122 @@ app.get('/api/business', (req, res) => {
   const shareholderLoan = q1(wynnset, `SELECT * FROM v_shareholder_loan_balance`);
 
   res.json({ actionItems, complianceCalendar, complianceSummary, ledgerSummary, coaSummary, coaAccounts, shareholderLoan });
+});
+
+const ACTION_DOMAIN = new Set(['career', 'finance', 'business', 'personal', 'family']);
+const ACTION_URGENCY = new Set(['critical', 'high', 'medium', 'low']);
+const ACTION_STATUS = new Set(['open', 'done', 'dismissed']);
+
+// ─── PATCH /api/action-items/:id — dashboard (session) updates action_items ───
+app.patch('/api/action-items/:id', (req, res) => {
+  const brainPath = path.join(DB_DIR, 'brain.db');
+  if (!fs.existsSync(brainPath)) {
+    return res.status(503).json({ error: 'brain.db not available' });
+  }
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id) || id < 1) {
+    return res.status(400).json({ error: 'Invalid action item id' });
+  }
+  const body = req.body && typeof req.body === 'object' ? req.body : {};
+  const sets = [];
+  const params = [];
+
+  if (body.title !== undefined) {
+    const t = String(body.title || '').trim();
+    if (!t) return res.status(400).json({ error: 'title cannot be empty' });
+    sets.push('title = ?');
+    params.push(t);
+  }
+  if (body.description !== undefined) {
+    const v = body.description === null || body.description === '' ? null : String(body.description);
+    sets.push('description = ?');
+    params.push(v);
+  }
+  if (body.details !== undefined) {
+    const v = body.details === null || body.details === '' ? null : String(body.details);
+    sets.push('details = ?');
+    params.push(v);
+  }
+  if (body.due_date !== undefined) {
+    if (body.due_date === null || body.due_date === '') {
+      sets.push('due_date = NULL');
+    } else {
+      sets.push('due_date = ?');
+      params.push(String(body.due_date).trim().slice(0, 32));
+    }
+  }
+  if (body.urgency !== undefined) {
+    const u = String(body.urgency);
+    if (!ACTION_URGENCY.has(u)) return res.status(400).json({ error: 'invalid urgency' });
+    sets.push('urgency = ?');
+    params.push(u);
+  }
+  if (body.domain !== undefined) {
+    const d = String(body.domain);
+    if (!ACTION_DOMAIN.has(d)) return res.status(400).json({ error: 'invalid domain' });
+    sets.push('domain = ?');
+    params.push(d);
+  }
+  if (body.status !== undefined) {
+    const s = String(body.status);
+    if (!ACTION_STATUS.has(s)) return res.status(400).json({ error: 'invalid status' });
+    sets.push('status = ?');
+    params.push(s);
+    if (s === 'done') {
+      sets.push(`completed_at = CURRENT_TIMESTAMP`);
+    } else {
+      sets.push('completed_at = NULL');
+    }
+  }
+  if (body.project_category !== undefined) {
+    const v = body.project_category === null || body.project_category === '' ? null : String(body.project_category);
+    sets.push('project_category = ?');
+    params.push(v);
+  }
+  if (body.effort_hours !== undefined) {
+    if (body.effort_hours === null || body.effort_hours === '') {
+      sets.push('effort_hours = NULL');
+    } else {
+      const n = Number(body.effort_hours);
+      if (Number.isNaN(n)) return res.status(400).json({ error: 'invalid effort_hours' });
+      sets.push('effort_hours = ?');
+      params.push(n);
+    }
+  }
+  if (body.project_week !== undefined) {
+    if (body.project_week === null || body.project_week === '') {
+      sets.push('project_week = NULL');
+    } else {
+      const n = parseInt(body.project_week, 10);
+      if (!Number.isFinite(n)) return res.status(400).json({ error: 'invalid project_week' });
+      sets.push('project_week = ?');
+      params.push(n);
+    }
+  }
+
+  if (sets.length === 0) {
+    return res.status(400).json({ error: 'No updatable fields' });
+  }
+
+  let rw;
+  try {
+    rw = new Database(brainPath);
+    const row = rw.prepare('SELECT id FROM action_items WHERE id = ?').get(id);
+    if (!row) {
+      rw.close();
+      return res.status(404).json({ error: 'Action item not found' });
+    }
+    const sql = `UPDATE action_items SET ${sets.join(', ')} WHERE id = ?`;
+    params.push(id);
+    rw.prepare(sql).run(...params);
+    rw.close();
+    rw = null;
+  } catch (err) {
+    console.error('PATCH /api/action-items:', err.message);
+    if (rw) try { rw.close(); } catch (_) {}
+    return res.status(500).json({ error: err.message || 'Update failed' });
+  }
+  return res.json({ ok: true });
 });
 
 // ─── Static (dashboard + assets) — after auth gate ───────────────────────────

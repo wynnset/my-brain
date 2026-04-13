@@ -1,0 +1,5 @@
+{
+  "currency": "CAD",
+  "large_transaction_threshold_personal": 500,
+  "large_transaction_threshold_business": 2000
+}

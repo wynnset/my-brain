@@ -13,7 +13,17 @@ const require = createRequire(import.meta.url);
 const Database = require('better-sqlite3');
 
 const DB_DIR = process.env.BRAIN_MCP_DB_DIR || process.env.DB_DIR || '.';
-const ALLOWED = new Set(['brain', 'launchpad', 'finance', 'wynnset']);
+const DB_BASE_RE = /^[a-z][a-z0-9_-]{0,62}$/i;
+const DB_BLOCKLIST = new Set(['registry']);
+
+function normalizeDbBase(raw) {
+  const s = String(raw || '')
+    .trim()
+    .replace(/\.db$/i, '');
+  if (!DB_BASE_RE.test(s)) return null;
+  if (DB_BLOCKLIST.has(s.toLowerCase())) return null;
+  return s;
+}
 
 function assertSelectOnly(sql) {
   let s = String(sql || '').trim();
@@ -31,16 +41,17 @@ server.registerTool(
   {
     title: 'Read-only SQL',
     description:
-      'Run a single SELECT on brain.db, launchpad.db, finance.db, or wynnset.db (read-only). Use views such as v_open_action_items when helpful.',
+      'Run a single SELECT on a tenant SQLite file (read-only). `db` is the basename without .db (e.g. brain, launchpad, or a custom DB created under the tenant data directory).',
     inputSchema: z.object({
-      db: z.enum(['brain', 'launchpad', 'finance', 'wynnset']),
+      db: z.string().max(63),
       sql: z.string().max(12000),
     }),
   },
   async ({ db, sql }) => {
     assertSelectOnly(sql);
-    if (!ALLOWED.has(db)) throw new Error('Invalid db');
-    const full = path.join(DB_DIR, `${db}.db`);
+    const base = normalizeDbBase(db);
+    if (!base) throw new Error('Invalid db name');
+    const full = path.join(DB_DIR, `${base}.db`);
     if (!fs.existsSync(full)) {
       return {
         content: [{ type: 'text', text: JSON.stringify({ error: 'Database file not found', path: full }) }],

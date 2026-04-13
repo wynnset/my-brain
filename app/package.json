@@ -4,10 +4,12 @@
   "description": "Cyrus personal dashboard",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node --test *.test.js"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.101",
+    "bcrypt": "^5.1.1",
     "better-sqlite3": "^9.4.3",
     "dotenv": "^16.4.5",
     "zod": "^4.3.6",

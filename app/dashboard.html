@@ -26,13 +26,14 @@ tailwind.config = {
         </a>
         <div class="hidden sm:flex items-center gap-1">
           <a href="#/" @click.prevent="go('home')" :class="navLinkClass('home')" class="px-3 py-1.5 rounded-md text-sm font-medium transition-colors">Home</a>
-          <a href="#/career" @click.prevent="go('career')" :class="navLinkClass('career')" class="px-3 py-1.5 rounded-md text-sm font-medium transition-colors">Career</a>
-          <a href="#/finance" @click.prevent="go('finance')" :class="navLinkClass('finance')" class="px-3 py-1.5 rounded-md text-sm font-medium transition-colors">Finance</a>
-          <a href="#/business" @click.prevent="go('business')" :class="navLinkClass('business')" class="px-3 py-1.5 rounded-md text-sm font-medium transition-colors">Business</a>
+          <a href="#/career" x-show="dashboardPages.career" @click.prevent="go('career')" :class="navLinkClass('career')" class="px-3 py-1.5 rounded-md text-sm font-medium transition-colors">Career</a>
+          <a href="#/finance" x-show="dashboardPages.finance" @click.prevent="go('finance')" :class="navLinkClass('finance')" class="px-3 py-1.5 rounded-md text-sm font-medium transition-colors">Finance</a>
+          <a href="#/business" x-show="dashboardPages.business" @click.prevent="go('business')" :class="navLinkClass('business')" class="px-3 py-1.5 rounded-md text-sm font-medium transition-colors">Business</a>
           <a href="#/files" @click.prevent="go('files')" :class="navLinkClass('files')" class="px-3 py-1.5 rounded-md text-sm font-medium transition-colors">Files</a>
         </div>
       </div>
       <div class="flex items-center gap-1 sm:gap-2">
+        <span x-show="sessionAccount" x-cloak class="hidden sm:inline max-w-[11rem] truncate text-xs text-slate-500 dark:text-slate-400" :title="sessionAccount.login" x-text="sessionAccount.displayName || sessionAccount.login"></span>
         <span x-show="refreshing" x-cloak class="text-xs text-slate-400 dark:text-slate-500">Refreshing…</span>
         <span x-show="lastRefresh" x-text="lastRefresh" class="hidden sm:block text-xs text-slate-400 dark:text-slate-500"></span>
         <button type="button" x-show="loginRequired" x-cloak @click="signOut()" class="icon-btn p-2 rounded-md text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors" title="Sign out" aria-label="Sign out">
@@ -63,9 +64,9 @@ tailwind.config = {
     </div>
     <div x-show="mobileMenuOpen" x-cloak x-transition class="sm:hidden py-2 border-t border-slate-100 dark:border-slate-700">
       <a href="#/" @click.prevent="go('home'); mobileMenuOpen = false" :class="navLinkClass('home')" class="block px-3 py-2 rounded-md text-sm font-medium">Home</a>
-      <a href="#/career" @click.prevent="go('career'); mobileMenuOpen = false" :class="navLinkClass('career')" class="block px-3 py-2 rounded-md text-sm font-medium">Career</a>
-      <a href="#/finance" @click.prevent="go('finance'); mobileMenuOpen = false" :class="navLinkClass('finance')" class="block px-3 py-2 rounded-md text-sm font-medium">Finance</a>
-      <a href="#/business" @click.prevent="go('business'); mobileMenuOpen = false" :class="navLinkClass('business')" class="block px-3 py-2 rounded-md text-sm font-medium">Business</a>
+      <a href="#/career" x-show="dashboardPages.career" @click.prevent="go('career'); mobileMenuOpen = false" :class="navLinkClass('career')" class="block px-3 py-2 rounded-md text-sm font-medium">Career</a>
+      <a href="#/finance" x-show="dashboardPages.finance" @click.prevent="go('finance'); mobileMenuOpen = false" :class="navLinkClass('finance')" class="block px-3 py-2 rounded-md text-sm font-medium">Finance</a>
+      <a href="#/business" x-show="dashboardPages.business" @click.prevent="go('business'); mobileMenuOpen = false" :class="navLinkClass('business')" class="block px-3 py-2 rounded-md text-sm font-medium">Business</a>
       <a href="#/files" @click.prevent="go('files'); mobileMenuOpen = false" :class="navLinkClass('files')" class="block px-3 py-2 rounded-md text-sm font-medium">Files</a>
       <button type="button" x-show="loginRequired" x-cloak @click="signOut(); mobileMenuOpen = false" class="block w-full text-left px-3 py-2 rounded-md text-sm font-medium text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-700">Sign out</button>
     </div>
@@ -160,12 +161,12 @@ tailwind.config = {
       </div>
     </section>
 
-    <section class="mb-8">
+    <section class="mb-8" x-show="dashboardPages.career || dashboardPages.finance || dashboardPages.business" x-cloak>
       <h2 class="text-base font-semibold text-slate-700 dark:text-slate-200 mb-3">Domains</h2>
       <div class="grid grid-cols-1 sm:grid-cols-3 gap-4" x-html="homeDomainCardsHtml"></div>
     </section>
 
-    <section class="mb-8">
+    <section class="mb-8" x-show="dashboardPages.career" x-cloak>
       <h2 class="text-base font-semibold text-slate-700 dark:text-slate-200 mb-3">This Week</h2>
       <div x-html="homeWeekHtml"></div>
     </section>
@@ -699,11 +700,9 @@ tailwind.config = {
         <div x-show="actionItemShowDomain">
           <label class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Domain</label>
           <select x-model="actionItemDraft.domain" class="w-full text-sm border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 rounded-lg px-3 py-2 text-slate-800 dark:text-slate-100">
-            <option value="career">career</option>
-            <option value="finance">finance</option>
-            <option value="business">business</option>
-            <option value="personal">personal</option>
-            <option value="family">family</option>
+            <template x-for="opt in actionItemDomainOptions()" :key="opt.value">
+              <option :value="opt.value" x-text="opt.label"></option>
+            </template>
           </select>
         </div>
         <div>

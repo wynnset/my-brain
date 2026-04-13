@@ -1,6 +1,6 @@
 # Aidin Niavarani — Writing Style Guide
 
-> For use by Relay and Scribe when writing on Aidin's behalf.
+> For use by Relay and Sylvan when writing on Aidin's behalf.
 > Samples weighted: LinkedIn posts (especially Sample 3) > formal cover letters.
 
 ---

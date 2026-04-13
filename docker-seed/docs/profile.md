@@ -60,13 +60,13 @@ Co-founded and built the entire technical platform from scratch. Served as CTO f
 - Hot Read Cache, Snapshot Aggregator, SSE Host microservices
 
 **AI engineering platform built:**
-- 12 custom Cursor AI slash commands encoding entire dev process
+- 12 custom IDE slash commands encoding entire dev process
 - 4 custom agent skills (Firestore audits, requirements gathering, GitHub issue management)
 - Workspace safety rules for protected branches and production DB
 - 300+ line AGENTS.md institutional knowledge document
-- RAG-based internal codebase chat assistant (Firestore vector search + Gemini embeddings + Claude API)
+- RAG-based internal codebase chat assistant (Firestore vector search + embeddings + hosted inference APIs)
 - Subagent parallelization patterns for concurrent AI workflows
-- GitHub Copilot SWE Agent integration for delegated feature branches
+- Agent-assisted coding integration for delegated feature branches
 - Result: Q1 2026 — 197 commits, 20+ releases with leanest-ever team
 
 **Governance & equity:**
@@ -145,7 +145,7 @@ Activities: JDC West 2010, Director CaseIT 2009, Winner Ken Spencer Business Pla
 | **Build** | Nx monorepo, Webpack, Turbopack |
 | **CI/CD** | GitHub Actions, Firebase Hosting, Firebase App Hosting |
 | **Infrastructure** | Firebase, GCP |
-| **AI/Automation** | Cursor AI (commands, skills, rules, MCP), Claude API, Gemini, GitHub Copilot SWE Agent |
+| **AI/Automation** | IDE-integrated commands, skills, rules, and extensions; hosted LLM APIs; agent-assisted development workflows |
 | **Validation** | io-ts, Zod |
 | **Version Control** | Git, GitHub |
 
@@ -157,10 +157,10 @@ Activities: JDC West 2010, Director CaseIT 2009, Winner Ken Spencer Business Pla
 Social coordination app. Built on Expo SDK 55, Firebase, Plivo (SMS), FCM, react-native-reusables. Watercolor/Japanese aesthetic, semantic color token system, privacy-first design philosophy. Demonstrates product taste and aesthetic sensibility independent of what a startup forces.
 
 ### Launchpad
-Personal career transition tracker and job search pipeline manager. Built with Next.js, Firebase, Claude API integration. Demonstrates: applies production-quality stack to own workflows, eats his own cooking.
+Personal career transition tracker and job search pipeline manager. Built with Next.js, Firebase, and hosted AI APIs. Demonstrates: applies production-quality stack to own workflows, eats his own cooking.
 
 ### Codebase AI Chat Assistant (NextGen internal)
-RAG-based tool for engineering team. Firestore vector search, Gemini embeddings, Claude API via AI SDK, deployed on Firebase App Hosting. Lets any engineer query full codebase history in natural language. Built and shipped to production team.
+RAG-based tool for engineering team. Firestore vector search, embedding models, and hosted inference via standard AI SDK patterns, deployed on Firebase App Hosting. Lets any engineer query full codebase history in natural language. Built and shipped to production team.
 
 ---
 

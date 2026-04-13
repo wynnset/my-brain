@@ -78,13 +78,13 @@ Agents are defined in `team/` as markdown files with role specs, tool access, an
 | **Scout** | Job Research Analyst | `launchpad.db` |
 | **Relay** | Outreach Drafter | `launchpad.db` |
 | **Tailor** | Application Specialist | — (produces files) |
-| **Scribe** | Content Writer | — (produces files) |
+| **Sylvan** | Content Writer | — (produces files) |
 | **Debrief** | Interview Prep Coach | `launchpad.db` |
 | **Vela** | Senior Designer | — (produces PDFs) |
 | **Gauge** | Market Intelligence | — (research outputs) |
 | **Arc** | Database Architect | All DBs (schema changes) |
-| **Nolan** | HR Director | — (agent onboarding) |
-| **Pax** | Senior Researcher | — (expertise profiles) |
+| **Vesta** | HR Director | — (agent onboarding) |
+| **Dara** | Senior Researcher | — (expertise profiles) |
 
 Agent outputs go to `owners-inbox/` as `.md` or `.pdf` files.
 
@@ -166,6 +166,8 @@ Button in top-right cycles through: Auto (follows OS) → Light → Dark. Prefer
 |---------------------|----------|
 | `cli` (default) | Spawns Claude Code (`claude -p --dangerously-skip-permissions`) with `cwd` = `DATA_DIR`. |
 | `sdk` | Runs the [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview) in-process: same `cwd`, optional session resume (`agentSdkSessionId` in the chat session JSON). |
+
+When **`BRAIN_MULTI_USER=1`**, chat always sets **`CLAUDE_CODE_DISABLE_AUTO_MEMORY`** and (unless **`BRAIN_CHAT_LOAD_CLAUDE_MDS=1`**) **`CLAUDE_CODE_DISABLE_CLAUDE_MDS`**, and appends the **signed-in account’s login and display name from `registry.db`** to the system prompt. If **`ANTHROPIC_API_KEY`** is set, the child also gets an isolated **`HOME`** / **`CLAUDE_CONFIG_DIR`** under **`data/.claude-chat-runtime/`**. If the key is **not** set (subscription / `~/.claude` OAuth only), **`HOME` is left unchanged** so Claude Code can still find your login — use an API key on shared servers when you need both billing and the strongest filesystem isolation.
 
 #### Agent SDK — what you need for it to work
 
@@ -257,6 +259,35 @@ Other useful environment variables (SDK path):
 6. **Smoke test:**  
    `curl -sS "https://<app>.fly.dev/api/health"`  
    should return JSON with `"ok":true`. Open the same host in a browser; sign in at `/login.html` if `DASHBOARD_PASSWORD` is set.
+
+---
+
+## Multi-user tenancy (optional)
+
+When **`BRAIN_MULTI_USER=1`**, the server stores accounts in **`registry.db`** at the volume root and gives each user an isolated tree:
+
+- **`users/<uuid>/workspace/`** — `CYRUS.md`, `team/`, `team-inbox/`, `owners-inbox/`, `docs/`, `config.json` (same role as repo-root `DATA_DIR` in single-tenant mode).
+- **`users/<uuid>/data/`** — at minimum **`brain.db`** (created at provision time); other SQLite files (e.g. `launchpad.db`, domain-specific DBs) are added only when you create them. Also **`chat-sessions/`**, **`chat-tool-audit.log`**.
+
+**Auth:** set **`SESSION_SECRET`** (at least 32 characters). Sign-in uses **login + password** (bcrypt hashes in `registry.db`). The session cookie carries **`sub`** = user id; the server never trusts a tenant id from the client for path selection.
+
+**Provisioning:** from the repo (with `app/node_modules` installed):  
+`node scripts/brain-add-user.cjs --login EMAIL --password '…' [--name "Display Name"] [--full-team] [--seed-dbs DIR]`  
+**`display_name`** in **`registry.db`** is set from **`--name`**, or derived from the email local-part (e.g. `jane.doe@x.com` → `Jane Doe`). New tenants get **`brain.db` only**, from **`brain.sql`** (or **`brain.db`**) found under the first seed directory — **`--seed-dbs` / `BRAIN_SEED_DBS` / `./data`** — then **[`docker-seed/`](../docker-seed/)** if the file is not in the first dir (so Fly/git builds ship **`docker-seed/brain.sql`**). Workspace files (**`CYRUS.md`**, **`config.json`**, **`docs/`**) are copied from **[`tenant-defaults/`](../tenant-defaults/)** only (neutral stubs — not repo-root **`CYRUS.md`**, **`data/config.json`**, or **`docker-seed/docs`**). **`--full-team`** copies **`tenant-defaults/team/*.md`** only when that folder contains agent markdown; otherwise it skips with a warning. No `launchpad` / `finance` / `wynnset` files are created automatically; add more SQLite files under the tenant **`data/`** with **`POST /api/db`** or out-of-band tools. The dashboard serves **Career / Finance / Business** sections with empty tables when those DBs are absent. **`--claim-legacy`** is only for the one-time step after a flat-volume migration (see server boot logs); **additional users omit it.**  
+**Fly.io:** **`/app/docker-seed/brain.sql`** is in the image; run **`node /app/scripts/brain-add-user.cjs …`** (default primary seed **`/app/data`** only has `registry.sql`, so the script still picks up **`brain.sql`** from **`/app/docker-seed`**). Workspace templates for **`brain-add-user`** come from **`/app/tenant-defaults/`** (copied in the Dockerfile). **`/app/seed/`** is still used by **`init-volume.sh`** for legacy single-volume layout when that path runs.
+
+**Legacy migration (first boot with `BRAIN_MULTI_USER=1`):** [`app/volume-migrate.js`](../app/volume-migrate.js) moves the first tenant into **`users/<uuid>/{workspace,data}/`** when no migration marker exists yet.
+
+- **Flat volume** (`DATA_DIR` and **`DB_DIR` point at the same directory**, e.g. Fly’s `/data`): everything lives together; `team/`, `CYRUS.md`, and the four `*.db` files are moved from that root into the tenant tree (same behavior as before).
+- **Split layout** (typical **local dev**): SQLite files under **`…/data/`** (this is the tenancy volume root = `DB_DIR` / `TENANT_VOLUME_ROOT`), while `CYRUS.md`, `team/`, `docs/`, `team-inbox/`, and `owners-inbox/` sit in the **repo parent** next to `data/`. Migration detects that when the volume folder is named `data` and the parent contains `CYRUS.md` or `team/`, and moves those trees into the new tenant **`workspace/`**. If **`DATA_DIR`** is set and resolves to a different path than `DB_DIR`, that directory is used as the workspace source instead. Override with **`LEGACY_WORKSPACE_DIR`** if needed.
+
+**Fly.io:** set `[env] BRAIN_MULTI_USER = "1"` (or equivalent), then **`fly secrets set SESSION_SECRET='…'`**. Use **`BRAIN_MULTI_USER=1`** in the machine environment so [`scripts/init-volume.sh`](../scripts/init-volume.sh) skips the flat `/data` seed when you rely on per-tenant dirs only. When **`DATA_DIR` and `DB_DIR` are both `/data`**, migration is flat-volume style. Then run **`brain-add-user.cjs --claim-legacy`** once after the server creates **`.legacy-tenant-uuid`**, unless you provision tenants only with **`brain-add-user`** (no legacy volume).
+
+**API scripts:** per-user **`api_token`** in `registry.db` (optional column, set via **`--api-token`** on add-user). Send **`Authorization: Bearer <token>`** for `POST /api/db` and `POST /api/upload` without a browser session. The legacy **`BRAIN_API_TOKEN`** bypass is disabled in multi-user mode.
+
+Single-tenant mode is unchanged: omit **`BRAIN_MULTI_USER`**, use **`DASHBOARD_PASSWORD`** as today.
+
+**Docker / Fly build:** Image seeds that must be in git for remote builds live under **[`docker-seed/`](../docker-seed/)** — `registry.sql`, **`brain.sql`**, `config.json`, **`CYRUS.md`**, **`team/`**, **`docs/`** (Dockerfile copies from there, not from repo root). After a **local split migration**, repo-root `team/` and `CYRUS.md` may be gone; refresh seeds with e.g. `cp -R data/users/<id>/workspace/{CYRUS.md,team,docs} docker-seed/` (adjust paths) before `fly deploy`. The **`data/`** directory stays gitignored for databases.
 
 ---
 

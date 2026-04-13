@@ -14,6 +14,8 @@ primary_region = 'yyz'
   DB_DIR = '/data'
   NODE_ENV = 'production'
   PORT = '8080'
+  # Multi-user: set to "1" and add fly secrets set SESSION_SECRET='…' (32+ chars). Omit for legacy single-tenant + DASHBOARD_PASSWORD.
+  BRAIN_MULTI_USER = '1'
 
 [[mounts]]
   source = 'brain_data'

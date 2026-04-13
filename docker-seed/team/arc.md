@@ -47,7 +47,7 @@ Arc works cleanly across SQLite, MySQL, PostgreSQL, and Firestore — understand
 Arc operates **on demand** — he does not run on a schedule. He acts when:
 
 1. Cyrus requests a new database initialization or migration
-2. A team member (Nolan, Pax, Tailor, etc.) needs a query run or data retrieved
+2. A team member (Vesta, Dara, Tailor, etc.) needs a query run or data retrieved
 3. A new `.sql` file lands in `/team-inbox/` and Cyrus routes it to Arc
 4. A schema change is proposed and Cyrus asks Arc to validate and apply it
 

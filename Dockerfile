@@ -15,17 +15,24 @@ RUN npm install --omit=dev
 
 # App code
 COPY app/server.js ./
+COPY app/tenancy-utils.js app/tenancy-utils.test.js app/registry-db.js app/tenant-db.js app/volume-migrate.js ./
 COPY app/chat-sdk-runner.mjs app/mcp-brain-db.mjs ./
+# Tracked seeds (not under gitignored data/) so remote Fly builds receive them
+COPY docker-seed/registry.sql ./data/registry.sql
+COPY docker-seed/brain.sql ./docker-seed/brain.sql
 COPY app/dashboard.html app/login.html app/dashboard.css app/dashboard-app.js app/favicon.svg ./
 
-# Seed files — copied to /data volume on first boot only
-COPY team/        ./seed/team/
-COPY docs/        ./seed/docs/
-COPY CYRUS.md     ./seed/CYRUS.md
-COPY data/config.json ./seed/config.json
+# Seed files (under docker-seed/ so Fly/git builds work after local migration moved repo-root team/ & CYRUS.md)
+COPY docker-seed/team/        ./seed/team/
+COPY docker-seed/docs/        ./seed/docs/
+COPY docker-seed/CYRUS.md    ./seed/CYRUS.md
+COPY docker-seed/config.json  ./seed/config.json
+COPY tenant-defaults/         ./tenant-defaults/
 
 # Scripts
 COPY scripts/init-volume.sh ./init-volume.sh
+COPY scripts/brain-add-user.cjs ./scripts/brain-add-user.cjs
+COPY scripts/brain-delete-user.cjs ./scripts/brain-delete-user.cjs
 COPY scripts/db             /usr/local/bin/db
 RUN chmod +x init-volume.sh /usr/local/bin/db
 

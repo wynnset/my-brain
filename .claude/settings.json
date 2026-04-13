@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(sqlite3 /Users/aidin/Documents/Websites/claude-code/my-brain/data/finance.db \":*)",
+      "Bash(sqlite3 /Users/aidin/Documents/Websites/claude-code/my-brain/data/finance.db \".tables\")",
+      "Bash(sqlite3 /Users/aidin/Documents/Websites/claude-code/my-brain/data/finance.db \".schema accounts\")",
+      "Bash(sqlite3 /Users/aidin/Documents/Websites/claude-code/my-brain/data/finance.db \".schema transactions\")",
+      "Bash(sqlite3 /Users/aidin/Documents/Websites/claude-code/my-brain/data/finance.db \".schema categories\")",
+      "Bash(sqlite3 /Users/aidin/Documents/Websites/claude-code/my-brain/data/finance.db \"SELECT id, name, institution, account_type, owner, notes FROM accounts ORDER BY id;\")",
+      "Bash(sqlite3 /Users/aidin/Documents/Websites/claude-code/my-brain/data/finance.db \"SELECT id, name, parent_id FROM categories ORDER BY parent_id, id;\")",
+      "WebSearch",
+      "WebFetch(domain:www.strawberry.me)",
+      "WebFetch(domain:strawberry.me)",
+      "WebFetch(domain:www.oreateai.com)",
+      "WebFetch(domain:www.trustpilot.com)",
+      "WebFetch(domain:www.fractional.ai)",
+      "WebFetch(domain:www.acceler8talent.com)",
+      "WebFetch(domain:www.pwc.com)",
+      "WebFetch(domain:www.deltek.com)",
+      "WebFetch(domain:www.groovyweb.co)",
+      "WebFetch(domain:nicolalazzari.ai)",
+      "WebFetch(domain:www.datainsightsmarket.com)"
+    ],
+    "additionalDirectories": [
+      "/tmp/pdf-build",
+      "/private/tmp/pdf-build"
+    ]
+  }
+}

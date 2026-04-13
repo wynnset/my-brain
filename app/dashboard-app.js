@@ -86,12 +86,13 @@ function isChatDelegationToolName(tool) {
 }
 
 /** Default domain for team-inbox upload tags (must match server defaultUploadDomainForAgent). */
-function uploadDefaultDomainForAgent(agentId) {
+function uploadDefaultDomainForAgent(agentId, pages) {
+  var p = pages || { career: true, finance: true, business: true };
   var a = String(agentId || '').toLowerCase();
-  if (a === 'ledger') return 'finance';
-  if (a === 'charter') return 'business';
+  if (a === 'ledger') return p.finance ? 'finance' : 'personal';
+  if (a === 'charter') return p.business ? 'business' : 'personal';
   if (a === 'owner') return 'personal';
-  return 'career';
+  return p.career ? 'career' : 'personal';
 }
 /** Same-origin API calls; sends session cookie when DASHBOARD_PASSWORD auth is enabled. */
 function fetchWithAuth(url, init) {
@@ -409,6 +410,8 @@ document.addEventListener('alpine:init', function() {
       } catch (_) { return 320; }
     })(),
     mobileMenuOpen: false,
+    /** Domain tabs (Career / Finance / Business) — toggled from server from `*.db` files per tenant. */
+    dashboardPages: { career: true, finance: true, business: true },
     theme: (typeof localStorage !== 'undefined' && localStorage.getItem('theme')) || 'system',
     refreshing: false,
     lastRefresh: '',
@@ -513,6 +516,8 @@ document.addEventListener('alpine:init', function() {
     chatAgentProfileHtml: '',
     _osMqListener: null,
     loginRequired: false,
+    /** Multi-user: `{ login, displayName }` from `/api/auth-status` when signed in. */
+    sessionAccount: null,
     lastActionError: '',
     actionItemEditorOpen: false,
     actionItemSaving: false,
@@ -528,7 +533,7 @@ document.addEventListener('alpine:init', function() {
       details: '',
       due_date: '',
       urgency: 'medium',
-      domain: 'career',
+      domain: 'personal',
       project_category: '',
       effort_hours: '',
       project_week: '',
@@ -551,11 +556,21 @@ document.addEventListener('alpine:init', function() {
       var self = this;
       fetch('/api/auth-status', { credentials: 'include' })
         .then(function(r) { return r.json(); })
-        .then(function(d) { self.loginRequired = !!d.loginRequired; })
-        .catch(function() {});
+        .then(function(d) {
+          self.loginRequired = !!d.loginRequired;
+          self.sessionAccount = d.account || null;
+          if (d.dashboardPages) {
+            self.dashboardPages = {
+              career: !!d.dashboardPages.career,
+              finance: !!d.dashboardPages.finance,
+              business: !!d.dashboardPages.business,
+            };
+          }
+          self.onHashChange();
+        })
+        .catch(function() { self.onHashChange(); });
       this.refreshIcons();
       window.addEventListener('hashchange', function() { self.onHashChange(); });
-      this.onHashChange();
       this.setupDropZone();
       setInterval(function() {
         if (['home','career','finance','business'].indexOf(self.page) >= 0) self.loadPage(self.page, true);
@@ -1131,6 +1146,9 @@ document.addEventListener('alpine:init', function() {
         : 'text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700';
     },
     go(p) {
+      if (p === 'career' && !this.dashboardPages.career) p = 'home';
+      if (p === 'finance' && !this.dashboardPages.finance) p = 'home';
+      if (p === 'business' && !this.dashboardPages.business) p = 'home';
       if (p !== 'files') {
         this.viewerOpen = false;
         this.viewerPath = null;
@@ -1166,6 +1184,18 @@ document.addEventListener('alpine:init', function() {
       }
       var map = { '': 'home', 'career': 'career', 'finance': 'finance', 'business': 'business', 'files': 'files' };
       var nextPage = map[raw] || 'home';
+      if (nextPage === 'career' && !this.dashboardPages.career) {
+        nextPage = 'home';
+        if (raw === 'career') history.replaceState(null, '', '#/');
+      }
+      if (nextPage === 'finance' && !this.dashboardPages.finance) {
+        nextPage = 'home';
+        if (raw === 'finance') history.replaceState(null, '', '#/');
+      }
+      if (nextPage === 'business' && !this.dashboardPages.business) {
+        nextPage = 'home';
+        if (raw === 'business') history.replaceState(null, '', '#/');
+      }
       if (nextPage !== 'files') {
         this.viewerOpen = false;
         this.viewerPath = null;
@@ -1292,6 +1322,18 @@ document.addEventListener('alpine:init', function() {
       this.actionItemEditorOpen = false;
       this.actionItemError = '';
     },
+    actionItemDomainOptions() {
+      var d = this.actionItemDraft || {};
+      var cur = String(d.domain || '');
+      var o = [];
+      if (this.dashboardPages.career || cur === 'career') o.push({ value: 'career', label: 'career' });
+      if (this.dashboardPages.finance || cur === 'finance') o.push({ value: 'finance', label: 'finance' });
+      if (this.dashboardPages.business || cur === 'business') o.push({ value: 'business', label: 'business' });
+      o.push({ value: 'personal', label: 'personal' });
+      o.push({ value: 'family', label: 'family' });
+      return o;
+    },
+
     openActionItemEditor(item, pageKey) {
       var self = this;
       if (!item || item.id == null) return;
@@ -1306,7 +1348,7 @@ document.addEventListener('alpine:init', function() {
         details: item.details != null ? String(item.details) : '',
         due_date: item.due_date || '',
         urgency: item.urgency || 'medium',
-        domain: item.domain || 'career',
+        domain: item.domain || 'personal',
         project_category: item.project_category != null ? String(item.project_category) : '',
         effort_hours: item.effort_hours != null && item.effort_hours !== '' ? String(item.effort_hours) : '',
         project_week: item.project_week != null ? String(item.project_week) : '',
@@ -1430,14 +1472,22 @@ document.addEventListener('alpine:init', function() {
 
     renderHome(d) {
       this.actionData.home = d.actionItems || [];
+      if (d.dashboardPages) {
+        this.dashboardPages = {
+          career: !!d.dashboardPages.career,
+          finance: !!d.dashboardPages.finance,
+          business: !!d.dashboardPages.business,
+        };
+      }
       var summary = d.domainSummary || [];
       var domainMap = {};
       summary.forEach(function(r) { domainMap[r.domain] = r; });
+      var pages = this.dashboardPages;
       var domains = [
-        { domain: 'career',   label: 'Career',   link: '#/career',   color: 'text-blue-600 dark:text-blue-400' },
-        { domain: 'finance',  label: 'Finance',  link: '#/finance',  color: 'text-green-600 dark:text-green-400' },
-        { domain: 'business', label: 'Business', link: '#/business', color: 'text-purple-600 dark:text-purple-400' },
-      ];
+        { domain: 'career',   label: 'Career',   link: '#/career',   color: 'text-blue-600 dark:text-blue-400', show: pages.career },
+        { domain: 'finance',  label: 'Finance',  link: '#/finance',  color: 'text-green-600 dark:text-green-400', show: pages.finance },
+        { domain: 'business', label: 'Business', link: '#/business', color: 'text-purple-600 dark:text-purple-400', show: pages.business },
+      ].filter(function(d2) { return d2.show; });
       this.homeDomainCardsHtml = domains.map(function(d2) {
         var r = domainMap[d2.domain] || {};
         return statCard({
@@ -2217,7 +2267,7 @@ document.addEventListener('alpine:init', function() {
             files.forEach(function(f) { fd.append('files', f); });
             var agentId = this.normalizeChatAgentId(this.chatAgent);
             fd.append('createdBy', agentId);
-            fd.append('domain', uploadDefaultDomainForAgent(agentId));
+            fd.append('domain', uploadDefaultDomainForAgent(agentId, self.dashboardPages));
             await fetchWithAuth('/api/upload', { method: 'POST', body: fd });
           } catch (up) {
             alert('Upload failed: ' + (up.message || String(up)));
@@ -2439,7 +2489,7 @@ document.addEventListener('alpine:init', function() {
       var formData = new FormData();
       for (var i = 0; i < files.length; i++) formData.append('files', files[i]);
       formData.append('createdBy', 'owner');
-      formData.append('domain', uploadDefaultDomainForAgent('owner'));
+      formData.append('domain', uploadDefaultDomainForAgent('owner', self.dashboardPages));
       fetchWithAuth('/api/upload', { method: 'POST', body: formData })
         .then(function(r) { return r.json(); })
         .then(function(data) {

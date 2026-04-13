@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-04-11  
 **Author:** Ledger  
-**Database:** `/Users/aidin/Documents/Websites/claude-code/my-brain/data/finance.db`
+**Database:** your tenant’s `data/finance.db` (path may differ by host)
 
 ---
 

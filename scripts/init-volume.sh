@@ -2,6 +2,18 @@
 # init-volume.sh — seeds the persistent volume on first boot only.
 # On subsequent boots (.initialized exists), exits immediately after repairs.
 
+# Multi-user (BRAIN_MULTI_USER=1): no flat /data/{team,docs,...} seed here.
+# Tenants live under /data/users/<uuid>/{workspace,data}/ — provision with scripts/brain-add-user.cjs.
+# Server creates registry.db on boot; legacy flat volumes are migrated on first server start.
+if [ "$BRAIN_MULTI_USER" = "1" ]; then
+  mkdir -p /data/users
+  if [ ! -f /data/.initialized ]; then
+    touch /data/.initialized
+    echo "Multi-user volume: /data/users ready (add tenants with brain-add-user.cjs)."
+  fi
+  exit 0
+fi
+
 # ── Repairs (run every boot; volume may already be .initialized) ─────────────
 # 1) Bogus file /data/team/team or /data/docs/docs — happens when a folder is
 #    uploaded as a single file (SFTP / bad archive) instead of as a directory.

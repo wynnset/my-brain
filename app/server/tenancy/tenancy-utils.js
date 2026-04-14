@@ -10,8 +10,12 @@ function isMultiUser() {
   return process.env.BRAIN_MULTI_USER === '1';
 }
 
-/** Default DB / tenancy volume when env unset — keep in sync with server.js `DB_DIR` default. */
-const DEFAULT_VOLUME_ROOT = path.join(__dirname, '..', 'data');
+/**
+ * Default DB / tenancy volume when env unset — must match server.js `DB_DIR` default
+ * (`path.join(__dirname, '..', 'data')` with server.js living in `app/` → repo `data/`).
+ * From `app/server/tenancy/` we need three `..` to reach the repo root.
+ */
+const DEFAULT_VOLUME_ROOT = path.join(__dirname, '..', '..', '..', 'data');
 
 /** Volume root: registry.db + users/ (Fly: /data when DB_DIR=/data). */
 function volumeRoot() {

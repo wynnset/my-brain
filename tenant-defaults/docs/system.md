@@ -8,6 +8,7 @@ Your account is a **tenant** on a shared server: this folder is your **workspace
 |------|---------|
 | **`CYRUS.md`** | Orchestrator brief — used as the system prompt when you chat with **Cyrus**. Edit to match how you want work routed. |
 | **`config.json`** | App settings (e.g. currency, thresholds). Database paths are under your tenant **`data/`** (same UUID as this workspace). |
+| **`dashboard.json`** (optional) | Declares which dashboard tabs exist for **this** workspace. Omitting the file (or using `"pages": []`) yields **Home + Files** only. Add **`template: "datatable"`** pages (`db` basename + single **`SELECT`**) for extra read-only tables. Use **`template: "sections"`** with a **`sections`** array to show **several datatables on one nav tab** (each child has **`id`**, **`label`**, **`template": "datatable"`**, **`db`**, **`sql`**). |
 | **`docs/`** | Reference for you and for agents. **`docs/profile.md`** is the right place for your background, goals, and tone so chat stays accurate. |
 | **`team/`** | Optional: one **`.md`** file per specialist agent (filename = agent id). Empty is fine until you add personas; chat defaults to Cyrus only. |
 | **`owners-inbox/`** | Where agents should drop finished reports and artifacts. |
@@ -18,14 +19,14 @@ Your account is a **tenant** on a shared server: this folder is your **workspace
 | Path | Purpose |
 |------|---------|
 | **`brain.db`** | Cross-domain **action items** — the main todo ledger the dashboard reads first. |
-| **`*.db`** | Optional domain databases (e.g. career, finance). They appear in the app when present; empty sections otherwise. You can add SQLite files via the dashboard **`POST /api/db`** (or your host’s documented tooling). |
+| **`*.db`** | Optional SQLite files under `data/`. **`brain.db`** is the shared action-item ledger. Add other `*.db` files as needed; **`dashboard.json`** decides whether the dashboard shows legacy domain pages or custom **`datatable`** views against those files. |
 | **`chat-sessions/`** | Saved dashboard chat threads (JSON). |
 | **`chat-tool-audit.log`** | Optional append-only log of tool use from chat (if enabled on the server). |
 | **Server runtime data** | The host may create dot-prefixed directories under your tenant `data/` for chat isolation — do not delete them while the app is running. |
 
 ## Identity in chat
 
-The server attaches your **login** and **display name** from **`registry.db`** to the chat system prompt so “who am I?” matches **your** account. For anything richer than a name, keep **`docs/profile.md`** up to date.
+The server attaches your **login** and **display name** from your account to the chat system prompt so “who am I?” matches **your** account. For anything richer than a name, keep **`docs/profile.md`** up to date.
 
 ## Dashboard & chat (host-controlled)
 

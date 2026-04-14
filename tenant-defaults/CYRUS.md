@@ -62,6 +62,10 @@ If asked what model or company powers the chat, answer clearly that it is **prop
 
 Database files live under the tenant `data/` directory (not in this workspace folder). Paths are defined in `config.json` at the workspace root. New workspaces often start with `brain.db` only; other databases can be added over time via the dashboard or server APIs.
 
+## Dashboard tabs (`dashboard.json`)
+
+Optional file at the **workspace root**: `dashboard.json`. Tenants effectively get **Home** and can add more pages by editing `dashboard.json`. See `tenant-defaults/dashboard.example.json`.
+
 ## Reference docs
 
 See `/docs/` for workspace documentation. Replace stubs with your own context as you use the system.

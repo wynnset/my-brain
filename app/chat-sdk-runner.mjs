@@ -4,27 +4,9 @@
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
+import { appendAssistantStreamChunk } from './public/shared/stream-chunk.mjs';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
-
-/** Keep in sync with appendAssistantStreamChunk in dashboard-app.js / server.js */
-function appendAssistantStreamChunk(existing, chunk) {
-  const e = String(existing || '');
-  const c = String(chunk || '');
-  if (!c) return e;
-  if (!e) return c;
-  const fc = c.charCodeAt(0);
-  if (fc === 32 || fc === 10 || fc === 13 || fc === 9) return e + c;
-  const t = e.replace(/[\s\u00a0]+$/g, '');
-  if (!t) return e + c;
-  let j = t.length - 1;
-  while (j >= 0 && /['")\]\u2019\u201d]/.test(t[j])) j -= 1;
-  const punct = j >= 0 ? t[j] : '';
-  if (punct === '.' || punct === '!' || punct === '?' || punct === '\u2026') {
-    if (/[A-Za-z]/.test(c[0])) return `${e} ${c}`;
-  }
-  return e + c;
-}
 
 function extractStreamTextDelta(event) {
   if (!event || typeof event !== 'object') return '';
@@ -49,6 +31,48 @@ const GENERIC_SUBAGENT_SEGMENT_SKIP = new Set([
   'best_of_n_runner',
   'best-of-n-runner',
 ]);
+
+/**
+ * Serializable billing snapshot from an Agent SDK `result` message.
+ * @param {unknown} msg
+ * @returns {{ totalCostUsd: number | null, usage: Record<string, number> | null, modelUsage: Record<string, Record<string, number>> | null, numTurns?: number, resultSubtype?: string } | null}
+ */
+function snapshotSdkBillingFromResultMessage(msg) {
+  if (!msg || typeof msg !== 'object' || msg.type !== 'result') return null;
+  const hasCost = typeof msg.total_cost_usd === 'number' && Number.isFinite(msg.total_cost_usd);
+  const hasUsage = msg.usage && typeof msg.usage === 'object';
+  const hasModelUsage =
+    msg.modelUsage && typeof msg.modelUsage === 'object' && Object.keys(msg.modelUsage).length > 0;
+  if (!hasCost && !hasUsage && !hasModelUsage) return null;
+  let usage = null;
+  if (hasUsage) {
+    usage = {};
+    for (const [k, v] of Object.entries(msg.usage)) {
+      if (typeof v === 'number' && Number.isFinite(v)) usage[k] = v;
+    }
+    if (Object.keys(usage).length === 0) usage = null;
+  }
+  let modelUsage = null;
+  if (hasModelUsage) {
+    modelUsage = {};
+    for (const [model, mu] of Object.entries(msg.modelUsage)) {
+      if (!mu || typeof mu !== 'object') continue;
+      const row = {};
+      for (const [k, v] of Object.entries(mu)) {
+        if (typeof v === 'number' && Number.isFinite(v)) row[k] = v;
+      }
+      if (Object.keys(row).length) modelUsage[model] = row;
+    }
+    if (Object.keys(modelUsage).length === 0) modelUsage = null;
+  }
+  return {
+    totalCostUsd: hasCost ? msg.total_cost_usd : null,
+    usage,
+    modelUsage,
+    numTurns: typeof msg.num_turns === 'number' ? msg.num_turns : undefined,
+    resultSubtype: typeof msg.subtype === 'string' ? msg.subtype : undefined,
+  };
+}
 
 function extractToolLabelFromAssistant(message) {
   const content = message?.content;
@@ -110,6 +134,7 @@ export function parsePermissionOptions(spec) {
  * @param {(agentId: string) => void} [opts.onSegmentAgent] when a Task / Agent subagent handoff is detected (best-effort from tool_input)
  * @param {(line: string) => void} [opts.onLog]
  * @param {(sessionId: string) => void} [opts.onInitSession]
+ * @returns {Promise<{ finalText: string, sessionId: string | null, hadError: boolean, errors: string[], sdkBilling: ReturnType<typeof snapshotSdkBillingFromResultMessage> }>}
  */
 export async function runAgentSdkQuery(opts) {
   const { query } = await import('@anthropic-ai/claude-agent-sdk');
@@ -204,6 +229,8 @@ export async function runAgentSdkQuery(opts) {
   let lastResultText = '';
   let hadError = false;
   const errLines = [];
+  /** @type {ReturnType<typeof snapshotSdkBillingFromResultMessage>} */
+  let sdkBilling = null;
 
   const q = query({ prompt: opts.prompt, options });
 
@@ -243,6 +270,8 @@ export async function runAgentSdkQuery(opts) {
 
       if (msg.type === 'result') {
         sessionIdOut = msg.session_id || sessionIdOut;
+        const snap = snapshotSdkBillingFromResultMessage(msg);
+        if (snap) sdkBilling = snap;
         if (msg.subtype === 'success' && typeof msg.result === 'string') {
           lastResultText = msg.result;
         } else {
@@ -264,5 +293,6 @@ export async function runAgentSdkQuery(opts) {
     sessionId: sessionIdOut,
     hadError,
     errors: errLines,
+    sdkBilling,
   };
 }

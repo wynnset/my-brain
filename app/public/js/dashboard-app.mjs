@@ -1,387 +1,41 @@
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-function fmtCurrency(n) {
-  if (n == null) return '—';
-  return new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD', maximumFractionDigits: 0 }).format(n);
-}
-function fmtDate(d) {
-  if (!d) return '—';
-  const parts = d.split('-');
-  return new Date(+parts[0], +parts[1] - 1, +parts[2]).toLocaleDateString('en-CA', { month: 'short', day: 'numeric' });
-}
-function fmtDateLong(d) {
-  if (!d) return '—';
-  const parts = d.split('-');
-  return new Date(+parts[0], +parts[1] - 1, +parts[2]).toLocaleDateString('en-CA', { year: 'numeric', month: 'short', day: 'numeric' });
-}
-function daysFrom(d) {
-  if (!d) return null;
-  const today = new Date(); today.setHours(0,0,0,0);
-  const parts = d.split('-');
-  return Math.round((new Date(+parts[0], +parts[1] - 1, +parts[2]) - today) / 86400000);
-}
-/** Local calendar date YYYY-MM-DD for greeting rollover */
-function localDateKey() {
-  var d = new Date();
-  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
-}
-/** Which time-of-day bucket we're in (local clock); used to refresh greeting when it changes. */
-function homeGreetingPeriod() {
-  var h = new Date().getHours();
-  if (h >= 5 && h < 12) return 'morning';
-  if (h >= 12 && h < 17) return 'afternoon';
-  if (h >= 17 && h < 21) return 'evening';
-  if (h >= 21) return 'late';
-  return 'night';
-}
-/** Time-of-day greeting with a little variety (client local time). */
-function pickHomeGreeting() {
-  var h = new Date().getHours();
-  var morning = ['Good morning', 'Rise and shine', 'Morning — fresh start', 'Happy morning', 'Top of the morning', 'Coffee and Cyrus time?'];
-  var afternoon = ['Good afternoon', 'Afternoon — you\'ve got this', 'Hey — good afternoon', 'Still cruising — good afternoon'];
-  var evening = ['Good evening', 'Evening — how\'s it going?', 'Hey — good evening', 'Golden hour — hello'];
-  var night = ['Good night', 'Still up? Hi there.', 'Burning the midnight oil?', 'Night owl mode — hello', 'Late shift — take it easy'];
-  var lateEvening = ['Good evening', 'Winding down?', 'Almost bedtime — or not?', 'Evening — still going strong?'];
-  var list;
-  if (h >= 5 && h < 12) list = morning;
-  else if (h >= 12 && h < 17) list = afternoon;
-  else if (h >= 17 && h < 21) list = evening;
-  else list = h >= 21 ? lateEvening : night;
-  return list[Math.floor(Math.random() * list.length)];
-}
-function empty(msg) {
-  return '<div class="text-center py-8 text-sm text-slate-400 dark:text-slate-500">' + msg + '</div>';
-}
-function esc(s) {
-  if (!s) return '';
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
-
-/**
- * Join SSE text chunks so sentence boundaries do not glue (e.g. "now." + "Good" → "now. Good").
- * Only inserts a space when the prior text ends in . ! ? (ignoring trailing closers) and the chunk starts with a letter without leading whitespace.
- */
-function appendAssistantStreamChunk(existing, chunk) {
-  var e = String(existing || '');
-  var c = String(chunk || '');
-  if (!c) return e;
-  if (!e) return c;
-  var fc = c.charCodeAt(0);
-  if (fc === 32 || fc === 10 || fc === 13 || fc === 9) return e + c;
-  var t = e.replace(/[\s\u00a0]+$/g, '');
-  if (!t) return e + c;
-  var j = t.length - 1;
-  while (j >= 0 && /['")\]\u2019\u201d]/.test(t[j])) j--;
-  var punct = j >= 0 ? t[j] : '';
-  if (punct === '.' || punct === '!' || punct === '?' || punct === '\u2026') {
-    var ch = c[0];
-    if (/[A-Za-z]/.test(ch)) return e + ' ' + c;
-  }
-  return e + c;
-}
-
-/** Claude Code / Agent SDK may emit `Task` or `Agent` for subagent delegation. */
-function isChatDelegationToolName(tool) {
-  var t = String(tool || '').trim().toLowerCase();
-  return t === 'task' || t === 'agent';
-}
-
-/** Default domain for team-inbox upload tags (must match server defaultUploadDomainForAgent). */
-function uploadDefaultDomainForAgent(agentId, pages) {
-  var p = pages || { career: true, finance: true, business: true };
-  var a = String(agentId || '').toLowerCase();
-  if (a === 'ledger') return p.finance ? 'finance' : 'personal';
-  if (a === 'charter') return p.business ? 'business' : 'personal';
-  if (a === 'owner') return 'personal';
-  return p.career ? 'career' : 'personal';
-}
-/** Same-origin API calls; sends session cookie when DASHBOARD_PASSWORD auth is enabled. */
-function fetchWithAuth(url, init) {
-  var cfg = init ? Object.assign({}, init) : {};
-  cfg.credentials = 'include';
-  return fetch(url, cfg).then(function(res) {
-    if (res.status === 401) window.location.href = '/login.html';
-    return res;
-  });
-}
-const DOMAIN_CLASSES = {
-  career:   'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300',
-  finance:  'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300',
-  business: 'bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300',
-  personal: 'bg-orange-100 dark:bg-orange-900/40 text-orange-700 dark:text-orange-300',
-  family:   'bg-pink-100 dark:bg-pink-900/40 text-pink-700 dark:text-pink-300',
-};
-function filterItems(items, range) {
-  if (range === 'all') return items;
-  return items.filter(function(item) {
-    if (!item.due_date) return range === 'nodateset';
-    var days = daysFrom(item.due_date);
-    if (range === 'overdue') return days < 0;
-    if (range === 'today')   return days === 0;
-    if (range === 'week')    return days >= 0 && days <= 7;
-    if (range === '2weeks')  return days >= 0 && days <= 14;
-    return true;
-  });
-}
-function sortItems(items, sortKey) {
-  var urgencyOrder = { critical: 1, high: 2, medium: 3, low: 4 };
-  return items.slice().sort(function(a, b) {
-    var au = urgencyOrder[a.urgency] || 3;
-    var bu = urgencyOrder[b.urgency] || 3;
-    var ad = a.due_date != null ? daysFrom(a.due_date) : 9999;
-    var bd = b.due_date != null ? daysFrom(b.due_date) : 9999;
-    if (sortKey === 'date-urgency') return ad !== bd ? ad - bd : au - bu;
-    if (sortKey === 'urgency-date') return au !== bu ? au - bu : ad - bd;
-    if (sortKey === 'urgency')      return au - bu;
-    if (sortKey === 'date')         return ad - bd;
-    return 0;
-  });
-}
-function statusBadge(status) {
-  var map = {
-    offer: 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300',
-    interview_final: 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300',
-    interview_2: 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300',
-    interview_1: 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300',
-    phone_screen: 'bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300',
-    responded: 'bg-teal-100 dark:bg-teal-900/40 text-teal-700 dark:text-teal-300',
-    applied: 'bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300',
-    researching: 'bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-400',
-    upcoming: 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300',
-    overdue: 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300',
-    completed: 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300',
-    lead: 'bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300',
-    conversation: 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300',
-    proposal_sent: 'bg-yellow-100 dark:bg-yellow-900/40 text-yellow-700 dark:text-yellow-300',
-    negotiating: 'bg-orange-100 dark:bg-orange-900/40 text-orange-700 dark:text-orange-300',
-    won: 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300',
-    'n/a': 'bg-slate-100 dark:bg-slate-700 text-slate-400 dark:text-slate-500',
-  };
-  var cls = map[status] || 'bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-400';
-  var label = (status || '').replace(/_/g, ' ');
-  return '<span class="text-xs font-medium px-2 py-0.5 rounded-full ' + cls + '">' + esc(label) + '</span>';
-}
-function makeTable(cols, rows, emptyMsg) {
-  emptyMsg = emptyMsg || 'No data';
-  if (!rows || !rows.length) return empty(emptyMsg);
-  var thead = cols.map(function(c) {
-    return '<th class="text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wide px-4 py-2.5 whitespace-nowrap">' + c.label + '</th>';
-  }).join('');
-  var tbody = rows.map(function(row) {
-    var cells = cols.map(function(c) {
-      var val = c.render ? c.render(row[c.key], row) : esc(row[c.key]);
-      return '<td class="px-4 py-2.5 text-sm text-slate-700 dark:text-slate-200 whitespace-nowrap">' + (val == null ? '—' : val) + '</td>';
-    }).join('');
-    return '<tr class="border-t border-slate-100 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/50">' + cells + '</tr>';
-  }).join('');
-  return '<table class="w-full min-w-full"><thead class="bg-slate-50 dark:bg-slate-700/50"><tr>' + thead + '</tr></thead><tbody>' + tbody + '</tbody></table>';
-}
-function statCard(opts) {
-  var inner = '<div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4' + (opts.link ? ' cursor-pointer hover:border-blue-400 dark:hover:border-blue-500 transition-colors' : '') + '">' +
-    '<p class="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wide">' + esc(opts.label) + '</p>' +
-    '<p class="text-xl font-bold mt-1 ' + (opts.colorClass || 'text-slate-900 dark:text-white') + '">' + esc(String(opts.value)) + '</p>' +
-    (opts.sub ? '<p class="text-xs text-slate-400 dark:text-slate-500 mt-0.5">' + esc(opts.sub) + '</p>' : '') +
-    '</div>';
-  if (opts.link) return '<a href="' + opts.link + '">' + inner + '</a>';
-  return inner;
-}
-function progressBar(value, max, colorClass) {
-  colorClass = colorClass || 'bg-blue-500';
-  var pct = max > 0 ? Math.min(100, Math.round((value / max) * 100)) : 0;
-  return '<div class="w-full bg-slate-100 dark:bg-slate-700 rounded-full h-2 mt-1">' +
-    '<div class="' + colorClass + ' h-2 rounded-full progress-bar" style="width:' + pct + '%"></div>' +
-    '</div>';
-}
-function buildWeekCardHtml(week, goals) {
-  if (!week) return empty('No active week');
-  var goalsMetCount = (goals || []).filter(function(g) { return g.is_met; }).length;
-  var goalsTotal = (goals || []).length;
-  var hoursUsed = week.hours_actual || 0;
-  var hoursBudget = week.hours_budget || 15;
-  var goalsList = goals && goals.length ? '<ul class="space-y-1.5 mt-4">' +
-    goals.slice(0, 8).map(function(g) {
-      return '<li class="flex items-center gap-2 text-sm ' + (g.is_met ? 'text-slate-400 dark:text-slate-500 line-through' : 'text-slate-700 dark:text-slate-200') + '">' +
-        '<span class="w-4 h-4 rounded flex-shrink-0 flex items-center justify-center border text-xs ' + (g.is_met ? 'bg-emerald-500 border-emerald-500 text-white' : 'border-slate-300 dark:border-slate-600') + '">' + (g.is_met ? ICON_SVG_CHECK : '') + '</span>' +
-        esc(g.goal) +
-        '</li>';
-    }).join('') +
-    (goals.length > 8 ? '<li class="text-xs text-slate-400 dark:text-slate-500 pl-6">+' + (goals.length - 8) + ' more goals</li>' : '') +
-    '</ul>' : '';
-  return '<div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-5">' +
-    '<div class="flex items-start justify-between mb-4">' +
-      '<div>' +
-        '<p class="text-xs font-semibold text-blue-500 uppercase tracking-wide">Week ' + week.week_number + ' of 8</p>' +
-        '<h3 class="text-lg font-bold text-slate-900 dark:text-white mt-0.5">' + esc(week.title) + '</h3>' +
-        '<p class="text-sm text-slate-500 dark:text-slate-400">' + esc(week.theme) + '</p>' +
-      '</div>' +
-      '<span class="text-xs text-slate-400 dark:text-slate-500 text-right">' + fmtDate(week.start_date) + ' – ' + fmtDate(week.end_date) + '</span>' +
-    '</div>' +
-    '<div class="grid grid-cols-2 gap-4">' +
-      '<div><div class="flex justify-between text-xs text-slate-500 dark:text-slate-400 mb-1"><span>Hours</span><span>' + hoursUsed + ' / ' + hoursBudget + '</span></div>' + progressBar(hoursUsed, hoursBudget, 'bg-blue-500') + '</div>' +
-      '<div><div class="flex justify-between text-xs text-slate-500 dark:text-slate-400 mb-1"><span>Goals</span><span>' + goalsMetCount + ' / ' + goalsTotal + '</span></div>' + progressBar(goalsMetCount, goalsTotal, 'bg-emerald-500') + '</div>' +
-    '</div>' +
-    goalsList +
-  '</div>';
-}
-
-var ICON_SVG_CHECK = '<svg xmlns="http://www.w3.org/2000/svg" class="inline w-3.5 h-3.5" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
-var ICON_SVG_ARROW_UP = '<span class="inline-flex align-middle text-emerald-500" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19V5M5 12l7-7 7 7"/></svg></span>';
-var ICON_SVG_ARROW_DOWN = '<span class="inline-flex align-middle text-red-400" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M19 12l-7 7-7-7"/></svg></span>';
-
-function renderChatMarkdown(raw) {
-  if (!raw) return '';
-  try {
-    if (typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined') {
-      var html = marked.parse(raw, { breaks: true, gfm: true });
-      return DOMPurify.sanitize(html, { USE_PROFILES: { html: true } });
-    }
-  } catch (_) {}
-  return esc(raw).replace(/\n/g, '<br>');
-}
-
-/** One-line role from team brief / CYRUS.md (`**Role:**` preferred, else H1 subtitle after em dash). */
-function parseAgentBriefSummary(md) {
-  if (!md) return '';
-  var text = String(md).replace(/^\ufeff/, '');
-  var roleLine = text.match(/^\s*\*\*Role:\*\*\s*(.+)$/im);
-  if (roleLine) return roleLine[1].replace(/\s*#+\s*$/, '').trim();
-  var h1 = text.match(/^#\s+(.+)$/m);
-  if (!h1) return '';
-  var title = h1[1].trim();
-  var splitRe = /\s[—–-]\s/;
-  var idx = title.search(splitRe);
-  if (idx >= 0) return title.slice(idx).replace(splitRe, '').trim();
-  return title;
-}
-
-var BRAIN_FILE_DIRS_RE = '(owners-inbox|team-inbox|team|docs)';
-
-function brainFileHash(dir, fileName) {
-  return '#/files/' + encodeURIComponent(dir) + '/' + encodeURIComponent(fileName);
-}
-
-/** Strip trailing punctuation / stray backticks models often glue to paths */
-function trimBrainPathSegment(seg) {
-  return String(seg || '').replace(/[`'")\].,;:]+$/g, '').replace(/^[`'"(]+/g, '').trim();
-}
-
-/**
- * Fix hash segments when markdown linkification glues `](...)` into the path or leaves `[` on the dir.
- * Used when parsing #/files/dir/name from the location bar or a clicked href.
- */
-function sanitizeBrainHashDir(dir) {
-  var d = String(dir || '').trim();
-  try {
-    d = decodeURIComponent(d);
-  } catch (_) {}
-  return d.replace(/^\[+/, '').replace(/\]+$/, '').trim();
-}
-
-function sanitizeBrainHashFileName(name) {
-  var n = String(name || '').trim();
-  try {
-    n = decodeURIComponent(n);
-  } catch (_) {}
-  n = n.replace(/^\[+/, '');
-  n = n.replace(/\]\([^)]*\)\s*$/g, '');
-  n = n.replace(/\]+$/, '').trim();
-  return n;
-}
-
-/**
- * Turn repo paths into markdown links to #/files/dir/name.
- * Handles inline code like `/ `owners-inbox/foo.md`` (slash + backticks) so we do not leave
- * stray backticks that break `[text](url)` parsing.
- */
-function linkifyBrainFileReferences(raw) {
-  if (!raw) return raw;
-  var s = String(raw);
-  // Fix older bad links where a stray backtick became %60 before ')'
-  s = s.replace(/(\(#\/files\/[^)]+?)%60+(\))/g, '$1$2');
-
-  // Whole markdown link wrapped in backticks — models often emit `/[path](#/files/...)` inside `code`, which prevents link parsing
-  s = s.replace(/`(\/?\s*)\[([^\]\n]+)\]\(\s*#\/files\/([^)\n]+)\s*\)`/gi, function(full, _slash, label, pathTail) {
-    var cleanTail = trimBrainPathSegment(pathTail);
-    if (!cleanTail) return full;
-    return '[' + trimBrainPathSegment(label) + '](#/files/' + cleanTail + ')';
-  });
-
-  // Stray `/` before an in-app file link breaks nothing visually but some pipelines confuse it; normalize to a plain markdown link
-  s = s.replace(/\/(\[[^\]\n]+\]\(\s*#\/files\/[^)\n]+\s*\))/gi, '$1');
-
-  // `CYRUS.md` / legacy `LARRY.md` in model output → canonical file
-  s = s.replace(/(?:\/\s*)?`(LARRY\.md|CYRUS\.md)`/gi, function() {
-    return '[CYRUS.md](#/files/root/CYRUS.md)';
-  });
-
-  // `/ `dir/file.ext`` or `` `dir/file.ext` `` — consume optional slash, spaces, and both backticks
-  s = s.replace(new RegExp('(?:/\\s*)?`(' + BRAIN_FILE_DIRS_RE + '/[^`\\n]+)`', 'gi'), function(full, path) {
-    var clean = trimBrainPathSegment(path);
-    var slash = clean.indexOf('/');
-    if (slash < 0) return full;
-    var dir = clean.slice(0, slash);
-    var name = trimBrainPathSegment(clean.slice(slash + 1));
-    if (!name) return full;
-    var label = dir + '/' + name;
-    return '[' + label + '](' + brainFileHash(dir, name) + ')';
-  });
-
-  // Bare dir/file — skip inside markdown link labels (after '[') and skip paths already under #/files/…
-  // (otherwise `[label](#/files/owners-inbox/x.md)` gets a second link wrapped inside the URL and corrupts the hash).
-  s = s.replace(
-    new RegExp('(?<!\\[)(?<!/files/)\\b' + BRAIN_FILE_DIRS_RE + '/([^\\s\\]\\)\\>\\<"\'\\,`]+)', 'gi'),
-    function(full, dir, rest) {
-      var file = trimBrainPathSegment(rest);
-      if (!file) return full;
-      return '[' + dir + '/' + file + '](' + brainFileHash(dir, file) + ')';
-    }
-  );
-
-  s = s.replace(/(?<!\[)\b(LARRY\.md|CYRUS\.md)\b/gi, function() {
-    return '[CYRUS.md](#/files/root/CYRUS.md)';
-  });
-  return s;
-}
-
-/** If marked still emitted <code>/[label](#/files/...)</code>, turn it into a real link (after entity decode). */
-function unwrapBrainFileLinksFromCodeHtml(html) {
-  if (!html) return html;
-  function decodeBasicEntities(str) {
-    return String(str || '')
-      .replace(/&amp;/g, '&')
-      .replace(/&lt;/g, '<')
-      .replace(/&gt;/g, '>')
-      .replace(/&quot;/g, '"')
-      .replace(/&#39;/g, "'");
-  }
-  return html.replace(
-    /<code>(\/?)\[([^\]<]+)\]\(#\/files\/([^<)]+)\)<\/code>/gi,
-    function(full, _slash, labelHtml, pathHtml) {
-      var pathTail = trimBrainPathSegment(decodeBasicEntities(pathHtml));
-      if (!pathTail || pathTail.length > 512 || /[<"'\\]|\s/.test(pathTail)) return full;
-      var href = '#/files/' + pathTail;
-      var labelText = decodeBasicEntities(labelHtml);
-      return '<a href="' + esc(href) + '">' + esc(labelText) + '</a>';
-    }
-  );
-}
-
-/** Assistant chat bubbles: markdown + auto-links to Files for known paths */
-function renderAssistantMarkdown(raw) {
-  if (!raw) return '';
-  try {
-    if (typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined') {
-      var linked = linkifyBrainFileReferences(String(raw));
-      var html = marked.parse(linked, { breaks: true, gfm: true });
-      html = unwrapBrainFileLinksFromCodeHtml(html);
-      return DOMPurify.sanitize(html, { USE_PROFILES: { html: true } });
-    }
-  } catch (_) {}
-  return esc(raw).replace(/\n/g, '<br>');
-}
-/** Optional markdown body for dashboard action items (details field). */
-function renderActionItemMarkdown(raw) {
-  return renderAssistantMarkdown(raw || '');
-}
+import { appendAssistantStreamChunk } from '../shared/stream-chunk.mjs';
+import {
+  DOMAIN_CLASSES,
+  ICON_SVG_ARROW_DOWN,
+  ICON_SVG_ARROW_UP,
+  ICON_SVG_CHECK,
+  brainFileHash,
+  buildWeekCardHtml,
+  datatableHtmlFromPayload,
+  daysFrom,
+  empty,
+  esc,
+  fetchWithAuth,
+  filterItems,
+  fmtCurrency,
+  fmtDate,
+  fmtDateLong,
+  homeGreetingPeriod,
+  isChatDelegationToolName,
+  linkifyBrainFileReferences,
+  localDateKey,
+  makeTable,
+  parseAgentBriefSummary,
+  pickHomeGreeting,
+  progressBar,
+  renderActionItemMarkdown,
+  renderAssistantMarkdown,
+  renderChatMarkdown,
+  sanitizeBrainHashDir,
+  sanitizeBrainHashFileName,
+  sortItems,
+  statCard,
+  statusBadge,
+  transformTodoJsonFencesToMarkdown,
+  trimBrainPathSegment,
+  unwrapBrainFileLinksFromCodeHtml,
+  uploadDefaultDomainForAgent
+} from './lib/dashboard-helpers.mjs';
 
 document.addEventListener('alpine:init', function() {
   Alpine.data('app', function() { return {
@@ -409,15 +63,20 @@ document.addEventListener('alpine:init', function() {
         return isNaN(w) ? 320 : Math.min(560, Math.max(220, w));
       } catch (_) { return 320; }
     })(),
-    mobileMenuOpen: false,
-    /** Domain tabs (Career / Finance / Business) — toggled from server from `*.db` files per tenant. */
+    /** Domain tabs (Career / Finance / Business) — toggled from server from manifest + `*.db` files per tenant. */
     dashboardPages: { career: true, finance: true, business: true },
+    /** Enabled nav entries from `workspace/dashboard.json` (see `/api/dashboard-manifest`). */
+    dashboardNavPages: [],
     theme: (typeof localStorage !== 'undefined' && localStorage.getItem('theme')) || 'system',
     refreshing: false,
     lastRefresh: '',
     cache: {},
-    loadError: { home: null, career: null, finance: null, business: null },
-    pageReady: { home: false, career: false, finance: false, business: false, files: false },
+    loadError: { home: null, career: null, finance: null, business: null, usage: null },
+    pageReady: { home: false, career: false, finance: false, business: false, files: false, usage: false },
+    /** Last `/api/chat/usage-summary` response (for home footer one-liner). */
+    chatUsageSummaryForHome: null,
+    /** Full usage payload while `page === 'usage'`. */
+    chatUsageSummary: null,
     actionState: {
       home:     { sort: 'date-urgency', group: 'none', range: 'all' },
       career:   { sort: 'date-urgency', group: 'none', range: 'all' },
@@ -448,6 +107,13 @@ document.addEventListener('alpine:init', function() {
     businessSummaryHtml: '',
     businessComplianceHtml: '',
     businessCoaSections: [],
+    datatableHtml: '',
+    datatableLoadError: '',
+    datatableReady: false,
+    datatableTruncated: false,
+    /** Multi-section page: `{ id, label, html, error, loading, skipped?, skipReason?, truncated }[]` */
+    sectionsPagePanels: [],
+    sectionsPageReady: false,
     filesData: {},
     fileSections: [],
     filesLoading: false,
@@ -481,6 +147,8 @@ document.addEventListener('alpine:init', function() {
     chatPrompt: '',
     chatConversationId: null,
     chatMessages: [],
+    /** From server: cumulative SDK billing for the active conversation (Anthropic / Agent SDK). */
+    chatSdkUsageSessionTotals: null,
     chatConversations: [],
     chatSessionTitle: '',
     chatHistoryOpen: false,
@@ -504,6 +172,16 @@ document.addEventListener('alpine:init', function() {
     chatRetryPrompt: '',
     chatFiles: [],
     chatDragActive: false,
+    /** When true, the next chat turn uses server plan phase (read-only tools + JSON checklist). */
+    chatPlanMode: false,
+    /** Editable checklist from the last plan turn (also loaded from session). */
+    chatPlanTodos: [],
+    /** Markdown from `docs/brain-chat-plan.md` when the agent wrote it. */
+    chatPlanMarkdown: '',
+    /** Server `planExecutePending`: user should run the execute step. */
+    chatPlanAwaitingExecute: false,
+    /** When set, markdown plan was saved under this path (owners-inbox). */
+    chatPlanInboxFile: null,
     /** Per slug: { status, summary, markdown?, error? } — full markdown for profile modal. */
     chatAgentMeta: {},
     /** slug -> Promise while `ensureChatAgentMeta` is in flight (dedupe concurrent loads). */
@@ -566,6 +244,9 @@ document.addEventListener('alpine:init', function() {
               business: !!d.dashboardPages.business,
             };
           }
+          if (Array.isArray(d.dashboardNavPages)) {
+            self.dashboardNavPages = d.dashboardNavPages.slice();
+          }
           self.onHashChange();
         })
         .catch(function() { self.onHashChange(); });
@@ -573,7 +254,10 @@ document.addEventListener('alpine:init', function() {
       window.addEventListener('hashchange', function() { self.onHashChange(); });
       this.setupDropZone();
       setInterval(function() {
-        if (['home','career','finance','business'].indexOf(self.page) >= 0) self.loadPage(self.page, true);
+        var slugs = (self.dashboardNavPages || []).map(function(p) { return p.slug; });
+        if (self.page === 'home' || self.page === 'files' || self.page === 'usage' || slugs.indexOf(self.page) >= 0) {
+          self.loadPage(self.page, true);
+        }
       }, 60000);
       this.loadChatAgents().finally(function() {
         self.bootstrapChat().finally(function() {
@@ -600,6 +284,23 @@ document.addEventListener('alpine:init', function() {
 
     ownersInboxFileHash(name) {
       return brainFileHash('owners-inbox', name);
+    },
+
+    chatPlanInboxOpenHref() {
+      var f = this.chatPlanInboxFile;
+      if (!f || !f.dir || !f.name) return '#/files';
+      return brainFileHash(f.dir, f.name);
+    },
+
+    async navigateToOwnersInboxPlan(f) {
+      f = f || this.chatPlanInboxFile;
+      if (!f || !f.dir || !f.name) return;
+      var h = brainFileHash(f.dir, f.name);
+      if (location.hash !== h) {
+        location.hash = h;
+      } else {
+        await this.openFileFromHash(f.dir, f.name);
+      }
     },
 
     pushOwnerInboxToast(name) {
@@ -778,6 +479,193 @@ document.addEventListener('alpine:init', function() {
       this.chatAgentPickerOpen = false;
       this._lockBodyForMobileChat(false);
       this.$nextTick(function() { this.refreshIcons(); }.bind(this));
+    },
+
+    /** True when chat uses the full-viewport mobile panel (below lg / 1024px). */
+    isMobileFullWindowChat() {
+      try {
+        return !!this.chatOpen && window.matchMedia('(max-width: 1023px)').matches;
+      } catch (_) {
+        return false;
+      }
+    },
+
+    chatSdkBillingHasData(b) {
+      if (!b || typeof b !== 'object') return false;
+      if (b.totalCostUsd != null && Number.isFinite(b.totalCostUsd)) return true;
+      if (b.usage && typeof b.usage === 'object' && Object.keys(b.usage).length) return true;
+      if (b.modelUsage && typeof b.modelUsage === 'object' && Object.keys(b.modelUsage).length) return true;
+      return false;
+    },
+
+    chatSdkSessionTotalsHasData(t) {
+      if (!t || typeof t !== 'object') return false;
+      if (t.totalCostUsd != null && Number.isFinite(t.totalCostUsd)) return true;
+      if (t.usage && typeof t.usage === 'object' && Object.keys(t.usage).length) return true;
+      if (t.modelUsage && typeof t.modelUsage === 'object' && Object.keys(t.modelUsage).length) return true;
+      return false;
+    },
+
+    formatChatUsd(v) {
+      if (v == null || !Number.isFinite(Number(v))) return '';
+      try {
+        return new Intl.NumberFormat('en-US', {
+          style: 'currency',
+          currency: 'USD',
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 6,
+        }).format(Number(v));
+      } catch (_) {
+        return '$' + String(v);
+      }
+    },
+
+    /** Short token hint from API-shaped `usage` (input_tokens / output_tokens, etc.). */
+    chatSdkUsageTokenHint(usage) {
+      if (!usage || typeof usage !== 'object') return '';
+      var parts = [];
+      var ink = usage.input_tokens;
+      var outk = usage.output_tokens;
+      if (typeof ink === 'number' && Number.isFinite(ink)) parts.push(ink.toLocaleString() + ' in');
+      if (typeof outk === 'number' && Number.isFinite(outk)) parts.push(outk.toLocaleString() + ' out');
+      return parts.join(' · ');
+    },
+
+    chatSdkBillingSummaryLine(b) {
+      if (!this.chatSdkBillingHasData(b)) return 'Usage';
+      var bits = [];
+      if (b.totalCostUsd != null && Number.isFinite(b.totalCostUsd)) bits.push(this.formatChatUsd(b.totalCostUsd));
+      var hint = this.chatSdkUsageTokenHint(b.usage);
+      if (hint) bits.push(hint);
+      else if (b.modelUsage && typeof b.modelUsage === 'object') {
+        var mk = Object.keys(b.modelUsage);
+        if (mk.length) bits.push(mk.length + ' model' + (mk.length === 1 ? '' : 's'));
+      }
+      if (typeof b.numTurns === 'number' && b.numTurns > 0) bits.push(b.numTurns + ' turns');
+      return bits.length ? bits.join(' · ') : 'Usage';
+    },
+
+    chatSdkBillingDetailText(b) {
+      try {
+        return JSON.stringify(
+          {
+            totalCostUsd: b.totalCostUsd,
+            usage: b.usage || null,
+            modelUsage: b.modelUsage || null,
+            numTurns: b.numTurns,
+            resultSubtype: b.resultSubtype,
+          },
+          null,
+          2
+        );
+      } catch (_) {
+        return String(b);
+      }
+    },
+
+    chatSdkSessionTotalsSummaryLine(t) {
+      if (!this.chatSdkSessionTotalsHasData(t)) return '';
+      var bits = ['Session'];
+      if (t.totalCostUsd != null && Number.isFinite(t.totalCostUsd)) bits.push(this.formatChatUsd(t.totalCostUsd));
+      var hint = this.chatSdkUsageTokenHint(t.usage);
+      if (hint) bits.push(hint + ' (Σ)');
+      else if (t.modelUsage && typeof t.modelUsage === 'object') {
+        var ks = Object.keys(t.modelUsage);
+        if (ks.length) bits.push(ks.length + ' model' + (ks.length === 1 ? '' : 's'));
+      }
+      return bits.join(' · ');
+    },
+
+    chatSdkSessionTotalsDetailText(t) {
+      try {
+        return JSON.stringify(t, null, 2);
+      } catch (_) {
+        return String(t);
+      }
+    },
+
+    /** One-line stats for home footer (month-to-date, UTC, from `/api/chat/usage-summary`). */
+    homeUsageFooterMain() {
+      var u = this.chatUsageSummaryForHome;
+      if (!u || !u.monthToDate) return 'No usage yet';
+      var m = u.monthToDate;
+      var monthKey = m.month || '';
+      var name = 'This month';
+      if (monthKey && monthKey.length >= 7) {
+        try {
+          var d = new Date(monthKey + '-01T12:00:00Z');
+          name = d.toLocaleDateString('en-US', { month: 'long', timeZone: 'UTC' });
+        } catch (_) {}
+      }
+      var usd = typeof m.totalCostUsd === 'number' && Number.isFinite(m.totalCostUsd) ? m.totalCostUsd : 0;
+      return name + ' usage: $' + usd.toFixed(2);
+    },
+
+    usageTokPair(inTok, outTok) {
+      return (inTok || 0).toLocaleString() + ' in / ' + (outTok || 0).toLocaleString() + ' out tok';
+    },
+
+    usageMonthLabel(ym) {
+      if (!ym || ym.length < 7) return ym || '';
+      try {
+        var d = new Date(ym + '-01T12:00:00Z');
+        return d.toLocaleDateString('en-US', { month: 'short', year: 'numeric', timeZone: 'UTC' });
+      } catch (_) {
+        return ym;
+      }
+    },
+
+    usageWeekLabel(weekMonday) {
+      if (!weekMonday) return '';
+      try {
+        var d0 = new Date(weekMonday + 'T12:00:00Z');
+        var d1 = new Date(d0.getTime() + 6 * 86400000);
+        var o = { month: 'short', day: 'numeric', timeZone: 'UTC' };
+        return (
+          d0.toLocaleDateString('en-US', o) +
+          '\u2013' +
+          d1.toLocaleDateString('en-US', Object.assign({}, o, { year: 'numeric' }))
+        );
+      } catch (_) {
+        return 'Week of ' + weekMonday;
+      }
+    },
+
+    usageGeneratedLabel() {
+      var u = this.chatUsageSummary;
+      if (!u || !u.generatedAt) return '';
+      try {
+        return 'Updated ' + new Date(u.generatedAt).toLocaleString();
+      } catch (_) {
+        return '';
+      }
+    },
+
+    usageSessionCostTwoDecimals(row) {
+      var n = row && typeof row.totalCostUsd === 'number' && Number.isFinite(row.totalCostUsd) ? row.totalCostUsd : 0;
+      return '$' + n.toFixed(2);
+    },
+
+    usageSessionUpdatedLabel(iso) {
+      if (!iso) return '—';
+      try {
+        return new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+      } catch (_) {
+        return String(iso);
+      }
+    },
+
+    async openChatSessionFromUsage(row) {
+      if (!row || !row.id) return;
+      await this.openConversation(String(row.id));
+      this.openChat();
+    },
+
+    async refreshHomeUsageFooter() {
+      try {
+        var r = await fetchWithAuth('/api/chat/usage-summary');
+        if (r.ok) this.chatUsageSummaryForHome = await r.json();
+      } catch (_) {}
     },
 
     chatBubbleHtml(m) {
@@ -989,11 +877,46 @@ document.addEventListener('alpine:init', function() {
     enterDraftChatState() {
       this.chatConversationId = null;
       this.chatMessages = [];
+      this.chatSdkUsageSessionTotals = null;
       this.chatSessionTitle = 'New chat';
       this.chatOutboundQueue = [];
       this.chatOutboundInFlight = false;
       this.chatWorkPanels = [];
+      this.resetChatPlanUiForNewShell();
       try { localStorage.removeItem('brain_last_chat_id'); } catch (_) {}
+    },
+
+    resetChatPlanUiForNewShell() {
+      this.chatPlanTodos = [];
+      this.chatPlanMarkdown = '';
+      this.chatPlanAwaitingExecute = false;
+      this.chatPlanInboxFile = null;
+    },
+
+    hydrateChatPlanFromSession(sess) {
+      if (!sess) return;
+      var pending = sess.planExecutePending === true;
+      this.chatPlanAwaitingExecute = pending;
+      if (!pending) {
+        this.chatPlanTodos = [];
+        this.chatPlanMarkdown = '';
+        this.chatPlanInboxFile = null;
+        return;
+      }
+      this.chatPlanTodos = Array.isArray(sess.planTodos)
+        ? sess.planTodos.map(function (t) {
+            return {
+              id: t.id != null ? String(t.id) : '',
+              title: t.title != null ? String(t.title) : '',
+              status: t.status || 'pending',
+            };
+          })
+        : [];
+      this.chatPlanMarkdown = sess.planMarkdown ? String(sess.planMarkdown) : '';
+      this.chatPlanInboxFile =
+        sess.planInboxFile && sess.planInboxFile.dir && sess.planInboxFile.name
+          ? { dir: String(sess.planInboxFile.dir), name: String(sess.planInboxFile.name) }
+          : null;
     },
 
     async createNewConversation() {
@@ -1016,7 +939,9 @@ document.addEventListener('alpine:init', function() {
       var d = await r.json();
       this.chatConversationId = d.id;
       this.chatMessages = [];
+      this.chatSdkUsageSessionTotals = null;
       this.chatSessionTitle = 'New chat';
+      this.resetChatPlanUiForNewShell();
       try { localStorage.setItem('brain_last_chat_id', d.id); } catch (_) {}
       await this.loadConversationList();
     },
@@ -1032,7 +957,9 @@ document.addEventListener('alpine:init', function() {
           this.chatConversationId = sess.id;
           this.chatAgent = this.normalizeChatAgentId(sess.agent);
           this.chatMessages = sess.messages || [];
+          this.chatSdkUsageSessionTotals = sess.sdkUsageSessionTotals || null;
           this.chatSessionTitle = sess.title || 'Chat';
+          this.hydrateChatPlanFromSession(sess);
           this.chatOutboundQueue = [];
           this.chatOutboundInFlight = false;
           this.chatWorkPanels = [];
@@ -1063,7 +990,9 @@ document.addEventListener('alpine:init', function() {
       this.chatConversationId = sess.id;
       this.chatAgent = this.normalizeChatAgentId(sess.agent);
       this.chatMessages = sess.messages || [];
+      this.chatSdkUsageSessionTotals = sess.sdkUsageSessionTotals || null;
       this.chatSessionTitle = sess.title || 'Chat';
+      this.hydrateChatPlanFromSession(sess);
       try { localStorage.setItem('brain_last_chat_id', id); } catch (_) {}
       this.chatHistoryOpen = false;
       this.chatOutboundQueue = [];
@@ -1079,7 +1008,9 @@ document.addEventListener('alpine:init', function() {
       if (!r.ok) return;
       var sess = await r.json();
       this.chatMessages = sess.messages || [];
+      this.chatSdkUsageSessionTotals = sess.sdkUsageSessionTotals || null;
       this.chatSessionTitle = sess.title || 'Chat';
+      this.hydrateChatPlanFromSession(sess);
     },
 
     async newChatConversation() {
@@ -1139,6 +1070,45 @@ document.addEventListener('alpine:init', function() {
       else this.openChat();
     },
 
+    slugToTemplate(slug) {
+      var nav = this.dashboardNavPages || [];
+      for (var i = 0; i < nav.length; i++) {
+        if (nav[i].slug === slug) return nav[i].template || '';
+      }
+      return '';
+    },
+    getPageTemplate() {
+      if (this.page === 'home' || this.page === 'files' || this.page === 'usage') return '';
+      return this.slugToTemplate(this.page);
+    },
+    currentNavPage() {
+      var nav = this.dashboardNavPages || [];
+      for (var i = 0; i < nav.length; i++) {
+        if (nav[i].slug === this.page) return nav[i];
+      }
+      return null;
+    },
+    currentNavLabel() {
+      var p = this.currentNavPage();
+      return p && p.label ? p.label : '';
+    },
+    currentNavDescription() {
+      var p = this.currentNavPage();
+      return p && p.description != null ? String(p.description) : '';
+    },
+    slugLinkForTemplate(tmpl) {
+      var nav = this.dashboardNavPages || [];
+      for (var i = 0; i < nav.length; i++) {
+        if (nav[i].template === tmpl) return '#/' + nav[i].slug;
+      }
+      return '#/';
+    },
+    navSlugSet() {
+      var o = Object.create(null);
+      (this.dashboardNavPages || []).forEach(function(p) { o[p.slug] = true; });
+      return o;
+    },
+
     navLinkClass(p) {
       var on = this.page === p;
       return on
@@ -1146,9 +1116,16 @@ document.addEventListener('alpine:init', function() {
         : 'text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700';
     },
     go(p) {
-      if (p === 'career' && !this.dashboardPages.career) p = 'home';
-      if (p === 'finance' && !this.dashboardPages.finance) p = 'home';
-      if (p === 'business' && !this.dashboardPages.business) p = 'home';
+      if (p !== 'home' && p !== 'files' && p !== 'usage') {
+        var nav = this.dashboardNavPages || [];
+        var bySlug = nav.some(function(x) { return x.slug === p; });
+        if (!bySlug && ['career', 'finance', 'business'].indexOf(p) >= 0) {
+          var hit = nav.find(function(x) { return x.template === p; });
+          p = hit ? hit.slug : 'home';
+        } else if (!bySlug) {
+          p = 'home';
+        }
+      }
       if (p !== 'files') {
         this.viewerOpen = false;
         this.viewerPath = null;
@@ -1158,19 +1135,24 @@ document.addEventListener('alpine:init', function() {
         this.editorOpen = false;
         this.editorPath = null;
       }
+      var closeMobileChat = this.isMobileFullWindowChat();
       this.page = p;
       location.hash = p === 'home' ? '#/' : '#/' + p;
+      if (closeMobileChat) this.closeChat();
     },
     onHashChange() {
       var raw = (location.hash || '#/').replace(/^#\/?/, '');
       if (raw === 'chat') {
         this.openChat();
-        if (['home','career','finance','business','files'].indexOf(this.page) < 0) this.page = 'home';
+        var slugSet = this.navSlugSet();
+        var okChat = this.page === 'home' || this.page === 'files' || this.page === 'usage' || slugSet[this.page];
+        if (!okChat) this.page = 'home';
         this.loadPage(this.page, false);
         return;
       }
       var fileMatch = raw.match(/^files\/([^/]+)\/(.+)$/);
       if (fileMatch) {
+        if (this.isMobileFullWindowChat()) this.closeChat();
         var fd = sanitizeBrainHashDir(fileMatch[1]);
         var fn = sanitizeBrainHashFileName(fileMatch[2]);
         if (fd === 'root' && fn === 'LARRY.md') {
@@ -1182,19 +1164,31 @@ document.addEventListener('alpine:init', function() {
         this.openFileFromHash(fd, fn);
         return;
       }
-      var map = { '': 'home', 'career': 'career', 'finance': 'finance', 'business': 'business', 'files': 'files' };
-      var nextPage = map[raw] || 'home';
-      if (nextPage === 'career' && !this.dashboardPages.career) {
+      var nextPage = 'home';
+      if (raw === '' || raw === 'home') {
         nextPage = 'home';
-        if (raw === 'career') history.replaceState(null, '', '#/');
-      }
-      if (nextPage === 'finance' && !this.dashboardPages.finance) {
-        nextPage = 'home';
-        if (raw === 'finance') history.replaceState(null, '', '#/');
-      }
-      if (nextPage === 'business' && !this.dashboardPages.business) {
-        nextPage = 'home';
-        if (raw === 'business') history.replaceState(null, '', '#/');
+      } else if (raw === 'files') {
+        nextPage = 'files';
+      } else if (raw === 'usage') {
+        nextPage = 'usage';
+      } else {
+        var slugSet = this.navSlugSet();
+        if (slugSet[raw]) {
+          nextPage = raw;
+        } else if (['career', 'finance', 'business'].indexOf(raw) >= 0) {
+          var nav = this.dashboardNavPages || [];
+          var legacy = nav.find(function(x) { return x.template === raw; });
+          if (legacy) {
+            nextPage = legacy.slug;
+            history.replaceState(null, '', '#/' + legacy.slug);
+          } else {
+            nextPage = 'home';
+            history.replaceState(null, '', '#/');
+          }
+        } else {
+          nextPage = 'home';
+          history.replaceState(null, '', '#/');
+        }
       }
       if (nextPage !== 'files') {
         this.viewerOpen = false;
@@ -1203,6 +1197,7 @@ document.addEventListener('alpine:init', function() {
         this.editorPath = null;
       }
       this.page = nextPage;
+      if (this.isMobileFullWindowChat()) this.closeChat();
       this.loadPage(this.page, false);
     },
 
@@ -1337,9 +1332,13 @@ document.addEventListener('alpine:init', function() {
     openActionItemEditor(item, pageKey) {
       var self = this;
       if (!item || item.id == null) return;
-      this.actionItemPageKey = pageKey || 'home';
+      if (pageKey != null && pageKey !== '') {
+        this.actionItemPageKey = pageKey;
+      } else {
+        this.actionItemPageKey = this.page === 'home' ? 'home' : this.page;
+      }
       this.actionItemShowDomain = this.actionItemPageKey === 'home';
-      this.actionItemShowCareerFields = this.actionItemPageKey === 'career';
+      this.actionItemShowCareerFields = this.getPageTemplate() === 'career';
       this.actionItemShowProjectCategory = true;
       this.actionItemDraft = {
         id: item.id,
@@ -1417,7 +1416,7 @@ document.addEventListener('alpine:init', function() {
     completeActionItem(item, pageKey) {
       var self = this;
       if (!item || item.id == null) return;
-      var pk = pageKey || 'home';
+      var pk = pageKey != null && pageKey !== '' ? pageKey : (this.page === 'home' ? 'home' : this.page);
       fetchWithAuth('/api/action-items/' + item.id, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -1446,28 +1445,321 @@ document.addEventListener('alpine:init', function() {
     async loadPage(name, force) {
       var STALE_MS = 60000;
       var now = Date.now();
-      if (name === 'files') { await this.loadFiles(); return; }
-      if (!force && this.cache[name] && (now - this.cache[name].ts < STALE_MS)) return;
+      if (name === 'files') {
+        this.datatableHtml = '';
+        this.datatableLoadError = '';
+        this.datatableReady = false;
+        this.datatableTruncated = false;
+        this.sectionsPagePanels = [];
+        this.sectionsPageReady = false;
+        await this.loadFiles();
+        return;
+      }
+      if (name === 'usage') {
+        this.datatableHtml = '';
+        this.datatableLoadError = '';
+        this.datatableReady = false;
+        this.datatableTruncated = false;
+        this.sectionsPagePanels = [];
+        this.sectionsPageReady = false;
+        if (!force && this.cache.usage && now - this.cache.usage.ts < STALE_MS) {
+          this.chatUsageSummary = this.cache.usage.data;
+          this.pageReady.usage = true;
+          return;
+        }
+        this.refreshing = true;
+        this.loadError.usage = null;
+        this.pageReady.usage = false;
+        try {
+          var resUsage = await fetchWithAuth('/api/chat/usage-summary');
+          if (!resUsage.ok) throw new Error('HTTP ' + resUsage.status);
+          var usageData = await resUsage.json();
+          this.chatUsageSummary = usageData;
+          this.cache.usage = { ts: Date.now(), data: usageData };
+          this.pageReady.usage = true;
+        } catch (eU) {
+          this.loadError.usage = 'Could not load usage. ' + (eU.message || String(eU));
+          this.chatUsageSummary = null;
+          this.pageReady.usage = true;
+        } finally {
+          this.refreshing = false;
+        }
+        return;
+      }
+      if (name === 'home') {
+        this.datatableHtml = '';
+        this.datatableLoadError = '';
+        this.datatableReady = false;
+        this.datatableTruncated = false;
+        this.sectionsPagePanels = [];
+        this.sectionsPageReady = false;
+        if (!force && this.cache.home && (now - this.cache.home.ts < STALE_MS)) return;
+        this.refreshing = true;
+        this.loadError.home = null;
+        try {
+          var resH = await fetchWithAuth('/api/dashboard');
+          if (!resH.ok) throw new Error('HTTP ' + resH.status);
+          var dataH = await resH.json();
+          this.cache.home = { ts: Date.now(), data: dataH };
+          this.renderHome(dataH);
+          this.pageReady.home = true;
+          this.lastRefresh = 'Updated ' + new Date().toLocaleTimeString('en-CA', { hour: '2-digit', minute: '2-digit' });
+          try {
+            var resUsageH = await fetchWithAuth('/api/chat/usage-summary');
+            if (resUsageH.ok) this.chatUsageSummaryForHome = await resUsageH.json();
+            else this.chatUsageSummaryForHome = null;
+          } catch (_) {
+            this.chatUsageSummaryForHome = null;
+          }
+        } catch (e) {
+          this.loadError.home = 'Failed to load data. Is server.js running? (' + e.message + ')';
+          this.pageReady.home = true;
+          this.chatUsageSummaryForHome = null;
+        } finally {
+          this.refreshing = false;
+        }
+        return;
+      }
+      var slug = name;
+      var template = this.slugToTemplate(slug);
+      if (!template && ['career', 'finance', 'business'].indexOf(slug) >= 0) {
+        var hit = (this.dashboardNavPages || []).find(function(p) { return p.template === slug; });
+        if (hit) {
+          slug = hit.slug;
+          template = hit.template;
+        }
+      }
+      if (!template) {
+        this.refreshing = true;
+        this.loadError[slug] = 'This page is not available.';
+        this.pageReady[slug] = true;
+        this.refreshing = false;
+        return;
+      }
+      if (template === 'sections') {
+        this.datatableHtml = '';
+        this.datatableLoadError = '';
+        this.datatableReady = false;
+        this.datatableTruncated = false;
+        var navPage = this.currentNavPage();
+        var secList = navPage && navPage.sections ? navPage.sections : [];
+        this.sectionsPagePanels = [];
+        this.sectionsPageReady = false;
+        if (!secList.length) {
+          this.sectionsPagePanels = [
+            {
+              id: '_empty',
+              label: '',
+              html: '',
+              error: 'No sections configured for this page.',
+              loading: false,
+              skipped: false,
+              truncated: false,
+            },
+          ];
+          this.sectionsPageReady = true;
+          return;
+        }
+        var allCached = !force;
+        if (!force) {
+          for (var ci = 0; ci < secList.length; ci++) {
+            var sc0 = secList[ci];
+            if (!sc0.enabled || sc0.template !== 'datatable') continue;
+            var ckey0 = 'ds:' + slug + ':' + sc0.id;
+            if (!this.cache[ckey0] || now - this.cache[ckey0].ts >= STALE_MS) {
+              allCached = false;
+              break;
+            }
+          }
+        } else {
+          allCached = false;
+        }
+        if (allCached) {
+          var cachedBuilt = [];
+          for (var cj = 0; cj < secList.length; cj++) {
+            var sc1 = secList[cj];
+            if (!sc1.enabled) {
+              cachedBuilt.push({
+                id: sc1.id,
+                label: sc1.label,
+                html: '',
+                error: '',
+                loading: false,
+                skipped: true,
+                skipReason: 'Waiting for required database file under your account.',
+                truncated: false,
+              });
+            } else if (sc1.template !== 'datatable') {
+              cachedBuilt.push({
+                id: sc1.id,
+                label: sc1.label,
+                html: '',
+                error: 'This section type is not supported in the browser yet.',
+                loading: false,
+                skipped: false,
+                truncated: false,
+              });
+            } else {
+              var ckey1 = 'ds:' + slug + ':' + sc1.id;
+              var bx0 = datatableHtmlFromPayload(this.cache[ckey1].data);
+              cachedBuilt.push({
+                id: sc1.id,
+                label: sc1.label,
+                html: bx0.html,
+                error: '',
+                loading: false,
+                skipped: false,
+                truncated: bx0.truncated,
+              });
+            }
+          }
+          this.sectionsPagePanels = cachedBuilt;
+          this.sectionsPageReady = true;
+          return;
+        }
+        this.refreshing = true;
+        try {
+          var built = [];
+          for (var si = 0; si < secList.length; si++) {
+            var sec = secList[si];
+            if (!sec.enabled) {
+              built.push({
+                id: sec.id,
+                label: sec.label,
+                html: '',
+                error: '',
+                loading: false,
+                skipped: true,
+                skipReason: 'Waiting for required database file under your account.',
+                truncated: false,
+              });
+              continue;
+            }
+            if (sec.template !== 'datatable') {
+              built.push({
+                id: sec.id,
+                label: sec.label,
+                html: '',
+                error: 'This section type is not supported in the browser yet.',
+                loading: false,
+                skipped: false,
+                truncated: false,
+              });
+              continue;
+            }
+            var ck = 'ds:' + slug + ':' + sec.id;
+            try {
+              var resS = await fetchWithAuth(
+                '/api/dashboard-section/' + encodeURIComponent(slug) + '/' + encodeURIComponent(sec.id),
+              );
+              if (!resS.ok) {
+                var errBodyS = {};
+                try {
+                  errBodyS = await resS.json();
+                } catch (_) {}
+                throw new Error((errBodyS && errBodyS.error) || 'HTTP ' + resS.status);
+              }
+              var dataS = await resS.json();
+              this.cache[ck] = { ts: Date.now(), data: dataS };
+              var bx = datatableHtmlFromPayload(dataS);
+              built.push({
+                id: sec.id,
+                label: sec.label,
+                html: bx.html,
+                error: '',
+                loading: false,
+                skipped: false,
+                truncated: bx.truncated,
+              });
+            } catch (errS) {
+              built.push({
+                id: sec.id,
+                label: sec.label,
+                html: '',
+                error: errS.message || String(errS),
+                loading: false,
+                skipped: false,
+                truncated: false,
+              });
+            }
+          }
+          this.sectionsPagePanels = built;
+          this.sectionsPageReady = true;
+          this.lastRefresh = 'Updated ' + new Date().toLocaleTimeString('en-CA', { hour: '2-digit', minute: '2-digit' });
+        } finally {
+          this.refreshing = false;
+        }
+        return;
+      }
+      if (template === 'datatable') {
+        this.sectionsPagePanels = [];
+        this.sectionsPageReady = false;
+        this.datatableHtml = '';
+        this.datatableLoadError = '';
+        this.datatableReady = false;
+        this.datatableTruncated = false;
+        var dtKey = 'dt:' + slug;
+        if (!force && this.cache[dtKey] && (now - this.cache[dtKey].ts < STALE_MS)) {
+          this.renderDatatable(this.cache[dtKey].data);
+          this.datatableReady = true;
+          return;
+        }
+        this.refreshing = true;
+        try {
+          var resDt = await fetchWithAuth('/api/dashboard-page/' + encodeURIComponent(slug));
+          if (!resDt.ok) {
+            var errBody = {};
+            try {
+              errBody = await resDt.json();
+            } catch (_) {}
+            throw new Error((errBody && errBody.error) || 'HTTP ' + resDt.status);
+          }
+          var dataDt = await resDt.json();
+          this.cache[dtKey] = { ts: Date.now(), data: dataDt };
+          this.renderDatatable(dataDt);
+          this.datatableReady = true;
+          this.lastRefresh = 'Updated ' + new Date().toLocaleTimeString('en-CA', { hour: '2-digit', minute: '2-digit' });
+        } catch (e) {
+          this.datatableLoadError = 'Failed to load table. (' + (e.message || String(e)) + ')';
+          this.datatableReady = true;
+        } finally {
+          this.refreshing = false;
+        }
+        return;
+      }
+      this.datatableHtml = '';
+      this.datatableLoadError = '';
+      this.datatableReady = false;
+      this.datatableTruncated = false;
+      this.sectionsPagePanels = [];
+      this.sectionsPageReady = false;
+      var key = template;
+      if (!force && this.cache[key] && (now - this.cache[key].ts < STALE_MS)) return;
       this.refreshing = true;
-      this.loadError[name] = null;
-      var ENDPOINTS = { home: '/api/dashboard', career: '/api/career', finance: '/api/finance', business: '/api/business' };
+      this.loadError[key] = null;
+      var ENDPOINTS = { career: '/api/career', finance: '/api/finance', business: '/api/business' };
       try {
-        var res = await fetchWithAuth(ENDPOINTS[name]);
+        var res = await fetchWithAuth(ENDPOINTS[template]);
         if (!res.ok) throw new Error('HTTP ' + res.status);
         var data = await res.json();
-        this.cache[name] = { ts: Date.now(), data: data };
-        if (name === 'home') this.renderHome(data);
-        else if (name === 'career') this.renderCareer(data);
-        else if (name === 'finance') this.renderFinance(data);
-        else if (name === 'business') this.renderBusiness(data);
-        this.pageReady[name] = true;
+        this.cache[key] = { ts: Date.now(), data: data };
+        if (template === 'career') this.renderCareer(data);
+        else if (template === 'finance') this.renderFinance(data);
+        else if (template === 'business') this.renderBusiness(data);
+        this.pageReady[key] = true;
         this.lastRefresh = 'Updated ' + new Date().toLocaleTimeString('en-CA', { hour: '2-digit', minute: '2-digit' });
       } catch (e) {
-        this.loadError[name] = 'Failed to load data. Is server.js running? (' + e.message + ')';
-        this.pageReady[name] = true;
+        this.loadError[key] = 'Failed to load data. Is server.js running? (' + e.message + ')';
+        this.pageReady[key] = true;
       } finally {
         this.refreshing = false;
       }
+    },
+
+    renderDatatable(d) {
+      var b = datatableHtmlFromPayload(d);
+      this.datatableHtml = b.html;
+      this.datatableTruncated = b.truncated;
     },
 
     renderHome(d) {
@@ -1479,14 +1771,18 @@ document.addEventListener('alpine:init', function() {
           business: !!d.dashboardPages.business,
         };
       }
+      if (Array.isArray(d.dashboardNavPages)) {
+        this.dashboardNavPages = d.dashboardNavPages.slice();
+      }
       var summary = d.domainSummary || [];
       var domainMap = {};
       summary.forEach(function(r) { domainMap[r.domain] = r; });
       var pages = this.dashboardPages;
+      var self = this;
       var domains = [
-        { domain: 'career',   label: 'Career',   link: '#/career',   color: 'text-blue-600 dark:text-blue-400', show: pages.career },
-        { domain: 'finance',  label: 'Finance',  link: '#/finance',  color: 'text-green-600 dark:text-green-400', show: pages.finance },
-        { domain: 'business', label: 'Business', link: '#/business', color: 'text-purple-600 dark:text-purple-400', show: pages.business },
+        { domain: 'career',   label: 'Career',   link: self.slugLinkForTemplate('career'),   color: 'text-blue-600 dark:text-blue-400', show: pages.career },
+        { domain: 'finance',  label: 'Finance',  link: self.slugLinkForTemplate('finance'),  color: 'text-green-600 dark:text-green-400', show: pages.finance },
+        { domain: 'business', label: 'Business', link: self.slugLinkForTemplate('business'), color: 'text-purple-600 dark:text-purple-400', show: pages.business },
       ].filter(function(d2) { return d2.show; });
       this.homeDomainCardsHtml = domains.map(function(d2) {
         var r = domainMap[d2.domain] || {};
@@ -2232,11 +2528,13 @@ document.addEventListener('alpine:init', function() {
       if (!this.chatPrompt.trim()) return;
       var prompt = this.chatPrompt.trim();
       var files = this.chatFiles && this.chatFiles.length ? this.chatFiles.slice() : [];
+      var planPhase = this.chatPlanAwaitingExecute ? 'execute' : this.chatPlanMode ? 'plan' : null;
       if (this.chatOutboundInFlight) {
         this.chatOutboundQueue.push({
           id: 'q-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8),
           prompt: prompt,
           files: files,
+          planPhase: planPhase,
         });
         this.chatPrompt = '';
         this.chatFiles = [];
@@ -2248,15 +2546,42 @@ document.addEventListener('alpine:init', function() {
         return;
       }
       this.chatOutboundInFlight = true;
-      await this.runChatTurn(prompt, files);
+      await this.runChatTurn(prompt, files, { planPhase: planPhase });
+    },
+
+    async executeApprovedChatPlan() {
+      if (!this.chatConversationId || !this.chatPlanAwaitingExecute) return;
+      if (!this.chatPlanTodos || !this.chatPlanTodos.length) {
+        alert('No checklist items. Run a plan turn first.');
+        return;
+      }
+      var p = this.chatPrompt.trim() || 'Execute the approved plan.';
+      if (this.chatOutboundInFlight) {
+        this.chatOutboundQueue.push({
+          id: 'q-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8),
+          prompt: p,
+          files: [],
+          planPhase: 'execute',
+        });
+        this.chatPrompt = '';
+        var self = this;
+        this.$nextTick(function() {
+          self.scrollChatToBottom();
+          self.refreshIcons();
+        });
+        return;
+      }
+      this.chatOutboundInFlight = true;
+      await this.runChatTurn(p, [], { planPhase: 'execute' });
     },
 
     /**
      * Sends one user turn (optional team-inbox file upload, then chat stream).
      * Serializes with the outbound queue: when this turn finishes, the next queued item runs automatically.
      */
-    async runChatTurn(prompt, files) {
+    async runChatTurn(prompt, files, opts) {
       var self = this;
+      opts = opts || {};
       if (!this.chatOutboundInFlight) this.chatOutboundInFlight = true;
       var skipQueueDrain = false;
       files = files || [];
@@ -2303,14 +2628,19 @@ document.addEventListener('alpine:init', function() {
         var streamOk = false;
         var acceptedByServer = false;
         try {
+          var body = {
+            agent: this.normalizeChatAgentId(this.chatAgent),
+            prompt: prompt,
+            conversationId: this.chatConversationId,
+          };
+          if (opts.planPhase) body.planPhase = opts.planPhase;
+          if (opts.planPhase === 'execute' && this.chatPlanTodos && this.chatPlanTodos.length) {
+            body.planTodos = this.chatPlanTodos;
+          }
           var res = await fetchWithAuth('/api/chat', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              agent: this.normalizeChatAgentId(this.chatAgent),
-              prompt: prompt,
-              conversationId: this.chatConversationId,
-            }),
+            body: JSON.stringify(body),
             signal: this.chatAbortController.signal,
           });
           if (!res.ok) {
@@ -2370,6 +2700,39 @@ document.addEventListener('alpine:init', function() {
                     self.openNewWorkPanelForAgent(guessed || '_delegate');
                   }
                 }
+                if (msg.sdkUsageSessionTotals != null) {
+                  self.chatSdkUsageSessionTotals = msg.sdkUsageSessionTotals;
+                }
+                if (msg.phase === 'plan') {
+                  if (Array.isArray(msg.planTodos)) {
+                    self.chatPlanTodos = msg.planTodos.map(function (t) {
+                      return {
+                        id: t.id != null ? String(t.id) : '',
+                        title: t.title != null ? String(t.title) : '',
+                        status: t.status || 'pending',
+                      };
+                    });
+                  }
+                  if (msg.planMarkdown != null) self.chatPlanMarkdown = String(msg.planMarkdown);
+                  self.chatPlanAwaitingExecute = !!(self.chatPlanTodos && self.chatPlanTodos.length);
+                  if (msg.planInboxFile && msg.planInboxFile.dir && msg.planInboxFile.name) {
+                    self.chatPlanInboxFile = {
+                      dir: String(msg.planInboxFile.dir),
+                      name: String(msg.planInboxFile.name),
+                    };
+                    self.navigateToOwnersInboxPlan(self.chatPlanInboxFile);
+                  } else {
+                    self.chatPlanInboxFile = null;
+                  }
+                }
+                if (msg.phase === 'execute') {
+                  self.chatPlanAwaitingExecute = false;
+                }
+                if (msg.phase === 'plan' || msg.phase === 'execute') {
+                  self.$nextTick(function() {
+                    self.refreshIcons();
+                  });
+                }
               } catch (_) {}
             }
             self.scrollChatToBottom();
@@ -2378,7 +2741,13 @@ document.addEventListener('alpine:init', function() {
           self.chatStreamDraft = '';
           await self.refreshActiveConversation();
           await self.loadConversationList();
-          if (streamOk) self.maybeNotifyChatComplete();
+          if (streamOk) {
+            self.maybeNotifyChatComplete();
+            try {
+              delete self.cache.usage;
+            } catch (_) {}
+            if (self.page === 'home') await self.refreshHomeUsageFooter();
+          }
         } catch (err) {
           self.chatStreamDraft = '';
           if (err.name === 'AbortError') {
@@ -2396,6 +2765,10 @@ document.addEventListener('alpine:init', function() {
           } else {
             await self.refreshActiveConversation();
             await self.loadConversationList();
+            try {
+              delete self.cache.usage;
+            } catch (_) {}
+            if (self.page === 'home') await self.refreshHomeUsageFooter();
             var last = self.chatMessages[self.chatMessages.length - 1];
             if (!last || last.role !== 'assistant' || !String(last.content || '').trim()) {
               self.chatMessages.push({
@@ -2421,9 +2794,11 @@ document.addEventListener('alpine:init', function() {
         } else if (self.chatOutboundQueue.length) {
           var next = self.chatOutboundQueue.shift();
           self.$nextTick(function() {
-            self.runChatTurn(next.prompt, next.files || []).catch(function(e) {
-              console.warn('[chat] queued turn', e);
-            });
+            self
+              .runChatTurn(next.prompt, next.files || [], { planPhase: next.planPhase || null })
+              .catch(function(e) {
+                console.warn('[chat] queued turn', e);
+              });
           });
         } else {
           self.chatOutboundInFlight = false;

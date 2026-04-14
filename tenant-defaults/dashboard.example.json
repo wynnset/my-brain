@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "pages": [
+    {
+      "slug": "demo-query",
+      "label": "Demo row",
+      "description": "Example datatable page — runs one read-only SELECT",
+      "template": "datatable",
+      "db": "brain",
+      "sql": "SELECT 1 AS n, 'ok' AS status"
+    },
+    {
+      "slug": "demo-sections",
+      "label": "Demo bundle",
+      "template": "sections",
+      "sections": [
+        {
+          "id": "counts",
+          "label": "Counts",
+          "template": "datatable",
+          "db": "brain",
+          "sql": "SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table'"
+        }
+      ]
+    }
+  ]
+}

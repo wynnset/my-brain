@@ -1,313 +1,208 @@
 # Cyrus — System Overview
 
-Cyrus is a personal AI-powered command centre for career, finance, and business management. It combines a team of specialised AI agents with a set of SQLite databases and a local web dashboard.
+Cyrus is a personal AI-powered command centre for career, finance, and business. It combines specialised AI agents (markdown specs under `team/`), four SQLite databases, and a local web dashboard served by a small Node.js app.
 
 ---
 
-## Folder Structure
+## Repository layout
 
 ```
-my-brain/   (repo directory name may differ)
-├── CYRUS.md            # Cyrus brief: orchestrator of the AI team
-├── app/                # Dashboard web app
-│   ├── server.js           # Express server — reads all 4 DBs, exposes API
-│   ├── chat-sdk-runner.mjs # Claude Agent SDK (ESM); loaded when BRAIN_CHAT_BACKEND=sdk
-│   ├── mcp-brain-db.mjs    # stdio MCP server: read-only SELECT on the four DBs
-│   ├── dashboard.html      # Single-file SPA (Tailwind, vanilla JS, hash routing)
-│   └── package.json        # express, better-sqlite3, @anthropic-ai/claude-agent-sdk, zod, …
-├── data/               # All databases and config
-│   ├── config.json     # DB paths and global settings
-│   ├── brain.db        # Cross-domain action items (shared ledger)
-│   ├── launchpad.db    # Career tracker (8-week plan, applications, outreach)
-│   ├── finance.db      # Personal & joint transaction ledger
-│   ├── wynnset.db      # WynnSet Inc. corporate accounting
-│   └── *.sql           # Schema files (source of truth for each DB)
-├── team/               # AI agent definitions (one .md per agent)
-├── team-inbox/         # Drop zone for raw files agents need to process
-├── owners-inbox/       # Output directory — reports, briefs, resumes, analyses
-└── docs/               # Documentation (you are here)
+my-brain/                    (directory name may differ)
+├── CYRUS.md                 # Orchestrator brief for the agent team
+├── app/                     # Dashboard web application
+│   ├── server.js            # Express bootstrap: env, DB handles, middleware, route mount
+│   ├── server/              # Node server code (not served to the browser)
+│   │   ├── routes/          # HTTP handlers (chat SSE, files, dashboard JSON, auth, …)
+│   │   ├── middleware/      # Session gate, tenant API token, dashboard DB readiness
+│   │   ├── lib/             # Session cookies, orchestrator paths, SQLite helpers, …
+│   │   ├── tenancy/         # Volume paths, registry DB helpers, per-tenant SQLite
+│   │   ├── migrate/         # Multi-user startup: normalise volume → users/<id>/…
+│   │   └── dashboard/       # `workspace/dashboard.json` manifest (pages, nav, SQL)
+│   ├── public/              # Static assets (Express `static` root after auth)
+│   │   ├── dashboard.html   # SPA shell (Tailwind CDN, hash routing)
+│   │   ├── login.html
+│   │   ├── dashboard.css , favicon.svg
+│   │   ├── js/              # Dashboard client (ES modules)
+│   │   └── shared/          # Small modules also imported by Node (e.g. stream chunk joiner)
+│   ├── chat-sdk-runner.mjs  # Agent SDK runner (ESM); loaded when `BRAIN_CHAT_BACKEND=sdk`
+│   ├── mcp-brain-db.mjs     # stdio MCP server: read-only `SELECT` on tenant DB files
+│   └── package.json
+├── data/                    # Default DB dir: single-tenant `*.db` files and multi-user volume root
+├── docker-seed/             # Files for Fly images / init (e.g. `brain.sql`, `registry.sql`)
+├── tenant-defaults/         # Neutral stubs for new tenants (`CYRUS.md`, `config.json`, `team/`, …)
+├── team/                    # Agent definitions (one `.md` per agent)
+├── team-inbox/ , owners-inbox/ , docs/   # Workspace content (single-tenant or per-tenant copy)
+└── docs/                    # This documentation
 ```
 
----
-
-## The Four Databases
-
-### `brain.db` — Cross-Domain Action Ledger
-The single shared table (`action_items`) where all agents write tasks and todos that need Aidin's attention. Every page of the dashboard reads from this first.
-
-- **Domains**: `career`, `finance`, `business`, `personal`, `family`
-- **Key fields**: `urgency` (critical/high/medium/low), `due_date`, `status`, `snoozed_until`, `project_category`, `recurrence`
-- **Key views**: `v_open_action_items`, `v_items_by_domain`, `v_overdue_items`
-- **Who writes**: Any agent. Ledger writes finance items; Dash writes career items; Charter writes business items.
-
-### `launchpad.db` — Career Tracker
-Tracks the active 8-week career transition plan: job applications, networking outreach, consulting opportunities, weekly goals, and income.
-
-- **Key tables**: `weeks`, `weekly_goals`, `companies`, `applications`, `contacts`, `outreach`, `consulting_leads`, `invoices`, `income`
-- **Key views**: `v_pipeline`, `v_outreach_status`, `v_consulting_pipeline`, `v_income_summary`, `v_action_items`
-- **Who writes**: Dash (primary writer). Scout adds companies/applications; Relay adds outreach.
-
-### `finance.db` — Personal Transaction Ledger
-All personal, joint, and business-tagged transactions imported from bank/credit card CSV exports. Used for burn rate, category breakdowns, income tracking, and net worth snapshots.
-
-- **Key tables**: `accounts`, `transactions`, `categories`, `merchants`, `account_snapshots`
-- **Key views**: `v_real_spending` (excludes transfers), `v_burn_rate_monthly`, `v_monthly_by_category`, `v_income_monthly`, `v_top_merchants`
-- **Who writes**: Ledger agent processes CSV imports from `team-inbox/`.
-- **Note**: Use `v_real_spending` not raw `transactions` to avoid double-counting credit card payments.
-
-### `wynnset.db` — WynnSet Inc. Corporate Accounting
-Double-entry bookkeeping for the corporation (CBCA #826229-2, FYE July 31). Tracks chart of accounts, journal entries, compliance calendar, shareholder loan, and dividends.
-
-- **Key tables**: `accounts_coa`, `journal_entries`, `journal_lines`, `compliance_events`, `shareholder_loan`
-- **Key views**: `v_trial_balance`, `v_compliance_upcoming`, `v_shareholder_loan_balance`
-- **Who writes**: Charter agent.
-- **Note**: GST unregistered until $30K CAD revenue threshold is crossed. Journal entries start empty — Charter populates them as transactions occur.
+The server opens SQLite in **read-only** mode for dashboard queries. Writes go through controlled paths (`POST /api/db`, chat tools, PATCH action items, file uploads, orchestrator brief PUT, etc.). Only **`app/public/`** is exposed as static files after the session gate—not the whole `app/` tree.
 
 ---
 
-## The AI Agent Team
+## The four databases
 
-Agents are defined in `team/` as markdown files with role specs, tool access, and instructions. Cyrus (`CYRUS.md`) orchestrates.
+### `brain.db` — cross-domain action ledger
 
-| Agent | Role | Primary DB(s) |
-|-------|------|---------------|
-| **Cyrus** | Orchestrator / Chief of Staff | Routes tasks, never executes directly |
-| **Dash** | Pipeline Manager | `brain.db`, `launchpad.db` |
-| **Ledger** | Finance Analyst | `brain.db`, `finance.db` |
-| **Charter** | Corporate Accountant | `brain.db`, `wynnset.db` |
-| **Scout** | Job Research Analyst | `launchpad.db` |
-| **Relay** | Outreach Drafter | `launchpad.db` |
-| **Tailor** | Application Specialist | — (produces files) |
-| **Sylvan** | Content Writer | — (produces files) |
-| **Debrief** | Interview Prep Coach | `launchpad.db` |
-| **Vela** | Senior Designer | — (produces PDFs) |
-| **Gauge** | Market Intelligence | — (research outputs) |
-| **Arc** | Database Architect | All DBs (schema changes) |
-| **Vesta** | HR Director | — (agent onboarding) |
-| **Dara** | Senior Researcher | — (expertise profiles) |
+Shared `action_items` table: tasks every dashboard page can show.
 
-Agent outputs go to `owners-inbox/` as `.md` or `.pdf` files.
+- **Domains:** `career`, `finance`, `business`, `personal`, `family`
+- **Useful views:** `v_open_action_items`, `v_items_by_domain`, `v_overdue_items`
+
+### `launchpad.db` — career tracker
+
+Eight-week plan, applications, outreach, consulting, weekly goals, income-related views.
+
+- **Useful views:** `v_pipeline`, `v_outreach_status`, `v_consulting_pipeline`, …
+
+### `finance.db` — personal transaction ledger
+
+Imports, categories, burn rate, income, account snapshots.
+
+- Prefer views like **`v_real_spending`** over raw `transactions` where transfers would double-count.
+
+### `wynnset.db` — corporate accounting
+
+Chart of accounts, journal entries, compliance calendar, shareholder loan, trial balance views.
 
 ---
 
-## The Dashboard App
+## AI agents
 
-A lightweight Node.js + Express server that reads all 4 databases server-side and serves a single-page app.
+Agents live in `team/` as markdown. **`CYRUS.md`** describes orchestration and routing.
 
-### Running It
+| Agent | Role | Primary DBs |
+|-------|------|-------------|
+| **Cyrus** | Orchestrator | Routes work; does not own tables |
+| **Dash** | Pipeline / career ops | `brain.db`, `launchpad.db` |
+| **Ledger** | Finance | `brain.db`, `finance.db` |
+| **Charter** | Corporate accounting | `brain.db`, `wynnset.db` |
+| **Scout**, **Relay**, **Debrief**, … | Research, outreach, interview prep, etc. | Mostly `launchpad.db` or file outputs |
+
+Outputs often land in **`owners-inbox/`** as `.md` or other files.
+
+---
+
+## Dashboard application
+
+### Run locally
 
 ```bash
-node app/server.js
-# Opens http://localhost:3131 automatically
-# Ctrl+C to stop
-# PORT=3132 node app/server.js  (if 3131 is in use)
+cd app && npm install    # once
+cd ..                    # repo root
+node app/server.js       # default http://localhost:3131 (may auto-open browser)
 ```
 
-First-time setup (only needed once):
-```bash
-cd app && npm install
-```
+Optional **repo-root `.env`** (same level as `CYRUS.md`): loaded on startup. See **`.env.example`**. Common keys: `ANTHROPIC_API_KEY`, `BRAIN_CHAT_BACKEND`, `PORT`, `DATA_DIR`, `DB_DIR`, `BRAIN_MULTI_USER`, `SESSION_SECRET`, `DASHBOARD_PASSWORD`.
 
-**Optional — avoid shell exports:** create a **`.env` file in the repo root** (same folder as `CYRUS.md`, not inside `app/`). The server loads it on startup via `dotenv`. Copy [`.env.example`](../.env.example) to `.env`. Set **`ANTHROPIC_API_KEY`** for Console API billing, *or* leave it unset and use **subscription auth** (see next subsection). Add **`BRAIN_CHAT_BACKEND=sdk`** when using the Agent SDK. `.env` is gitignored.
-
-**Local: Claude subscription (Pro / Max) instead of `ANTHROPIC_API_KEY`**
-
-1. **Remove** `ANTHROPIC_API_KEY` from `.env` (and from your shell) for this project if you want subscription billing. When an API key is set, [`app/server.js`](app/server.js) removes `ANTHROPIC_AUTH_TOKEN` from the chat child env so a stale bearer token does not override Console credits — that also means a key in `.env` blocks subscription token use.
-2. Log in with **Claude Code on the same Mac** as the dashboard (run `claude` / complete the normal login or subscription flow). Credentials live under **`~/.claude`** (your real `HOME`). Run the dashboard **locally** with your normal user so that directory is visible to the spawned `claude` process.
-3. Restart `node app/server.js`. You should see the log line that API key is unset and Claude Code may use OAuth/subscription auth — that is expected.
-
-Advanced: if you intentionally need **both** `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` passed through, set **`BRAIN_CHAT_KEEP_ANTHROPIC_AUTH_TOKEN=1`** (see `envForClaudeChat()` in `app/server.js`). Typical “subscription only” setups omit the API key instead.
-
-**Fly.io:** the app sets `HOME` / `CLAUDE_CONFIG_DIR` under `/tmp` so volume state does not hijack billing; subscription tokens in a laptop `~/.claude` are **not** used on the server. Use **`fly secrets set ANTHROPIC_API_KEY=...`** (or Bedrock/Vertex envs) for production chat there.
-
-If you installed `@anthropic-ai/claude-code` globally for **the same Node** you use to run the server, the binary is usually next to `node` (e.g. `.../node/v18.x.x/bin/claude`); the server auto-detects that path so you often do **not** need `CLAUDE_BIN` / `CLAUDE_CODE_EXECUTABLE` locally.
-
-### Architecture
+### Request flow (conceptual)
 
 ```
-app/server.js              app/dashboard.html
-    │                           │
-    │  GET /api/dashboard        │  Hash routing: #/, #/career,
-    │  GET /api/career           │  #/finance, #/business
-    │  GET /api/finance          │
-    │  GET /api/business         │  Tailwind CSS (CDN)
-    │  GET /api/health           │  Vanilla JS — no build step
-    │                           │
-    └── better-sqlite3 ─────────┘
-         │
-         ├── brain.db (read-only)
-         ├── launchpad.db (read-only)
-         ├── finance.db (read-only)
-         └── wynnset.db (read-only)
+Browser  →  public/dashboard.html + public/js/*.mjs  (hash routes: #/, #/career, …)
+              ↓ fetch JSON
+         Express (app/server.js)
+              ↓
+         middleware: JSON body, optional Bearer → tenant, session cookie gate
+              ↓
+         server/routes/*.js  →  better-sqlite3 (read-only opens) + workspace file I/O
+              ↓
+         SQLite under DB_DIR (single-tenant) or users/<uuid>/data/ (multi-user)
 ```
 
-### Dashboard Pages
+**Main JSON endpoints:** `/api/health`, `/api/auth-status`, `/api/login`, `/api/logout`, `/api/dashboard`, `/api/dashboard-manifest`, `/api/dashboard-page/:slug`, `/api/dashboard-section/...`, `/api/career`, `/api/finance`, `/api/business`, `/api/action-items/:id`, `/api/files`, `/api/upload`, `/api/chat`, `/api/db`, orchestrator brief routes (`/api/cyrus`, …).
 
-| Page | Primary Data Sources | What It Shows |
-|------|---------------------|---------------|
-| **Home** | `brain.db` + `launchpad.db` | All open action items (all domains), domain stat cards, active week |
-| **Career** | `brain.db` + `launchpad.db` | Career actions, job pipeline, applications, week goals, outreach, consulting |
-| **Finance** | `brain.db` + `finance.db` + `wynnset.db` | Finance actions, account balances, burn rate, income, merchants, compliance, shareholder loan |
-| **Business** | `brain.db` + `wynnset.db` | Business actions, WynnSet stats, compliance calendar, chart of accounts |
+### Dashboard pages (built-in templates)
 
-### Action Items Controls (on every page)
-- **Sort**: Date → Urgency (default) / Urgency → Date / Urgency only / Date only
-- **Group**: None / By Domain (home) / By Category (other pages)
-- **Range**: All / Overdue / Due today / This week / Next 2 weeks / No due date
+| Area | Data | Purpose |
+|------|------|---------|
+| **Home** | `brain.db` + optional `launchpad.db` | All-domain action items, summary cards, active week |
+| **Career** | `brain.db` + `launchpad.db` | Career actions, pipeline, applications, goals |
+| **Finance** | `brain.db` + `finance.db` + `wynnset.db` | Finance actions, balances, burn rate, compliance |
+| **Business** | `brain.db` + `wynnset.db` | Business actions, compliance, COA, ledger stats |
 
-### Dark Mode
-Button in top-right cycles through: Auto (follows OS) → Light → Dark. Preference saved in `localStorage`. In Auto mode, updates live if OS setting changes.
+**`workspace/dashboard.json`** (resolved by `server/dashboard/` manifest code) can add custom **datatable** and **sections** pages; the manifest API exposes nav and SQL-backed pages when the required `*.db` files exist.
 
-### Dashboard chat (CLI vs Agent SDK)
+### Client UX (brief)
 
-`POST /api/chat` streams assistant text over SSE. Two backends:
-
-| `BRAIN_CHAT_BACKEND` | Behavior |
-|---------------------|----------|
-| `cli` (default) | Spawns Claude Code (`claude -p --dangerously-skip-permissions`) with `cwd` = `DATA_DIR`. |
-| `sdk` | Runs the [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview) in-process: same `cwd`, optional session resume (`agentSdkSessionId` in the chat session JSON). |
-
-When **`BRAIN_MULTI_USER=1`**, chat always sets **`CLAUDE_CODE_DISABLE_AUTO_MEMORY`** and (unless **`BRAIN_CHAT_LOAD_CLAUDE_MDS=1`**) **`CLAUDE_CODE_DISABLE_CLAUDE_MDS`**, and appends the **signed-in account’s login and display name from `registry.db`** to the system prompt. If **`ANTHROPIC_API_KEY`** is set, the child also gets an isolated **`HOME`** / **`CLAUDE_CONFIG_DIR`** under **`data/.claude-chat-runtime/`**. If the key is **not** set (subscription / `~/.claude` OAuth only), **`HOME` is left unchanged** so Claude Code can still find your login — use an API key on shared servers when you need both billing and the strongest filesystem isolation.
-
-#### Agent SDK — what you need for it to work
-
-The SDK is **not** a separate service: it is `npm` packages loaded by `app/server.js` (`@anthropic-ai/claude-agent-sdk`, `zod`) plus the **Claude Code** runtime the SDK drives internally. Locally you authenticate the same way as the CLI: **Console API key** and/or **Claude subscription** via Claude Code’s stored session (see “Claude subscription” above). On **Fly**, use an API key or cloud-provider env vars (`CLAUDE_CODE_USE_BEDROCK`, etc.); subscription-from-laptop does not apply there.
-
-**1) Dependencies (local and in the Docker image)**  
-From `app/`: run `npm install` so `node_modules` includes the SDK. The Fly image runs `npm install` during `docker build`; after changing `package.json`, **redeploy** so the image picks up new deps.
-
-**2) Claude Code binary on `PATH`**  
-The SDK expects to launch Claude Code like the CLI does. If `claude` is not found:
-
-- **Local:** install globally, e.g. `npm install -g @anthropic-ai/claude-code`, then confirm `claude --version` in the same shell you use to start the server. If the binary lives elsewhere, set **`CLAUDE_CODE_EXECUTABLE`** to its full path.
-- **Fly:** the `Dockerfile` already installs `@anthropic-ai/claude-code` globally. You normally do **not** need `CLAUDE_CODE_EXECUTABLE` unless the SDK errors about a missing executable (then set it to the real path inside the container, often under `/usr/local/bin`).
-
-**3) Turn the SDK on**  
-Set **`BRAIN_CHAT_BACKEND=sdk`**. If unset or `cli`, the old subprocess path is used.
-
-**4) Auth**  
-Locally: set **`ANTHROPIC_API_KEY`** in `.env` *or* rely on **subscription login** via Claude Code (no key in `.env`). On Fly: set **`ANTHROPIC_API_KEY`** (or bearer / OAuth / Bedrock / Vertex per `claudeAuthConfiguredOnFly()` in `app/server.js`). Chat returns 503 on Fly if nothing in that gate is configured.
+- Action lists: sort (date / urgency), group (domain / category), due-date range filters.
+- Dark mode: Auto → Light → Dark; stored in `localStorage`.
 
 ---
 
-**Local checklist (`BRAIN_CHAT_BACKEND=sdk`)**
+## Dashboard chat
 
-1. `cd app && npm install`
-2. Install Claude Code globally **or** set `CLAUDE_CODE_EXECUTABLE` to the `claude` binary.
-3. Auth: `export ANTHROPIC_API_KEY="sk-ant-..."` **or** omit it and use subscription (see “Claude subscription” above).  
-   Optional: `export BRAIN_CHAT_KEEP_ANTHROPIC_AUTH_TOKEN=1` if both key and bearer must be passed to the child (see `envForClaudeChat()`).
-4. `export BRAIN_CHAT_BACKEND=sdk`
-5. From repo root: `node app/server.js`  
-6. Optional: `export BRAIN_CHAT_MCP_DB=1` so chat can call the read-only `brain_select` MCP tool against `DB_DIR/*.db`.
+`POST /api/chat` streams **Server-Sent Events** (`text/event-stream`): JSON lines with `text`, `tool`, `heartbeat`, or terminal `[DONE]`.
 
-Restart the server after any env change.
+| `BRAIN_CHAT_BACKEND` | Behaviour |
+|----------------------|-----------|
+| **`cli`** (default) | Spawns Claude Code: `claude -p --dangerously-skip-permissions`, `cwd` = workspace dir. |
+| **`sdk`** | Loads `app/chat-sdk-runner.mjs` and runs the Agent SDK in-process; optional resume via `agentSdkSessionId` stored in the session JSON file. |
 
-**Local: `spawn claude ENOENT` (or “Failed to start Claude Code”)**  
-That message comes from **`BRAIN_CHAT_BACKEND=cli`** (the default): the server runs `spawn(CLAUDE_BIN, …)` and `CLAUDE_BIN` defaults to the string `claude`, which only works if `claude` is on the **`PATH` of the Node process**.
+**Auth for the model:** same rules as Claude Code locally — Console **API key** in `.env` and/or **subscription** OAuth under `~/.claude` when no key is set. On **Fly.io**, use an API key or cloud-provider env (`CLAUDE_CODE_USE_BEDROCK`, etc.); the app may isolate `HOME` / config dirs so volume state does not override billing.
 
-- If you start the app from **Cursor / VS Code / a GUI** without env vars, `CLAUDE_BIN` / `CLAUDE_CODE_EXECUTABLE` are often **unset**, so you get ENOENT even though the same path works in a terminal one-off.
-- **Fix (pick one):**  
-  - Set **`BRAIN_CHAT_BACKEND=sdk`** *and* set **`CLAUDE_CODE_EXECUTABLE`** (or **`CLAUDE_BIN`**) to the full path to `claude` in the **same** environment the IDE uses to launch Node; **or**  
-  - Stay on CLI and set **`CLAUDE_BIN`** or **`CLAUDE_CODE_EXECUTABLE`** to that full path for the IDE process (the server treats both the same for the CLI spawn).
-
-To find the path in a shell where `claude` already works: `command -v claude` (often under `~/.nvm/versions/node/.../bin/claude` for a given Node version).
-
----
-
-**Fly.io checklist (`BRAIN_CHAT_BACKEND=sdk`)**
-
-1. **Deploy an image** built from the current `Dockerfile` (includes `app/chat-sdk-runner.mjs`, `app/mcp-brain-db.mjs`, and `npm install` for the SDK).
-2. **`fly secrets set`** (or `[env]` in `fly.toml` for non-secret flags) at minimum:  
-   - `ANTHROPIC_API_KEY` (if not already set)  
-   - `BRAIN_CHAT_BACKEND=sdk`
-3. Optional secrets: `BRAIN_CHAT_MCP_DB=1`, `BRAIN_CHAT_TOOLS`, `BRAIN_CHAT_PERMISSION_MODE`, `CLAUDE_CODE_EXECUTABLE`, etc. (see table below).
-4. **`fly deploy`**, then **`fly apps restart <app>`** if you only changed secrets (or rely on Fly’s secret rollout as you prefer).
-5. Same volume as before: `DATA_DIR` / `DB_DIR` are `/data`; chat sessions and optional `chat-tool-audit.log` live there too.
-
----
-
-Other useful environment variables (SDK path):
+**Useful env (chat):**
 
 | Variable | Purpose |
 |----------|---------|
-| `BRAIN_CHAT_RESUME` | Set to `0` to disable SDK session resume (always send a text transcript instead). |
-| `BRAIN_CHAT_TOOLS` | `preset` (default), `readonly` (`Read`/`Glob`/`Grep` only), or comma-separated tool names. |
-| `BRAIN_CHAT_ALLOWED_TOOLS` | Optional comma list of tools to auto-allow (SDK `allowedTools`). |
-| `BRAIN_CHAT_PERMISSION_MODE` | `bypassPermissions` (default, matches prior CLI flag), `acceptEdits`, `default`, `plan`, or `dontAsk`. |
-| `BRAIN_CHAT_MCP_DB` | Set to `1` to attach the `brainDb` MCP server (`brain_select`: read-only `SELECT` on the four SQLite files). |
-| `BRAIN_CHAT_AUDIT_TOOLS` | Set to `0` to disable `PostToolUse` append-only logging to `DB_DIR/chat-tool-audit.log`. |
-| `BRAIN_CHAT_MAX_TURNS` | Agent SDK max turns (default `100`). |
-| `CLAUDE_BIN` | Full path to the `claude` binary for **CLI** chat (default backend). If unset, the server tries `CLAUDE_CODE_EXECUTABLE`, then the string `claude` on `PATH`. |
-| `CLAUDE_CODE_EXECUTABLE` | Same as `CLAUDE_BIN` for resolving the binary (either may be set). Also passed to the Agent SDK. Use a **full path** when the IDE or service does not load your shell `PATH`. |
+| `ANTHROPIC_API_KEY` | Normalises and passes through to the child; may drop `ANTHROPIC_AUTH_TOKEN` unless `BRAIN_CHAT_KEEP_ANTHROPIC_AUTH_TOKEN=1`. |
+| `CLAUDE_CODE_EXECUTABLE` / `CLAUDE_BIN` | Path to `claude` binary (CLI backend and SDK). |
+| `BRAIN_CHAT_TOOLS`, `BRAIN_CHAT_ALLOWED_TOOLS`, `BRAIN_CHAT_PERMISSION_MODE` | SDK tool policy. |
+| `BRAIN_CHAT_MCP_DB=1` | Attach read-only DB MCP (`brain_select`). |
+| `BRAIN_CHAT_MAX_TURNS` | SDK turn limit (default 100). |
+| `BRAIN_CHAT_RESUME` | Set `0` to disable SDK session resume. |
 
-### Fly.io runbook (deploy and verify)
-
-1. **CLI:** `fly auth login` then from the repo root (where [`fly.toml`](../fly.toml) lives):  
-   `fly deploy`  
-   Fly uses the `app = '…'` name in `fly.toml` automatically; or pass `--app <name>`.
-
-2. **Secrets (typical):** at minimum **`ANTHROPIC_API_KEY`** for dashboard chat on Fly (subscription-from-laptop does not apply; see “Claude subscription” above). Strongly **`DASHBOARD_PASSWORD`** for a public URL. **`BRAIN_API_TOKEN`** if you use `scripts/db` or `POST /api/db` against production.  
-   Example:  
-   `fly secrets set ANTHROPIC_API_KEY="sk-ant-..." DASHBOARD_PASSWORD='…' BRAIN_API_TOKEN='…'`
-
-3. **`CLAUDE_BIN` on Fly:** the image installs `@anthropic-ai/claude-code` globally; inside the container the binary is on **`PATH`** as `claude`. Do **not** set `CLAUDE_BIN` to a **macOS** path from your laptop — that will fail with `ENOENT` in production. Prefer **`fly secrets unset CLAUDE_BIN`**, or set **`CLAUDE_BIN=claude`**.
-
-4. **Agent SDK on Fly:** `fly secrets set BRAIN_CHAT_BACKEND=sdk` (or add `BRAIN_CHAT_BACKEND = "sdk"` under `[env]` in `fly.toml` for a non-secret default). Optional: `BRAIN_CHAT_MCP_DB=1`, etc.
-
-5. **Volume:** `fly.toml` mounts `brain_data` at **`/data`** (`DATA_DIR` / `DB_DIR`). Upload the four `*.db` files to `/data/` (e.g. `fly sftp shell`, then `put` from local `data/`). Restart after seeding if needed: `fly apps restart <app>`.
-
-6. **Smoke test:**  
-   `curl -sS "https://<app>.fly.dev/api/health"`  
-   should return JSON with `"ok":true`. Open the same host in a browser; sign in at `/login.html` if `DASHBOARD_PASSWORD` is set.
+Plan mode (checklist / execute) requires **`BRAIN_CHAT_BACKEND=sdk`**.
 
 ---
 
-## Multi-user tenancy (optional)
+## Multi-user mode (`BRAIN_MULTI_USER=1`)
 
-When **`BRAIN_MULTI_USER=1`**, the server stores accounts in **`registry.db`** at the volume root and gives each user an isolated tree:
+- **Volume root:** `TENANT_VOLUME_ROOT` or `DB_DIR` (if unset, defaults to repo **`data/`**, same basis as `server.js`’s `DB_DIR`). Holds **`registry.db`** and **`users/<uuid>/`** trees.
+- **Per user:** `users/<uuid>/workspace/` (files, `team/`, inbox folders, `dashboard.json`) and `users/<uuid>/data/` (SQLite files, `chat-sessions/`, optional `chat-tool-audit.log`).
+- **Auth:** `SESSION_SECRET` (32+ chars). Login + password; bcrypt in `registry.db`. Session cookie carries user id; the server resolves paths from that, never from unchecked client input.
+- **Provisioning:** `node scripts/brain-add-user.cjs` (see script header for flags). New tenants get starter workspace files from **`tenant-defaults/`** and a **`brain.db`** seed from configured seed dirs / **`docker-seed/`** as documented in the script.
+- **Machine API:** optional per-user `api_token` in `registry`; send `Authorization: Bearer <token>` for `POST /api/db` and `POST /api/upload` without a browser cookie.
 
-- **`users/<uuid>/workspace/`** — `CYRUS.md`, `team/`, `team-inbox/`, `owners-inbox/`, `docs/`, `config.json` (same role as repo-root `DATA_DIR` in single-tenant mode).
-- **`users/<uuid>/data/`** — at minimum **`brain.db`** (created at provision time); other SQLite files (e.g. `launchpad.db`, domain-specific DBs) are added only when you create them. Also **`chat-sessions/`**, **`chat-tool-audit.log`**.
-
-**Auth:** set **`SESSION_SECRET`** (at least 32 characters). Sign-in uses **login + password** (bcrypt hashes in `registry.db`). The session cookie carries **`sub`** = user id; the server never trusts a tenant id from the client for path selection.
-
-**Provisioning:** from the repo (with `app/node_modules` installed):  
-`node scripts/brain-add-user.cjs --login EMAIL --password '…' [--name "Display Name"] [--full-team] [--seed-dbs DIR]`  
-**`display_name`** in **`registry.db`** is set from **`--name`**, or derived from the email local-part (e.g. `jane.doe@x.com` → `Jane Doe`). New tenants get **`brain.db` only**, from **`brain.sql`** (or **`brain.db`**) found under the first seed directory — **`--seed-dbs` / `BRAIN_SEED_DBS` / `./data`** — then **[`docker-seed/`](../docker-seed/)** if the file is not in the first dir (so Fly/git builds ship **`docker-seed/brain.sql`**). Workspace files (**`CYRUS.md`**, **`config.json`**, **`docs/`**) are copied from **[`tenant-defaults/`](../tenant-defaults/)** only (neutral stubs — not repo-root **`CYRUS.md`**, **`data/config.json`**, or **`docker-seed/docs`**). **`--full-team`** copies **`tenant-defaults/team/*.md`** only when that folder contains agent markdown; otherwise it skips with a warning. No `launchpad` / `finance` / `wynnset` files are created automatically; add more SQLite files under the tenant **`data/`** with **`POST /api/db`** or out-of-band tools. The dashboard serves **Career / Finance / Business** sections with empty tables when those DBs are absent. **`--claim-legacy`** is only for the one-time step after a flat-volume migration (see server boot logs); **additional users omit it.**  
-**Fly.io:** **`/app/docker-seed/brain.sql`** is in the image; run **`node /app/scripts/brain-add-user.cjs …`** (default primary seed **`/app/data`** only has `registry.sql`, so the script still picks up **`brain.sql`** from **`/app/docker-seed`**). Workspace templates for **`brain-add-user`** come from **`/app/tenant-defaults/`** (copied in the Dockerfile). **`/app/seed/`** is still used by **`init-volume.sh`** for legacy single-volume layout when that path runs.
-
-**Legacy migration (first boot with `BRAIN_MULTI_USER=1`):** [`app/volume-migrate.js`](../app/volume-migrate.js) moves the first tenant into **`users/<uuid>/{workspace,data}/`** when no migration marker exists yet.
-
-- **Flat volume** (`DATA_DIR` and **`DB_DIR` point at the same directory**, e.g. Fly’s `/data`): everything lives together; `team/`, `CYRUS.md`, and the four `*.db` files are moved from that root into the tenant tree (same behavior as before).
-- **Split layout** (typical **local dev**): SQLite files under **`…/data/`** (this is the tenancy volume root = `DB_DIR` / `TENANT_VOLUME_ROOT`), while `CYRUS.md`, `team/`, `docs/`, `team-inbox/`, and `owners-inbox/` sit in the **repo parent** next to `data/`. Migration detects that when the volume folder is named `data` and the parent contains `CYRUS.md` or `team/`, and moves those trees into the new tenant **`workspace/`**. If **`DATA_DIR`** is set and resolves to a different path than `DB_DIR`, that directory is used as the workspace source instead. Override with **`LEGACY_WORKSPACE_DIR`** if needed.
-
-**Fly.io:** set `[env] BRAIN_MULTI_USER = "1"` (or equivalent), then **`fly secrets set SESSION_SECRET='…'`**. Use **`BRAIN_MULTI_USER=1`** in the machine environment so [`scripts/init-volume.sh`](../scripts/init-volume.sh) skips the flat `/data` seed when you rely on per-tenant dirs only. When **`DATA_DIR` and `DB_DIR` are both `/data`**, migration is flat-volume style. Then run **`brain-add-user.cjs --claim-legacy`** once after the server creates **`.legacy-tenant-uuid`**, unless you provision tenants only with **`brain-add-user`** (no legacy volume).
-
-**API scripts:** per-user **`api_token`** in `registry.db` (optional column, set via **`--api-token`** on add-user). Send **`Authorization: Bearer <token>`** for `POST /api/db` and `POST /api/upload` without a browser session. The legacy **`BRAIN_API_TOKEN`** bypass is disabled in multi-user mode.
-
-Single-tenant mode is unchanged: omit **`BRAIN_MULTI_USER`**, use **`DASHBOARD_PASSWORD`** as today.
-
-**Docker / Fly build:** Image seeds that must be in git for remote builds live under **[`docker-seed/`](../docker-seed/)** — `registry.sql`, **`brain.sql`**, `config.json`, **`CYRUS.md`**, **`team/`**, **`docs/`** (Dockerfile copies from there, not from repo root). After a **local split migration**, repo-root `team/` and `CYRUS.md` may be gone; refresh seeds with e.g. `cp -R data/users/<id>/workspace/{CYRUS.md,team,docs} docker-seed/` (adjust paths) before `fly deploy`. The **`data/`** directory stays gitignored for databases.
+Single-tenant mode: leave **`BRAIN_MULTI_USER` unset**, put the four `*.db` files under `DB_DIR`, set **`DASHBOARD_PASSWORD`** (or rely on open local use).
 
 ---
 
-## Adding a New Agent
+## Fly.io (short)
 
-1. Create `team/<name>.md` with role, responsibilities, tool access, and DB write permissions
-2. If the agent needs a new DB table: ask Arc to design the schema, update the relevant `.sql` file, apply to the DB
-3. If the agent produces dashboard-visible data: it should write to `brain.db.action_items` and/or the relevant domain DB
-4. Register the agent in `CYRUS.md` routing table
+1. Build/deploy from repo **`Dockerfile`** (installs app deps + global `claude-code`, copies `app/server.js`, `app/server/`, `app/public/`, `chat-sdk-runner.mjs`, `mcp-brain-db.mjs`, seeds, `tenant-defaults/`).
+2. Mount persistent volume at **`/data`**; set **`DATA_DIR`** / **`DB_DIR`** to `/data` in production.
+3. **`fly secrets set`:** at minimum `ANTHROPIC_API_KEY` for chat; `SESSION_SECRET` + multi-user **or** `DASHBOARD_PASSWORD` for single-tenant; optional `BRAIN_API_TOKEN` for scripted `POST /api/db`.
+4. Smoke: `curl https://<app>.fly.dev/api/health` → `{"ok":true,...}`.
 
-## Adding a New Dashboard Section
+---
 
-1. Add the query to the relevant endpoint in `app/server.js`
-2. Add the HTML skeleton to the relevant page div in `app/dashboard.html`
-3. Add the render logic to the corresponding `renderX()` function in the `<script>` block
-4. No build step needed — just restart `node app/server.js`
+## Extending the system
 
-## Modifying a Database Schema
+### New agent
 
-1. Edit the `.sql` schema file in `data/` first (source of truth)
-2. Apply the change: `sqlite3 data/<name>.db < data/<name>.sql` (careful — this recreates tables)
-3. For additive changes (new column): use `ALTER TABLE ... ADD COLUMN ...` directly
-4. Update any affected views, then update `app/server.js` queries if column names changed
+1. Add `team/<name>.md`.
+2. Register routing / hand-offs in `CYRUS.md`.
+3. If it needs new tables: update the relevant `data/*.sql`, migrate the DB, then use the new tables from agents or API.
+
+### New dashboard API behaviour
+
+1. Add or change handlers under **`app/server/routes/`** (e.g. `dashboard.js`, `domain.js`, `chat.js`) and shared logic in **`app/server/lib/`** or **`app/server/dashboard/`**.
+2. Wire **`app/server.js`** only if you need new bootstrap (new middleware or `ctx` fields passed into routes).
+
+### New UI section
+
+1. Extend **`app/public/dashboard.html`** and/or **`app/public/js/`** (entry: `dashboard-entry.mjs` → `dashboard-app.mjs`; shared helpers in `js/lib/`).
+2. Point fetches at the right `/api/...` route.
+
+### Schema change
+
+1. Update the canonical **`.sql`** under `data/`.
+2. Apply with `ALTER TABLE` / migration scripts as appropriate (avoid blindly re-running full schema against populated DBs).
+3. Update SQL in route handlers or in **`workspace/dashboard.json`** datatable definitions if column names changed.
+
+---
+
+## Related paths
+
+- **MCP (editors):** `app/mcp-brain-db.mjs` — read-only queries against the same DB files the dashboard uses.
+- **Tests:** from **`app/`**, `npm test` runs `node --test` on `server/tenancy/`, `server/migrate/`, and `server/dashboard/` `*.test.js` files.
+- **Tenant maintenance:** `scripts/brain-delete-user.cjs` loads tenancy helpers from **`app/server/tenancy/`**.

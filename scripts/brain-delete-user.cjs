@@ -27,7 +27,7 @@ function requireFromApp(name) {
   }
 }
 const Database = requireFromApp('better-sqlite3');
-const tenancy = require(path.join(__dirname, '..', 'app', 'tenancy-utils.js'));
+const tenancy = require(path.join(__dirname, '..', 'app', 'server', 'tenancy', 'tenancy-utils.js'));
 
 function parseArgs(argv) {
   const o = { _: [] };

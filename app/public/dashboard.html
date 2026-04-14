@@ -16,7 +16,7 @@ tailwind.config = {
 <body class="bg-slate-50 dark:bg-slate-900 text-slate-800 dark:text-slate-100 min-h-screen transition-colors duration-200" x-data="app" x-init="init()">
 
 <!-- TOP NAV -->
-<nav class="bg-white dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 sticky top-0 shadow-sm transition-[width] duration-200 ease-out max-w-full" :class="mobileMenuOpen ? 'z-[70]' : 'z-50'" :style="chatNavStyle()">
+<nav class="bg-white dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 sticky top-0 z-50 shadow-sm transition-[width] duration-200 ease-out max-w-full" :style="chatNavStyle()">
   <div class="max-w-7xl mx-auto px-4">
     <div class="flex items-center justify-between h-14">
       <div class="flex items-center gap-6">
@@ -26,10 +26,10 @@ tailwind.config = {
         </a>
         <div class="hidden sm:flex items-center gap-1">
           <a href="#/" @click.prevent="go('home')" :class="navLinkClass('home')" class="px-3 py-1.5 rounded-md text-sm font-medium transition-colors">Home</a>
-          <a href="#/career" x-show="dashboardPages.career" @click.prevent="go('career')" :class="navLinkClass('career')" class="px-3 py-1.5 rounded-md text-sm font-medium transition-colors">Career</a>
-          <a href="#/finance" x-show="dashboardPages.finance" @click.prevent="go('finance')" :class="navLinkClass('finance')" class="px-3 py-1.5 rounded-md text-sm font-medium transition-colors">Finance</a>
-          <a href="#/business" x-show="dashboardPages.business" @click.prevent="go('business')" :class="navLinkClass('business')" class="px-3 py-1.5 rounded-md text-sm font-medium transition-colors">Business</a>
-          <a href="#/files" @click.prevent="go('files')" :class="navLinkClass('files')" class="px-3 py-1.5 rounded-md text-sm font-medium transition-colors">Files</a>
+          <template x-for="navp in (dashboardNavPages || [])" :key="navp.slug">
+            <a :href="'#/' + navp.slug" @click.prevent="go(navp.slug)" :class="navLinkClass(navp.slug)" class="px-3 py-1.5 rounded-md text-sm font-medium transition-colors" x-text="navp.label"></a>
+          </template>
+          <button type="button" x-show="chatOpen && !viewportLg" x-cloak @click="closeChat()" class="px-3 py-1.5 rounded-md text-sm font-medium text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 transition-colors">Exit Chat</button>
         </div>
       </div>
       <div class="flex items-center gap-1 sm:gap-2">
@@ -38,6 +38,9 @@ tailwind.config = {
         <span x-show="lastRefresh" x-text="lastRefresh" class="hidden sm:block text-xs text-slate-400 dark:text-slate-500"></span>
         <button type="button" x-show="loginRequired" x-cloak @click="signOut()" class="icon-btn p-2 rounded-md text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors" title="Sign out" aria-label="Sign out">
           <i data-lucide="log-out" class="w-5 h-5"></i>
+        </button>
+        <button type="button" @click="go('files')" :class="page === 'files' ? 'bg-slate-100 dark:bg-slate-700 text-slate-900 dark:text-white' : 'text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-700'" class="icon-btn p-2 rounded-md transition-colors shrink-0" title="Files" aria-label="Files">
+          <i data-lucide="folder-open" class="w-5 h-5"></i>
         </button>
         <button type="button" @click="cycleTheme()" class="icon-btn p-2 rounded-md text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors" title="Cycle theme: Auto → Light → Dark" aria-label="Cycle theme">
           <i x-show="theme === 'dark'" x-cloak data-lucide="moon" class="w-5 h-5"></i>
@@ -57,23 +60,22 @@ tailwind.config = {
         <button type="button" @click="toggleChat()" :class="chatOpen ? 'bg-slate-100 dark:bg-slate-700 text-slate-900 dark:text-white' : 'text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-700'" class="hidden sm:flex icon-btn p-2 rounded-md transition-colors" title="Toggle chat" aria-label="Toggle chat">
           <i data-lucide="message-square" class="w-5 h-5"></i>
         </button>
-        <button type="button" @click="mobileMenuOpen = !mobileMenuOpen" class="sm:hidden p-2 rounded-md text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-700 icon-btn shrink-0" aria-label="Menu">
-          <i data-lucide="menu" class="w-5 h-5"></i>
-        </button>
       </div>
     </div>
-    <div x-show="mobileMenuOpen" x-cloak x-transition class="sm:hidden py-2 border-t border-slate-100 dark:border-slate-700">
-      <a href="#/" @click.prevent="go('home'); mobileMenuOpen = false" :class="navLinkClass('home')" class="block px-3 py-2 rounded-md text-sm font-medium">Home</a>
-      <a href="#/career" x-show="dashboardPages.career" @click.prevent="go('career'); mobileMenuOpen = false" :class="navLinkClass('career')" class="block px-3 py-2 rounded-md text-sm font-medium">Career</a>
-      <a href="#/finance" x-show="dashboardPages.finance" @click.prevent="go('finance'); mobileMenuOpen = false" :class="navLinkClass('finance')" class="block px-3 py-2 rounded-md text-sm font-medium">Finance</a>
-      <a href="#/business" x-show="dashboardPages.business" @click.prevent="go('business'); mobileMenuOpen = false" :class="navLinkClass('business')" class="block px-3 py-2 rounded-md text-sm font-medium">Business</a>
-      <a href="#/files" @click.prevent="go('files'); mobileMenuOpen = false" :class="navLinkClass('files')" class="block px-3 py-2 rounded-md text-sm font-medium">Files</a>
-      <button type="button" x-show="loginRequired" x-cloak @click="signOut(); mobileMenuOpen = false" class="block w-full text-left px-3 py-2 rounded-md text-sm font-medium text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-700">Sign out</button>
+    <!-- Mobile (&lt; sm): persistent horizontal nav under header (no Sign out here). -->
+    <div class="sm:hidden border-t border-slate-100 dark:border-slate-700 -mx-4 px-4 min-w-0">
+      <div class="flex flex-nowrap gap-2 py-2 overflow-x-auto overscroll-x-contain [-webkit-overflow-scrolling:touch]" role="navigation" aria-label="Sections">
+        <a href="#/" @click.prevent="go('home')" :class="navLinkClass('home')" class="shrink-0 px-3 py-1.5 rounded-md text-sm font-medium whitespace-nowrap">Home</a>
+        <template x-for="navp in (dashboardNavPages || [])" :key="'mnav-' + navp.slug">
+          <a :href="'#/' + navp.slug" @click.prevent="go(navp.slug)" :class="navLinkClass(navp.slug)" class="shrink-0 px-3 py-1.5 rounded-md text-sm font-medium whitespace-nowrap" x-text="navp.label"></a>
+        </template>
+        <button type="button" x-show="chatOpen && !viewportLg" x-cloak @click="closeChat()" class="shrink-0 px-3 py-1.5 rounded-md text-sm font-semibold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/40 whitespace-nowrap">Exit Chat</button>
+      </div>
     </div>
   </div>
 </nav>
 
-<!-- Chat FAB: hamburger layout only (&lt; sm); open chat (close is in the mobile chat header). -->
+<!-- Chat FAB: small screens only (&lt; sm); open chat (close is in the mobile chat header). -->
 <button type="button" x-show="!chatOpen" x-cloak @click="openChat()" class="sm:hidden fixed bottom-6 right-6 z-40 w-14 h-14 bg-slate-800 dark:bg-slate-700 hover:bg-slate-900 dark:hover:bg-slate-600 text-white rounded-full shadow-lg icon-btn" aria-label="Open chat">
   <i data-lucide="message-square" class="w-6 h-6"></i>
 </button>
@@ -170,13 +172,175 @@ tailwind.config = {
       <h2 class="text-base font-semibold text-slate-700 dark:text-slate-200 mb-3">This Week</h2>
       <div x-html="homeWeekHtml"></div>
     </section>
+
+    <section class="mt-2 pt-4 border-t border-slate-200 dark:border-slate-700" aria-label="Chat API usage summary">
+      <p class="text-xs text-slate-500 dark:text-slate-400 leading-relaxed flex flex-wrap items-baseline gap-x-2 gap-y-1">
+        <span x-text="homeUsageFooterMain()"></span>
+        <a href="#/usage" @click.prevent="go('usage')" class="font-medium text-indigo-600 dark:text-indigo-400 hover:underline shrink-0">Usage →</a>
+      </p>
+    </section>
   </div>
 
-  <!-- ── CAREER PAGE ── -->
-  <div id="page-career" x-show="page === 'career'" x-cloak x-transition.opacity.duration.150ms>
+  <!-- ── USAGE (Anthropic chat / Agent SDK aggregates) ── -->
+  <div id="page-usage" x-show="page === 'usage'" x-cloak x-transition.opacity.duration.150ms>
     <div class="mb-6">
-      <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Career</h1>
-      <p class="text-sm text-slate-500 dark:text-slate-400 mt-0.5">Job search, consulting pipeline &amp; weekly progress</p>
+      <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Usage</h1>
+      <p class="text-sm text-slate-500 dark:text-slate-400 mt-0.5">
+        Dashboard chat (Agent SDK) — billed tokens and cost. Buckets use <span class="font-medium text-slate-600 dark:text-slate-300">UTC</span> dates.
+        <span class="text-slate-400 dark:text-slate-500" x-text="usageGeneratedLabel()"></span>
+      </p>
+    </div>
+
+    <template x-if="loadError.usage">
+      <div class="p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg text-sm text-red-700 dark:text-red-300 mb-6" x-text="loadError.usage"></div>
+    </template>
+    <template x-if="!loadError.usage && !pageReady.usage">
+      <div class="space-y-2 mb-6"><div class="skeleton h-24 w-full"></div><div class="skeleton h-40 w-full"></div></div>
+    </template>
+
+    <div x-show="pageReady.usage && !loadError.usage && chatUsageSummary" x-cloak class="space-y-6">
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div class="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800/80 p-4 shadow-sm">
+          <div class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Lifetime</div>
+          <div class="mt-1 text-xl font-bold text-slate-900 dark:text-white tabular-nums" x-text="formatChatUsd(chatUsageSummary.lifetime.totalCostUsd)"></div>
+          <div class="mt-1 text-xs text-slate-500 dark:text-slate-400" x-text="usageTokPair(chatUsageSummary.lifetime.input_tokens, chatUsageSummary.lifetime.output_tokens)"></div>
+          <div class="mt-0.5 text-xs text-slate-400 dark:text-slate-500" x-text="(chatUsageSummary.lifetime.turns || 0) + ' assistant turn' + ((chatUsageSummary.lifetime.turns || 0) === 1 ? '' : 's')"></div>
+        </div>
+        <div class="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800/80 p-4 shadow-sm">
+          <div class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Month to date</div>
+          <div class="mt-1 text-xl font-bold text-slate-900 dark:text-white tabular-nums" x-text="formatChatUsd(chatUsageSummary.monthToDate.totalCostUsd)"></div>
+          <div class="mt-1 text-xs text-slate-500 dark:text-slate-400" x-text="usageTokPair(chatUsageSummary.monthToDate.input_tokens, chatUsageSummary.monthToDate.output_tokens)"></div>
+          <div class="mt-0.5 text-xs text-slate-400 dark:text-slate-500" x-text="(chatUsageSummary.monthToDate.month || '') + ' through ' + (chatUsageSummary.monthToDate.through || '')"></div>
+        </div>
+        <div class="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800/80 p-4 shadow-sm">
+          <div class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Week to date</div>
+          <div class="mt-1 text-xl font-bold text-slate-900 dark:text-white tabular-nums" x-text="formatChatUsd(chatUsageSummary.weekToDate.totalCostUsd)"></div>
+          <div class="mt-1 text-xs text-slate-500 dark:text-slate-400" x-text="usageTokPair(chatUsageSummary.weekToDate.input_tokens, chatUsageSummary.weekToDate.output_tokens)"></div>
+          <div class="mt-0.5 text-xs text-slate-400 dark:text-slate-500" x-text="'Mon ' + (chatUsageSummary.weekToDate.weekStart || '') + ' → ' + (chatUsageSummary.weekToDate.through || '')"></div>
+        </div>
+      </div>
+
+      <details open class="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800/60 shadow-sm overflow-hidden">
+        <summary class="cursor-pointer list-none px-4 py-3 text-sm font-semibold text-slate-800 dark:text-slate-100 hover:bg-slate-50 dark:hover:bg-slate-700/40 [&::-webkit-details-marker]:hidden">Recent conversations (50)</summary>
+        <div class="border-t border-slate-100 dark:border-slate-700 max-h-96 overflow-auto">
+          <table class="w-full text-sm">
+            <thead class="text-left text-xs text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-900/50 sticky top-0 z-10">
+              <tr>
+                <th class="p-2.5 font-medium">Title</th>
+                <th class="p-2.5 font-medium">Agent</th>
+                <th class="p-2.5 font-medium">Updated</th>
+                <th class="p-2.5 font-medium text-right">Cost</th>
+                <th class="p-2.5 font-medium text-right w-20"></th>
+              </tr>
+            </thead>
+            <tbody>
+              <template x-for="row in (chatUsageSummary.recentSessions || [])" :key="'rs-'+row.id">
+                <tr class="border-t border-slate-100 dark:border-slate-700/80">
+                  <td class="p-2.5 text-slate-800 dark:text-slate-100 max-w-[12rem] truncate" :title="row.title" x-text="row.title"></td>
+                  <td class="p-2.5 text-slate-600 dark:text-slate-300 font-mono text-xs" x-text="row.agent || '—'"></td>
+                  <td class="p-2.5 text-slate-600 dark:text-slate-300 text-xs whitespace-nowrap" x-text="usageSessionUpdatedLabel(row.updatedAt)"></td>
+                  <td class="p-2.5 text-right tabular-nums font-medium text-slate-800 dark:text-slate-100" x-text="usageSessionCostTwoDecimals(row)"></td>
+                  <td class="p-2.5 text-right">
+                    <button type="button" class="text-xs font-medium text-indigo-600 dark:text-indigo-400 hover:underline" @click="openChatSessionFromUsage(row)">Open</button>
+                  </td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </details>
+
+      <details open class="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800/60 shadow-sm overflow-hidden">
+        <summary class="cursor-pointer list-none px-4 py-3 text-sm font-semibold text-slate-800 dark:text-slate-100 hover:bg-slate-50 dark:hover:bg-slate-700/40 [&::-webkit-details-marker]:hidden">By calendar month</summary>
+        <div class="border-t border-slate-100 dark:border-slate-700 max-h-72 overflow-auto">
+          <table class="w-full text-sm">
+            <thead class="text-left text-xs text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-900/50 sticky top-0 z-10">
+              <tr>
+                <th class="p-2.5 font-medium">Month</th>
+                <th class="p-2.5 font-medium text-right">USD</th>
+                <th class="p-2.5 font-medium text-right">In tok</th>
+                <th class="p-2.5 font-medium text-right">Out tok</th>
+                <th class="p-2.5 font-medium text-right">Turns</th>
+              </tr>
+            </thead>
+            <tbody>
+              <template x-for="row in (chatUsageSummary.byMonth || [])" :key="'um-'+row.month">
+                <tr class="border-t border-slate-100 dark:border-slate-700/80">
+                  <td class="p-2.5 text-slate-800 dark:text-slate-100" x-text="usageMonthLabel(row.month)"></td>
+                  <td class="p-2.5 text-right tabular-nums text-slate-700 dark:text-slate-200" x-text="formatChatUsd(row.totalCostUsd)"></td>
+                  <td class="p-2.5 text-right tabular-nums text-slate-600 dark:text-slate-300" x-text="(row.input_tokens || 0).toLocaleString()"></td>
+                  <td class="p-2.5 text-right tabular-nums text-slate-600 dark:text-slate-300" x-text="(row.output_tokens || 0).toLocaleString()"></td>
+                  <td class="p-2.5 text-right tabular-nums text-slate-600 dark:text-slate-300" x-text="row.turns || 0"></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </details>
+
+      <details open class="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800/60 shadow-sm overflow-hidden">
+        <summary class="cursor-pointer list-none px-4 py-3 text-sm font-semibold text-slate-800 dark:text-slate-100 hover:bg-slate-50 dark:hover:bg-slate-700/40 [&::-webkit-details-marker]:hidden">By week (UTC, Mon–Sun)</summary>
+        <div class="border-t border-slate-100 dark:border-slate-700 max-h-72 overflow-auto">
+          <table class="w-full text-sm">
+            <thead class="text-left text-xs text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-900/50 sticky top-0 z-10">
+              <tr>
+                <th class="p-2.5 font-medium">Week</th>
+                <th class="p-2.5 font-medium text-right">USD</th>
+                <th class="p-2.5 font-medium text-right">In tok</th>
+                <th class="p-2.5 font-medium text-right">Out tok</th>
+                <th class="p-2.5 font-medium text-right">Turns</th>
+              </tr>
+            </thead>
+            <tbody>
+              <template x-for="row in (chatUsageSummary.byWeek || [])" :key="'uw-'+row.weekMonday">
+                <tr class="border-t border-slate-100 dark:border-slate-700/80">
+                  <td class="p-2.5 text-slate-800 dark:text-slate-100 text-xs sm:text-sm" x-text="usageWeekLabel(row.weekMonday)"></td>
+                  <td class="p-2.5 text-right tabular-nums text-slate-700 dark:text-slate-200" x-text="formatChatUsd(row.totalCostUsd)"></td>
+                  <td class="p-2.5 text-right tabular-nums text-slate-600 dark:text-slate-300" x-text="(row.input_tokens || 0).toLocaleString()"></td>
+                  <td class="p-2.5 text-right tabular-nums text-slate-600 dark:text-slate-300" x-text="(row.output_tokens || 0).toLocaleString()"></td>
+                  <td class="p-2.5 text-right tabular-nums text-slate-600 dark:text-slate-300" x-text="row.turns || 0"></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </details>
+
+      <details class="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800/60 shadow-sm overflow-hidden">
+        <summary class="cursor-pointer list-none px-4 py-3 text-sm font-semibold text-slate-800 dark:text-slate-100 hover:bg-slate-50 dark:hover:bg-slate-700/40 [&::-webkit-details-marker]:hidden">By day (latest 120 days)</summary>
+        <div class="border-t border-slate-100 dark:border-slate-700 max-h-80 overflow-auto">
+          <table class="w-full text-sm">
+            <thead class="text-left text-xs text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-900/50 sticky top-0 z-10">
+              <tr>
+                <th class="p-2.5 font-medium">Date (UTC)</th>
+                <th class="p-2.5 font-medium text-right">USD</th>
+                <th class="p-2.5 font-medium text-right">In tok</th>
+                <th class="p-2.5 font-medium text-right">Out tok</th>
+                <th class="p-2.5 font-medium text-right">Turns</th>
+              </tr>
+            </thead>
+            <tbody>
+              <template x-for="row in (chatUsageSummary.byDay || [])" :key="'ud-'+row.date">
+                <tr class="border-t border-slate-100 dark:border-slate-700/80">
+                  <td class="p-2.5 font-mono text-xs text-slate-800 dark:text-slate-100" x-text="row.date"></td>
+                  <td class="p-2.5 text-right tabular-nums text-slate-700 dark:text-slate-200" x-text="formatChatUsd(row.totalCostUsd)"></td>
+                  <td class="p-2.5 text-right tabular-nums text-slate-600 dark:text-slate-300" x-text="(row.input_tokens || 0).toLocaleString()"></td>
+                  <td class="p-2.5 text-right tabular-nums text-slate-600 dark:text-slate-300" x-text="(row.output_tokens || 0).toLocaleString()"></td>
+                  <td class="p-2.5 text-right tabular-nums text-slate-600 dark:text-slate-300" x-text="row.turns || 0"></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ── CAREER TEMPLATE (slug from dashboard.json) ── -->
+  <div id="page-career" x-show="getPageTemplate() === 'career'" x-cloak x-transition.opacity.duration.150ms>
+    <div class="mb-6">
+      <h1 class="text-2xl font-bold text-slate-900 dark:text-white" x-text="currentNavLabel() || 'Career'"></h1>
+      <p class="text-sm text-slate-500 dark:text-slate-400 mt-0.5" x-text="currentNavDescription() || 'Job search, consulting pipeline and weekly progress'"></p>
     </div>
 
     <section class="mb-8">
@@ -225,7 +389,7 @@ tailwind.config = {
             <div class="space-y-2">
               <template x-for="(item, idx) in grp.items" :key="item.id != null ? item.id : 'c-' + idx + '-' + (item.title || '')">
                 <div class="flex items-start gap-2 sm:gap-3 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 border-l-4 rounded-lg px-3 sm:px-4 py-3" :class="urgencyBorderClass(item)">
-                  <button type="button" @click.stop="completeActionItem(item, 'career')" class="action-item-check mt-0.5" :class="actionItemCheckboxRingClass(item)" title="Mark done" aria-label="Mark done"></button>
+                  <button type="button" @click.stop="completeActionItem(item)" class="action-item-check mt-0.5" :class="actionItemCheckboxRingClass(item)" title="Mark done" aria-label="Mark done"></button>
                   <div class="flex-1 min-w-0">
                     <div class="flex flex-wrap items-center gap-2">
                       <span class="text-sm font-medium text-slate-800 dark:text-slate-100" x-text="item.title"></span>
@@ -235,7 +399,7 @@ tailwind.config = {
                     <button type="button" x-show="item.details" @click="toggleActionDetail(item.id)" class="mt-1 text-xs font-medium text-blue-600 dark:text-blue-400 hover:underline" x-text="isActionDetailOpen(item.id) ? 'Hide details' : 'Details'"></button>
                     <div x-show="item.details && isActionDetailOpen(item.id)" x-cloak class="mt-2 pt-2 border-t border-slate-100 dark:border-slate-700 text-sm text-slate-700 dark:text-slate-200 chat-md-output max-w-none" x-html="actionItemDetailsHtml(item)"></div>
                   </div>
-                  <button type="button" @click="openActionItemEditor(item, 'career')" class="action-item-caret mt-0.5 self-start" title="Edit" aria-label="Edit">
+                  <button type="button" @click="openActionItemEditor(item)" class="action-item-caret mt-0.5 self-start" title="Edit" aria-label="Edit">
                     <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18l6-6-6-6"/></svg>
                   </button>
                 </div>
@@ -273,11 +437,11 @@ tailwind.config = {
     </section>
   </div>
 
-  <!-- ── FINANCE PAGE ── -->
-  <div id="page-finance" x-show="page === 'finance'" x-cloak x-transition.opacity.duration.150ms>
+  <!-- ── FINANCE TEMPLATE ── -->
+  <div id="page-finance" x-show="getPageTemplate() === 'finance'" x-cloak x-transition.opacity.duration.150ms>
     <div class="mb-6">
-      <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Finance</h1>
-      <p class="text-sm text-slate-500 dark:text-slate-400 mt-0.5">Personal spending, income &amp; corporate accounting</p>
+      <h1 class="text-2xl font-bold text-slate-900 dark:text-white" x-text="currentNavLabel() || 'Finance'"></h1>
+      <p class="text-sm text-slate-500 dark:text-slate-400 mt-0.5" x-text="currentNavDescription() || 'Personal spending, income and corporate accounting'"></p>
     </div>
 
     <section class="mb-8">
@@ -326,7 +490,7 @@ tailwind.config = {
             <div class="space-y-2">
               <template x-for="(item, idx) in grp.items" :key="item.id != null ? item.id : 'f-' + idx + '-' + (item.title || '')">
                 <div class="flex items-start gap-2 sm:gap-3 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 border-l-4 rounded-lg px-3 sm:px-4 py-3" :class="urgencyBorderClass(item)">
-                  <button type="button" @click.stop="completeActionItem(item, 'finance')" class="action-item-check mt-0.5" :class="actionItemCheckboxRingClass(item)" title="Mark done" aria-label="Mark done"></button>
+                  <button type="button" @click.stop="completeActionItem(item)" class="action-item-check mt-0.5" :class="actionItemCheckboxRingClass(item)" title="Mark done" aria-label="Mark done"></button>
                   <div class="flex-1 min-w-0">
                     <div class="flex flex-wrap items-center gap-2">
                       <span class="text-sm font-medium text-slate-800 dark:text-slate-100" x-text="item.title"></span>
@@ -336,7 +500,7 @@ tailwind.config = {
                     <button type="button" x-show="item.details" @click="toggleActionDetail(item.id)" class="mt-1 text-xs font-medium text-blue-600 dark:text-blue-400 hover:underline" x-text="isActionDetailOpen(item.id) ? 'Hide details' : 'Details'"></button>
                     <div x-show="item.details && isActionDetailOpen(item.id)" x-cloak class="mt-2 pt-2 border-t border-slate-100 dark:border-slate-700 text-sm text-slate-700 dark:text-slate-200 chat-md-output max-w-none" x-html="actionItemDetailsHtml(item)"></div>
                   </div>
-                  <button type="button" @click="openActionItemEditor(item, 'finance')" class="action-item-caret mt-0.5 self-start" title="Edit" aria-label="Edit">
+                  <button type="button" @click="openActionItemEditor(item)" class="action-item-caret mt-0.5 self-start" title="Edit" aria-label="Edit">
                     <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18l6-6-6-6"/></svg>
                   </button>
                 </div>
@@ -394,11 +558,11 @@ tailwind.config = {
     </section>
   </div>
 
-  <!-- ── BUSINESS PAGE ── -->
-  <div id="page-business" x-show="page === 'business'" x-cloak x-transition.opacity.duration.150ms>
+  <!-- ── BUSINESS TEMPLATE ── -->
+  <div id="page-business" x-show="getPageTemplate() === 'business'" x-cloak x-transition.opacity.duration.150ms>
     <div class="mb-6">
-      <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Business</h1>
-      <p class="text-sm text-slate-500 dark:text-slate-400 mt-0.5">WynnSet Inc. — corporate overview &amp; compliance</p>
+      <h1 class="text-2xl font-bold text-slate-900 dark:text-white" x-text="currentNavLabel() || 'Business'"></h1>
+      <p class="text-sm text-slate-500 dark:text-slate-400 mt-0.5" x-text="currentNavDescription() || 'Corporate overview & compliance'"></p>
     </div>
 
     <section class="mb-8">
@@ -447,7 +611,7 @@ tailwind.config = {
             <div class="space-y-2">
               <template x-for="(item, idx) in grp.items" :key="item.id != null ? item.id : 'b-' + idx + '-' + (item.title || '')">
                 <div class="flex items-start gap-2 sm:gap-3 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 border-l-4 rounded-lg px-3 sm:px-4 py-3" :class="urgencyBorderClass(item)">
-                  <button type="button" @click.stop="completeActionItem(item, 'business')" class="action-item-check mt-0.5" :class="actionItemCheckboxRingClass(item)" title="Mark done" aria-label="Mark done"></button>
+                  <button type="button" @click.stop="completeActionItem(item)" class="action-item-check mt-0.5" :class="actionItemCheckboxRingClass(item)" title="Mark done" aria-label="Mark done"></button>
                   <div class="flex-1 min-w-0">
                     <div class="flex flex-wrap items-center gap-2">
                       <span class="text-sm font-medium text-slate-800 dark:text-slate-100" x-text="item.title"></span>
@@ -457,7 +621,7 @@ tailwind.config = {
                     <button type="button" x-show="item.details" @click="toggleActionDetail(item.id)" class="mt-1 text-xs font-medium text-blue-600 dark:text-blue-400 hover:underline" x-text="isActionDetailOpen(item.id) ? 'Hide details' : 'Details'"></button>
                     <div x-show="item.details && isActionDetailOpen(item.id)" x-cloak class="mt-2 pt-2 border-t border-slate-100 dark:border-slate-700 text-sm text-slate-700 dark:text-slate-200 chat-md-output max-w-none" x-html="actionItemDetailsHtml(item)"></div>
                   </div>
-                  <button type="button" @click="openActionItemEditor(item, 'business')" class="action-item-caret mt-0.5 self-start" title="Edit" aria-label="Edit">
+                  <button type="button" @click="openActionItemEditor(item)" class="action-item-caret mt-0.5 self-start" title="Edit" aria-label="Edit">
                     <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18l6-6-6-6"/></svg>
                   </button>
                 </div>
@@ -508,6 +672,46 @@ tailwind.config = {
         </template>
       </div>
     </section>
+  </div>
+
+  <!-- ── DATATABLE (custom manifest pages: template datatable + db + sql) ── -->
+  <div id="page-datatable" x-show="getPageTemplate() === 'datatable'" x-cloak x-transition.opacity.duration.150ms>
+    <div class="mb-6">
+      <h1 class="text-2xl font-bold text-slate-900 dark:text-white" x-text="currentNavLabel() || 'Table'"></h1>
+      <p class="text-sm text-slate-500 dark:text-slate-400 mt-0.5" x-text="currentNavDescription() || 'Read-only query results from your workspace database'"></p>
+    </div>
+    <template x-if="datatableLoadError">
+      <div class="p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg text-sm text-red-700 dark:text-red-300" x-text="datatableLoadError"></div>
+    </template>
+    <template x-if="!datatableLoadError && !datatableReady">
+      <div class="skeleton h-40 w-full"></div>
+    </template>
+    <div x-show="datatableReady && !datatableLoadError" x-cloak>
+      <div x-html="datatableHtml"></div>
+      <p x-show="datatableTruncated" class="mt-3 text-xs text-slate-500 dark:text-slate-400">Results limited to the first 500 rows.</p>
+    </div>
+  </div>
+
+  <!-- ── SECTIONS PAGE (manifest template "sections" — stacked datatables, one nav tab) ── -->
+  <div id="page-sections" x-show="getPageTemplate() === 'sections'" x-cloak x-transition.opacity.duration.150ms>
+    <div class="mb-6">
+      <h1 class="text-2xl font-bold text-slate-900 dark:text-white" x-text="currentNavLabel() || 'Overview'"></h1>
+      <p class="text-sm text-slate-500 dark:text-slate-400 mt-0.5" x-text="currentNavDescription() || 'Multiple sections on one page'"></p>
+    </div>
+    <template x-if="!sectionsPageReady">
+      <div class="skeleton h-32 w-full mb-6"></div>
+    </template>
+    <div class="space-y-10" x-show="sectionsPageReady" x-cloak>
+      <template x-for="panel in sectionsPagePanels" :key="panel.id">
+        <section class="scroll-mt-4">
+          <h2 class="text-base font-semibold text-slate-700 dark:text-slate-200 mb-3" x-text="panel.label"></h2>
+          <p x-show="panel.skipped" class="text-sm text-slate-500 dark:text-slate-400" x-text="panel.skipReason || 'This section is not available yet.'"></p>
+          <div x-show="!panel.skipped && panel.error" class="p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg text-sm text-red-700 dark:text-red-300" x-text="panel.error"></div>
+          <div x-show="!panel.skipped && !panel.error && panel.html" x-html="panel.html"></div>
+          <p x-show="!panel.skipped && panel.truncated" class="mt-2 text-xs text-slate-500 dark:text-slate-400">Results limited to the first 500 rows.</p>
+        </section>
+      </template>
+    </div>
   </div>
 
   <!-- ── FILES PAGE ── -->
@@ -783,6 +987,12 @@ tailwind.config = {
           <span>New</span>
         </button>
       </div>
+      <div x-show="chatSdkSessionTotalsHasData(chatSdkUsageSessionTotals)" x-cloak class="shrink-0 border-b border-slate-100 dark:border-slate-700/80 bg-slate-50/90 dark:bg-slate-900/35 px-3 py-1.5">
+        <details class="text-[11px] text-slate-600 dark:text-slate-400">
+          <summary class="cursor-pointer list-none select-none hover:text-slate-800 dark:hover:text-slate-200 [&::-webkit-details-marker]:hidden font-medium leading-snug" x-text="chatSdkSessionTotalsSummaryLine(chatSdkUsageSessionTotals)"></summary>
+          <pre class="mt-1 max-h-44 overflow-auto rounded border border-slate-200/80 dark:border-slate-600/50 bg-slate-900/90 dark:bg-black/50 p-2 font-mono text-[10px] leading-snug text-slate-200 whitespace-pre-wrap break-words" x-text="chatSdkSessionTotalsDetailText(chatSdkUsageSessionTotals)"></pre>
+        </details>
+      </div>
       <div class="flex flex-col flex-1 min-h-0 min-w-0">
         <div class="flex-1 overflow-y-auto p-3 text-sm min-h-0 min-w-0" x-ref="chatScrollDesktop">
           <template x-if="!chatMessages.length && !chatStreaming && !chatOutboundInFlight && !chatOutboundQueue.length">
@@ -791,11 +1001,19 @@ tailwind.config = {
           <div class="space-y-3">
             <template x-for="m in chatMessages" :key="m.id">
               <div class="flex" :class="m.role === 'user' ? 'justify-end' : 'justify-start'">
-                <div class="max-w-[min(100%,28rem)] min-w-0 rounded-2xl px-3 py-2 text-sm break-words shadow-sm"
-                  :class="m.role === 'user'
-                    ? 'bg-slate-800 dark:bg-slate-600 text-white chat-bubble-user'
-                    : (m.error ? 'bg-red-50 dark:bg-red-900/25 text-red-900 dark:text-red-200 border border-red-200 dark:border-red-800' : 'bg-slate-100 dark:bg-slate-700/80 text-slate-800 dark:text-slate-100')">
-                  <div class="chat-md-output" x-html="chatBubbleHtml(m)"></div>
+                <div class="flex flex-col gap-0.5 max-w-[min(100%,28rem)] min-w-0" :class="m.role === 'user' ? 'items-end' : 'items-stretch'">
+                  <div class="rounded-2xl px-3 py-2 text-sm break-words shadow-sm"
+                    :class="m.role === 'user'
+                      ? 'bg-slate-800 dark:bg-slate-600 text-white chat-bubble-user'
+                      : (m.error ? 'bg-red-50 dark:bg-red-900/25 text-red-900 dark:text-red-200 border border-red-200 dark:border-red-800' : 'bg-slate-100 dark:bg-slate-700/80 text-slate-800 dark:text-slate-100')">
+                    <div class="chat-md-output" x-html="chatBubbleHtml(m)"></div>
+                  </div>
+                  <template x-if="m.role === 'assistant' && chatSdkBillingHasData(m.sdkBilling)" :key="'sdk-bill-'+m.id">
+                    <details class="max-w-full min-w-0 rounded-md border border-slate-200/80 dark:border-slate-600/60 bg-white/80 dark:bg-slate-900/40 text-[11px] text-slate-600 dark:text-slate-400 shadow-sm">
+                      <summary class="cursor-pointer list-none px-2 py-1 select-none hover:bg-slate-50 dark:hover:bg-slate-800/60 rounded-md [&::-webkit-details-marker]:hidden leading-snug" x-text="chatSdkBillingSummaryLine(m.sdkBilling)"></summary>
+                      <pre class="max-h-40 overflow-auto border-t border-slate-100 dark:border-slate-700 px-2 py-1.5 font-mono text-[10px] leading-snug text-slate-700 dark:text-slate-300 whitespace-pre-wrap break-words" x-text="chatSdkBillingDetailText(m.sdkBilling)"></pre>
+                    </details>
+                  </template>
                 </div>
               </div>
             </template>
@@ -856,14 +1074,14 @@ tailwind.config = {
           <textarea x-ref="chatPromptDesktop" x-model="chatPrompt" @keydown.enter.prevent="!$event.shiftKey && submitChat()" rows="2" placeholder="Ask your agent… (Enter to send, Shift+Enter for newline)"
             class="w-full text-base lg:text-sm rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 px-3 py-2.5 resize-none focus:outline-none focus:ring-2 focus:ring-slate-400 dark:focus:ring-slate-500 min-h-[44px]"></textarea>
           <div class="flex items-center gap-2 min-w-0">
-            <div class="flex-1 min-w-0">
+            <div class="flex flex-1 min-w-0 items-center gap-2">
               <button type="button" id="chat-agent-desktop"
                 @click="toggleChatAgentPicker()"
                 :disabled="chatMessages.length > 0"
                 :aria-expanded="chatAgentPickerOpen"
                 aria-haspopup="dialog"
                 aria-controls="chat-agent-picker-panel"
-                class="flex w-full min-w-0 h-10 items-center gap-2 rounded-lg border border-slate-200 dark:border-slate-600 bg-slate-50 dark:bg-slate-900/50 px-2 text-left transition-colors hover:bg-slate-100 dark:hover:bg-slate-800/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 dark:focus-visible:ring-slate-500 disabled:opacity-60 disabled:pointer-events-none"
+                class="flex min-w-0 flex-1 h-10 items-center gap-2 rounded-lg border border-slate-200 dark:border-slate-600 bg-slate-50 dark:bg-slate-900/50 px-2 text-left transition-colors hover:bg-slate-100 dark:hover:bg-slate-800/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 dark:focus-visible:ring-slate-500 disabled:opacity-60 disabled:pointer-events-none"
                 :title="chatMessages.length ? 'Agent is fixed after the first message in this chat' : 'Choose agent — see everyone’s role'">
                 <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-indigo-100 dark:bg-indigo-950/55 text-xs font-bold text-indigo-700 dark:text-indigo-200" x-text="workPanelAvatarLetter(chatAgent)"></div>
                 <div class="min-w-0 flex-1 py-0.5">
@@ -872,6 +1090,16 @@ tailwind.config = {
                 </div>
                 <i data-lucide="chevrons-up-down" class="w-4 h-4 shrink-0 text-slate-400" aria-hidden="true"></i>
               </button>
+              <select
+                class="h-10 shrink-0 rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 px-2 text-xs font-medium text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-slate-400 dark:focus:ring-slate-500 disabled:opacity-50 min-w-[5.5rem]"
+                :disabled="chatStreaming || chatOutboundInFlight"
+                aria-label="Reply mode"
+                :value="chatPlanMode ? 'plan' : 'chat'"
+                @change="chatPlanMode = ($event.target.value === 'plan')"
+              >
+                <option value="chat">Chat</option>
+                <option value="plan">Plan</option>
+              </select>
             </div>
             <button type="button" @click="$refs.chatFileInputDesktop.click()" :title="chatFiles.length ? (chatFiles.length + ' file(s) — team-inbox') : 'Attach files (team-inbox)'" :aria-label="chatFiles.length ? chatFiles.length + ' files attached, add more' : 'Attach files to team-inbox'"
               class="icon-btn relative shrink-0 h-10 w-10 rounded-lg border transition-colors"
@@ -888,6 +1116,24 @@ tailwind.config = {
               <i data-lucide="square" class="w-3.5 h-3.5 fill-current stroke-[2.5]"></i>
             </button>
           </div>
+          <div
+            x-show="chatPlanMode || chatPlanAwaitingExecute"
+            x-cloak
+            class="space-y-2 rounded-lg border border-slate-200/80 dark:border-slate-600/60 bg-slate-50/90 dark:bg-slate-900/35 px-2 py-2"
+          >
+            <p class="text-[11px] text-slate-500 dark:text-slate-400 leading-snug" x-show="chatPlanMode && !chatPlanAwaitingExecute">Next send: planning only (read-only tools). When the plan is ready, it opens on the <span class="font-medium">Files</span> page under Owners Inbox.</p>
+            <div class="space-y-2" x-show="chatPlanAwaitingExecute" x-cloak>
+              <p class="text-[11px] text-slate-600 dark:text-slate-300 leading-snug">The checklist is in a markdown file in <span class="font-medium">Owners Inbox</span>. The Files page should open automatically; use the link if it did not.</p>
+              <p class="text-[11px]" x-show="chatPlanInboxFile" x-cloak>
+                <a class="font-semibold text-indigo-600 dark:text-indigo-400 hover:underline" :href="chatPlanInboxOpenHref()">Open plan</a>
+              </p>
+              <p class="text-[11px] text-slate-500 dark:text-slate-400 leading-snug">Tap <strong class="text-slate-700 dark:text-slate-200">Run plan</strong> when you want the agent to execute. To change steps first, reply in chat so the agent can post an updated <code class="text-[10px]">brain_plan</code> block.</p>
+              <button type="button" @click="executeApprovedChatPlan()" :disabled="chatStreaming || chatOutboundInFlight" class="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold px-3 py-1.5 disabled:opacity-40 disabled:pointer-events-none transition-colors">
+                <i data-lucide="play" class="w-3.5 h-3.5" aria-hidden="true"></i>
+                Run plan
+              </button>
+            </div>
+          </div>
           <div class="flex justify-end pt-0.5">
             <button type="button" @click="openChatAgentProfile()" class="inline-flex items-center gap-1 text-[11px] sm:text-xs font-semibold text-indigo-600 dark:text-indigo-400 hover:text-indigo-500 dark:hover:text-indigo-300 transition-colors" title="Full agent brief" aria-label="View full agent profile">
               <i data-lucide="user-circle" class="w-3.5 h-3.5 sm:w-4 sm:h-4 opacity-90" aria-hidden="true"></i>
@@ -901,7 +1147,7 @@ tailwind.config = {
   </aside>
 
 <!-- Mobile chat (below top nav so header chat toggle stays usable) -->
-<div x-show="chatOpen" x-cloak x-transition class="lg:hidden fixed left-0 right-0 bottom-0 top-14 z-[60] flex flex-col min-h-0 bg-white dark:bg-slate-800 overscroll-contain touch-pan-y chat-mobile-panel border-t border-slate-200/80 dark:border-slate-700/80">
+<div x-show="chatOpen" x-cloak x-transition class="lg:hidden fixed left-0 right-0 bottom-0 z-[60] flex flex-col min-h-0 bg-white dark:bg-slate-800 overscroll-contain touch-pan-y chat-mobile-panel border-t border-slate-200/80 dark:border-slate-700/80 top-[calc(3.5rem+1px+3rem)] sm:top-14">
   <div class="flex items-center gap-2 px-3 py-2 border-b border-slate-200 dark:border-slate-700 shrink-0 bg-white/95 dark:bg-slate-800/95 backdrop-blur-sm">
     <div class="flex items-center gap-2 min-w-0 flex-1">
       <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-100 dark:bg-slate-700/80 text-slate-500 dark:text-slate-400" aria-hidden="true">
@@ -917,6 +1163,12 @@ tailwind.config = {
       <span>New</span>
     </button>
   </div>
+  <div x-show="chatSdkSessionTotalsHasData(chatSdkUsageSessionTotals)" x-cloak class="shrink-0 border-b border-slate-100 dark:border-slate-700/80 bg-slate-50/90 dark:bg-slate-900/35 px-3 py-1.5">
+    <details class="text-[11px] text-slate-600 dark:text-slate-400">
+      <summary class="cursor-pointer list-none select-none hover:text-slate-800 dark:hover:text-slate-200 [&::-webkit-details-marker]:hidden font-medium leading-snug" x-text="chatSdkSessionTotalsSummaryLine(chatSdkUsageSessionTotals)"></summary>
+      <pre class="mt-1 max-h-44 overflow-auto rounded border border-slate-200/80 dark:border-slate-600/50 bg-slate-900/90 dark:bg-black/50 p-2 font-mono text-[10px] leading-snug text-slate-200 whitespace-pre-wrap break-words" x-text="chatSdkSessionTotalsDetailText(chatSdkUsageSessionTotals)"></pre>
+    </details>
+  </div>
   <div class="flex flex-col flex-1 min-h-0 min-w-0">
     <div class="flex-1 overflow-y-auto p-3 text-sm min-h-0 min-w-0" x-ref="chatScrollMobile">
       <template x-if="!chatMessages.length && !chatStreaming && !chatOutboundInFlight && !chatOutboundQueue.length">
@@ -925,11 +1177,19 @@ tailwind.config = {
       <div class="space-y-3">
         <template x-for="m in chatMessages" :key="'mb-'+m.id">
           <div class="flex" :class="m.role === 'user' ? 'justify-end' : 'justify-start'">
-            <div class="max-w-[min(100%,28rem)] min-w-0 rounded-2xl px-3 py-2 text-sm break-words shadow-sm"
-              :class="m.role === 'user'
-                ? 'bg-slate-800 dark:bg-slate-600 text-white chat-bubble-user'
-                : (m.error ? 'bg-red-50 dark:bg-red-900/25 text-red-900 dark:text-red-200 border border-red-200 dark:border-red-800' : 'bg-slate-100 dark:bg-slate-700/80 text-slate-800 dark:text-slate-100')">
-              <div class="chat-md-output" x-html="chatBubbleHtml(m)"></div>
+            <div class="flex flex-col gap-0.5 max-w-[min(100%,28rem)] min-w-0" :class="m.role === 'user' ? 'items-end' : 'items-stretch'">
+              <div class="rounded-2xl px-3 py-2 text-sm break-words shadow-sm"
+                :class="m.role === 'user'
+                  ? 'bg-slate-800 dark:bg-slate-600 text-white chat-bubble-user'
+                  : (m.error ? 'bg-red-50 dark:bg-red-900/25 text-red-900 dark:text-red-200 border border-red-200 dark:border-red-800' : 'bg-slate-100 dark:bg-slate-700/80 text-slate-800 dark:text-slate-100')">
+                <div class="chat-md-output" x-html="chatBubbleHtml(m)"></div>
+              </div>
+              <template x-if="m.role === 'assistant' && chatSdkBillingHasData(m.sdkBilling)" :key="'sdk-bill-m-'+m.id">
+                <details class="max-w-full min-w-0 rounded-md border border-slate-200/80 dark:border-slate-600/60 bg-white/80 dark:bg-slate-900/40 text-[11px] text-slate-600 dark:text-slate-400 shadow-sm">
+                  <summary class="cursor-pointer list-none px-2 py-1 select-none hover:bg-slate-50 dark:hover:bg-slate-800/60 rounded-md [&::-webkit-details-marker]:hidden leading-snug" x-text="chatSdkBillingSummaryLine(m.sdkBilling)"></summary>
+                  <pre class="max-h-40 overflow-auto border-t border-slate-100 dark:border-slate-700 px-2 py-1.5 font-mono text-[10px] leading-snug text-slate-700 dark:text-slate-300 whitespace-pre-wrap break-words" x-text="chatSdkBillingDetailText(m.sdkBilling)"></pre>
+                </details>
+              </template>
             </div>
           </div>
         </template>
@@ -994,14 +1254,14 @@ tailwind.config = {
           <button type="button" @click="closeChat()" class="icon-btn shrink-0 h-11 w-11 rounded-lg border border-slate-200 dark:border-slate-600 text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700/50 hover:text-slate-800 dark:hover:text-slate-100 transition-colors" title="Back" aria-label="Close chat">
             <i data-lucide="arrow-left" class="w-5 h-5"></i>
           </button>
-          <div class="flex-1 min-w-0">
+          <div class="flex flex-1 min-w-0 items-center gap-1.5">
             <button type="button" id="chat-agent-mobile"
               @click="toggleChatAgentPicker()"
               :disabled="chatMessages.length > 0"
               :aria-expanded="chatAgentPickerOpen"
               aria-haspopup="dialog"
               aria-controls="chat-agent-picker-panel"
-              class="flex w-full min-w-0 h-11 items-center gap-2 rounded-lg border border-slate-200 dark:border-slate-600 bg-slate-50 dark:bg-slate-900/50 px-2.5 text-left transition-colors hover:bg-slate-100 dark:hover:bg-slate-800/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 dark:focus-visible:ring-slate-500 disabled:opacity-60 disabled:pointer-events-none"
+              class="flex min-w-0 flex-1 h-11 items-center gap-2 rounded-lg border border-slate-200 dark:border-slate-600 bg-slate-50 dark:bg-slate-900/50 px-2.5 text-left transition-colors hover:bg-slate-100 dark:hover:bg-slate-800/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 dark:focus-visible:ring-slate-500 disabled:opacity-60 disabled:pointer-events-none"
               :title="chatMessages.length ? 'Agent is fixed after the first message in this chat' : 'Choose agent — see everyone’s role'">
               <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-indigo-100 dark:bg-indigo-950/55 text-xs font-bold text-indigo-700 dark:text-indigo-200" x-text="workPanelAvatarLetter(chatAgent)"></div>
               <div class="min-w-0 flex-1 py-0.5">
@@ -1010,6 +1270,16 @@ tailwind.config = {
               </div>
               <i data-lucide="chevrons-up-down" class="w-4 h-4 shrink-0 text-slate-400" aria-hidden="true"></i>
             </button>
+            <select
+              class="h-11 shrink-0 rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 px-1.5 text-[11px] font-medium text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-slate-400 dark:focus:ring-slate-500 disabled:opacity-50 min-w-[4.5rem]"
+              :disabled="chatStreaming || chatOutboundInFlight"
+              aria-label="Reply mode"
+              :value="chatPlanMode ? 'plan' : 'chat'"
+              @change="chatPlanMode = ($event.target.value === 'plan')"
+            >
+              <option value="chat">Chat</option>
+              <option value="plan">Plan</option>
+            </select>
           </div>
           <button type="button" @click="$refs.chatFileInputMobile.click()" :title="chatFiles.length ? (chatFiles.length + ' file(s) — team-inbox') : 'Attach files (team-inbox)'" :aria-label="chatFiles.length ? chatFiles.length + ' files attached, add more' : 'Attach files to team-inbox'"
             class="icon-btn relative shrink-0 h-11 w-11 rounded-lg border transition-colors"
@@ -1025,6 +1295,24 @@ tailwind.config = {
             class="icon-btn shrink-0 h-11 w-11 rounded-lg bg-amber-600 hover:bg-amber-700 text-white transition-colors">
             <i data-lucide="square" class="w-4 h-4 fill-current stroke-[2.5]"></i>
           </button>
+        </div>
+        <div
+          x-show="chatPlanMode || chatPlanAwaitingExecute"
+          x-cloak
+          class="space-y-2 rounded-lg border border-slate-200/80 dark:border-slate-600/60 bg-slate-50/90 dark:bg-slate-900/35 px-2 py-2"
+        >
+          <p class="text-[11px] text-slate-500 dark:text-slate-400 leading-snug" x-show="chatPlanMode && !chatPlanAwaitingExecute">Next send: planning only. The plan opens on <span class="font-medium">Files</span> when ready.</p>
+          <div class="space-y-2" x-show="chatPlanAwaitingExecute" x-cloak>
+            <p class="text-[11px] text-slate-600 dark:text-slate-300 leading-snug">Checklist markdown is in <span class="font-medium">Owners Inbox</span>.</p>
+            <p class="text-[11px]" x-show="chatPlanInboxFile" x-cloak>
+              <a class="font-semibold text-indigo-600 dark:text-indigo-400 hover:underline" :href="chatPlanInboxOpenHref()">Open plan</a>
+            </p>
+            <p class="text-[11px] text-slate-500 dark:text-slate-400 leading-snug"><strong class="text-slate-700 dark:text-slate-200">Run plan</strong> to execute. Reply in chat to revise steps.</p>
+            <button type="button" @click="executeApprovedChatPlan()" :disabled="chatStreaming || chatOutboundInFlight" class="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold px-3 py-1.5 disabled:opacity-40 disabled:pointer-events-none transition-colors">
+              <i data-lucide="play" class="w-3.5 h-3.5" aria-hidden="true"></i>
+              Run plan
+            </button>
+          </div>
         </div>
         <div class="flex justify-end pl-[3.25rem]">
           <button type="button" @click="openChatAgentProfile()" class="inline-flex items-center gap-1 text-[11px] font-semibold text-indigo-600 dark:text-indigo-400" title="Full agent brief" aria-label="View full agent profile">
@@ -1241,8 +1529,8 @@ tailwind.config = {
 <script src="https://cdn.jsdelivr.net/npm/lucide@0.469.0/dist/umd/lucide.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/marked@12.0.0/marked.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.8/dist/purify.min.js"></script>
-<script src="dashboard-app.js"></script>
-<!-- Load Alpine synchronously after dashboard-app.js so alpine:init runs before DOM init (defer can race and leave x-data="app" without scope). -->
-<script src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.8/dist/cdn.min.js"></script>
+<script type="module" src="js/dashboard-entry.mjs"></script>
+<!-- Deferred module runs before deferred Alpine: alpine:init is registered first. -->
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.8/dist/cdn.min.js"></script>
 </body>
 </html>

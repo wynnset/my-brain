@@ -3,7 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { volumeRoot, isMultiUser } = require('./tenancy-utils.js');
+const { volumeRoot, isMultiUser } = require('../tenancy/tenancy-utils.js');
 
 const MARKER = '.migrated-to-multiuser';
 const LEGACY_UUID_FILE = '.legacy-tenant-uuid';

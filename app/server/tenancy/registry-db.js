@@ -6,9 +6,12 @@ const Database = require('better-sqlite3');
 
 function resolveRegistrySqlPath() {
   const candidates = [
-    path.join(__dirname, '..', 'data', 'registry.sql'),
-    path.join(__dirname, 'data', 'registry.sql'),
-    path.join(__dirname, '..', 'docker-seed', 'registry.sql'),
+    // Baked into the image (Dockerfile: COPY docker-seed/registry.sql ./data/registry.sql → /app/data/…)
+    path.join(__dirname, '..', '..', 'data', 'registry.sql'),
+    // Local dev: repo `data/registry.sql` (same layout as server.js default DB_DIR)
+    path.join(__dirname, '..', '..', '..', 'data', 'registry.sql'),
+    // Local dev: repo `docker-seed/registry.sql` (not under /app in Fly; avoids resolving to /docker-seed)
+    path.join(__dirname, '..', '..', '..', 'docker-seed', 'registry.sql'),
   ];
   for (const p of candidates) {
     if (fs.existsSync(p)) return p;

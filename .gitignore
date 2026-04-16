@@ -4,3 +4,6 @@ app/node_modules/
 data/
 team-inbox/
 owners-inbox/
+
+.DS_Store
+.claude/worktrees/

@@ -6,6 +6,7 @@ function pathNeedsTenantBrain(url) {
   const p = url.split('?')[0];
   if (p.startsWith('/api/dashboard-page/')) return true;
   if (p.startsWith('/api/dashboard-section/')) return true;
+  if (p.startsWith('/api/action-domain/')) return true;
   return p === '/api/dashboard'
     || p === '/api/dashboard-manifest'
     || p === '/api/career'

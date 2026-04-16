@@ -3,6 +3,7 @@
 const path = require('path');
 const fs = require('fs');
 const Database = require('better-sqlite3');
+const dashManifest = require('../dashboard/dashboard-manifest.js');
 
 const ACTION_DOMAIN = new Set(['career', 'finance', 'business', 'personal', 'family']);
 const ACTION_URGENCY = new Set(['critical', 'high', 'medium', 'low']);
@@ -13,6 +14,8 @@ function registerDomainRoutes(app, ctx) {
     templatesEnabledForRequest,
     withTenantDatabases,
     tenantDataDirForRequest,
+    workspaceDirForRequest,
+    dashboardManifestOpts,
     q,
     q1,
   } = ctx;
@@ -217,6 +220,41 @@ function registerDomainRoutes(app, ctx) {
       const shareholderLoan = q1(wynnset, `SELECT * FROM v_shareholder_loan_balance`);
 
       res.json({ actionItems, complianceCalendar, complianceSummary, ledgerSummary, coaSummary, coaAccounts, shareholderLoan });
+    });
+  });
+
+  app.get('/api/action-domain/:slug', (req, res) => {
+    const slug = String(req.params.slug || '').trim().toLowerCase();
+    const ws = workspaceDirForRequest(req);
+    const dataDir = tenantDataDirForRequest(req);
+    const page = dashManifest.findEnabledPageBySlug(ws, dataDir, dashboardManifestOpts(), slug);
+    if (!page || page.template !== 'action_domain' || !page.actionDomain) {
+      return res.status(404).json({
+        error:
+          'This action-domain page is not enabled. Add it under `pages` in workspace `dashboard.json` ' +
+          '(template `action_domain`, `domain` set to a brain action domain) and ensure `brain.db` exists.',
+      });
+    }
+    const dom = String(page.actionDomain);
+    if (!ACTION_DOMAIN.has(dom)) {
+      return res.status(500).json({ error: 'Invalid manifest domain' });
+    }
+    withTenantDatabases(req, res, (dbs) => {
+      const { brain } = dbs;
+      const actionItems = q(
+        brain,
+        `
+    SELECT id, urgency, title, description, details, due_date, effort_hours, project_category, project_week
+    FROM action_items
+    WHERE status = 'open' AND domain = ?
+      AND (snoozed_until IS NULL OR snoozed_until <= date('now'))
+    ORDER BY
+      CASE urgency WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 ELSE 4 END,
+      due_date ASC NULLS LAST
+  `,
+        [dom],
+      );
+      res.json({ actionItems, actionDomain: dom });
     });
   });
 

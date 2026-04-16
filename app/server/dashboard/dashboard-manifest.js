@@ -8,6 +8,10 @@ const DB_BASE_RE = /^[a-z][a-z0-9_-]{0,62}$/i;
 const RESERVED_SLUGS = new Set(['home', 'files', 'chat', 'login', 'api', 'usage']);
 const SLUG_RE = /^[a-z][a-z0-9-]{0,48}$/;
 
+/** Values allowed in `brain.db` `action_items.domain` — must match server PATCH allowlist. */
+const ACTION_DOMAIN_FOR_MANIFEST = ['career', 'finance', 'business', 'personal', 'family'];
+const ACTION_DOMAIN_FOR_MANIFEST_SET = new Set(ACTION_DOMAIN_FOR_MANIFEST);
+
 const TEMPLATE = {
   career: {
     apiPath: '/api/career',
@@ -189,10 +193,40 @@ function normalizePageEntry(raw, index) {
     };
   }
 
+  if (template === 'action_domain') {
+    const actionDomain = String(raw.domain || '').trim().toLowerCase();
+    if (!ACTION_DOMAIN_FOR_MANIFEST_SET.has(actionDomain)) {
+      return {
+        error:
+          `action_domain page "${slug}": "domain" must be one of: ${ACTION_DOMAIN_FOR_MANIFEST.join(', ')} ` +
+          '(matches `action_items.domain` in brain.db).',
+      };
+    }
+    const rawLabel = String(raw.label || '').trim();
+    const label =
+      rawLabel ||
+      actionDomain.charAt(0).toUpperCase() + actionDomain.slice(1);
+    const description =
+      raw.description != null
+        ? String(raw.description)
+        : `Open action items for the "${actionDomain}" domain`;
+    return {
+      slug,
+      label,
+      description,
+      template: 'action_domain',
+      actionDomain,
+      requireDbs: ['brain'],
+      apiPath: `/api/action-domain/${encodeURIComponent(slug)}`,
+    };
+  }
+
   const t = TEMPLATE[template];
   if (!t) {
     return {
-      error: `Unknown template "${template}" for slug "${slug}". Use one of: career, finance, business, datatable, sections.`,
+      error:
+        `Unknown template "${template}" for slug "${slug}". ` +
+        'Use one of: career, finance, business, action_domain, datatable, sections.',
     };
   }
   const label = String(raw.label || t.defaultLabel).trim() || t.defaultLabel;
@@ -229,6 +263,7 @@ function normalizePageEntry(raw, index) {
  * - Multi-user with a custom file: `career` / `finance` / `business` templates are allowed whenever listed (same rules as single-tenant); tabs stay disabled until the matching `*.db` exists.
  * - `template: "datatable"` + `db` + `sql` → read-only table page backed by any tenant SQLite basename.
  * - `template: "sections"` + `sections: [{ id, template, ... }]` → one nav tab; each child section is currently a `datatable` (same `db`/`sql` rules). Page is enabled if at least one child section has its DB file.
+ * - `template: "action_domain"` + `domain` → one nav tab of open `action_items` filtered to that domain (requires `brain.db` only). Same domains as `action_items.domain` in brain.db.
  */
 function resolveDashboardManifest(workspaceDir, dataDir, opts) {
   const multiUser = !!(opts && opts.multiUser);
@@ -280,6 +315,8 @@ function resolveDashboardManifest(workspaceDir, dataDir, opts) {
     career: enabledPages.some((p) => p.template === 'career'),
     finance: enabledPages.some((p) => p.template === 'finance'),
     business: enabledPages.some((p) => p.template === 'business'),
+    personal: enabledPages.some((p) => p.template === 'action_domain' && p.actionDomain === 'personal'),
+    family: enabledPages.some((p) => p.template === 'action_domain' && p.actionDomain === 'family'),
   };
 
   return {
@@ -305,6 +342,9 @@ function navPayloadFromEnabled(enabledPages) {
       template: p.template,
       apiPath: p.apiPath || null,
     };
+    if (p.template === 'action_domain' && p.actionDomain) {
+      o.actionDomain = p.actionDomain;
+    }
     if (p.template === 'sections' && Array.isArray(p.sections)) {
       o.sections = p.sections.map((s) => ({
         id: s.id,
@@ -338,6 +378,8 @@ function findEnabledSection(workspaceDir, dataDir, opts, pageSlug, sectionId) {
 
 module.exports = {
   TEMPLATE,
+  ACTION_DOMAIN_FOR_MANIFEST,
+  ACTION_DOMAIN_FOR_MANIFEST_SET,
   RESERVED_SLUGS,
   SLUG_RE,
   buildBuiltinManifestDefinition,

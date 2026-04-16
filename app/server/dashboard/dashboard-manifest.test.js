@@ -162,3 +162,36 @@ test('builtin manifest shape', () => {
   const b2 = buildBuiltinManifestDefinition(true);
   assert.equal(b2.pages.length, 0);
 });
+
+test('action_domain page requires brain.db and exposes actionDomain', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dash-ad-'));
+  fs.writeFileSync(
+    path.join(tmp, 'dashboard.json'),
+    JSON.stringify({
+      version: 1,
+      pages: [
+        {
+          slug: 'family',
+          label: 'Family',
+          template: 'action_domain',
+          domain: 'family',
+        },
+      ],
+    }),
+    'utf8',
+  );
+  const dataDir = path.join(tmp, 'data');
+  fs.mkdirSync(dataDir);
+  const r0 = resolveDashboardManifest(tmp, dataDir, { multiUser: true });
+  assert.equal(r0.enabledPages.length, 0);
+  fs.writeFileSync(path.join(dataDir, 'brain.db'), '');
+  const r1 = resolveDashboardManifest(tmp, dataDir, { multiUser: true });
+  assert.equal(r1.errors.length, 0);
+  assert.equal(r1.enabledPages.length, 1);
+  const p = r1.enabledPages[0];
+  assert.equal(p.template, 'action_domain');
+  assert.equal(p.actionDomain, 'family');
+  assert.equal(p.apiPath, '/api/action-domain/family');
+  assert.equal(r1.dashboardPages.family, true);
+  assert.equal(r1.dashboardPages.personal, false);
+});

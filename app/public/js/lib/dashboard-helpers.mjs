@@ -98,7 +98,7 @@ export function datatableHtmlFromPayload(d) {
     })
     .join('');
   var html =
-    '<div class="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-700">' +
+    '<div class="dashboard-table-x-scroll rounded-xl border border-slate-200 dark:border-slate-700">' +
     '<table class="min-w-full text-sm">' +
     '<thead class="bg-slate-50 dark:bg-slate-800/80"><tr>' +
     th +
@@ -205,7 +205,14 @@ export function makeTable(cols, rows, emptyMsg) {
     }).join('');
     return '<tr class="border-t border-slate-100 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/50">' + cells + '</tr>';
   }).join('');
-  return '<table class="w-full min-w-full"><thead class="bg-slate-50 dark:bg-slate-700/50"><tr>' + thead + '</tr></thead><tbody>' + tbody + '</tbody></table>';
+  return (
+    '<div class="dashboard-table-x-scroll">' +
+    '<table class="w-full min-w-full"><thead class="bg-slate-50 dark:bg-slate-700/50"><tr>' +
+    thead +
+    '</tr></thead><tbody>' +
+    tbody +
+    '</tbody></table></div>'
+  );
 }
 export function statCard(opts) {
   var inner = '<div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4' + (opts.link ? ' cursor-pointer hover:border-blue-400 dark:hover:border-blue-500 transition-colors' : '') + '">' +
@@ -259,12 +266,77 @@ export const ICON_SVG_CHECK = '<svg xmlns="http://www.w3.org/2000/svg" class="in
 export const ICON_SVG_ARROW_UP = '<span class="inline-flex align-middle text-emerald-500" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19V5M5 12l7-7 7 7"/></svg></span>';
 export const ICON_SVG_ARROW_DOWN = '<span class="inline-flex align-middle text-red-400" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M19 12l-7 7-7-7"/></svg></span>';
 
+/** Wrap top-level <table> nodes so wide GFM tables scroll instead of stretching the layout (post-sanitize). */
+function wrapHtmlTablesForScroll(html) {
+  if (!html || String(html).indexOf('<table') === -1) return html;
+  try {
+    var parser = new DOMParser();
+    var doc = parser.parseFromString('<div class="dashboard-table-wrap-root">' + html + '</div>', 'text/html');
+    var root = doc.body.firstElementChild;
+    if (!root) return html;
+    var tables = root.querySelectorAll('table');
+    for (var i = 0; i < tables.length; i++) {
+      var table = tables[i];
+      var par = table.parentElement;
+      if (par && par.classList && par.classList.contains('dashboard-table-x-scroll')) continue;
+      var wrap = doc.createElement('div');
+      wrap.setAttribute('class', 'dashboard-table-x-scroll');
+      par.insertBefore(wrap, table);
+      wrap.appendChild(table);
+    }
+    return root.innerHTML;
+  } catch (_) {
+    return html;
+  }
+}
+
+/**
+ * In-app chat links use the hash router (e.g. #/files/…). Everything else should not
+ * hijack the current dashboard tab; mailto/tel/sms keep default behavior (no blank tab).
+ */
+function shouldOpenChatMarkdownLinkInNewWindow(href) {
+  if (!href) return false;
+  var h = String(href).trim();
+  if (h.charAt(0) === '#') return false;
+  var lower = h.slice(0, 8).toLowerCase();
+  if (lower.indexOf('mailto:') === 0) return false;
+  if (lower.indexOf('tel:') === 0) return false;
+  if (lower.indexOf('sms:') === 0) return false;
+  return true;
+}
+
+function addExternalTargetToMarkdownAnchors(html) {
+  if (!html || String(html).indexOf('<a') === -1) return html;
+  try {
+    var parser = new DOMParser();
+    var doc = parser.parseFromString('<div class="chat-md-anchors-root">' + html + '</div>', 'text/html');
+    var root = doc.body.firstElementChild;
+    if (!root) return html;
+    var links = root.querySelectorAll('a[href]');
+    for (var i = 0; i < links.length; i++) {
+      var a = links[i];
+      var href = a.getAttribute('href') || '';
+      if (!shouldOpenChatMarkdownLinkInNewWindow(href)) continue;
+      a.setAttribute('target', '_blank');
+      var rel = (a.getAttribute('rel') || '').trim().split(/\s+/).filter(Boolean);
+      if (rel.indexOf('noopener') === -1) rel.push('noopener');
+      if (rel.indexOf('noreferrer') === -1) rel.push('noreferrer');
+      a.setAttribute('rel', rel.join(' '));
+    }
+    return root.innerHTML;
+  } catch (_) {
+    return html;
+  }
+}
+
 export function renderChatMarkdown(raw) {
   if (!raw) return '';
   try {
     if (typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined') {
       var html = marked.parse(raw, { breaks: true, gfm: true });
-      return DOMPurify.sanitize(html, { USE_PROFILES: { html: true } });
+      html = DOMPurify.sanitize(html, { USE_PROFILES: { html: true } });
+      html = wrapHtmlTablesForScroll(html);
+      return addExternalTargetToMarkdownAnchors(html);
     }
   } catch (_) {}
   return esc(raw).replace(/\n/g, '<br>');
@@ -449,7 +521,9 @@ export function renderAssistantMarkdown(raw) {
       var linked = linkifyBrainFileReferences(withTodos);
       var html = marked.parse(linked, { breaks: true, gfm: true });
       html = unwrapBrainFileLinksFromCodeHtml(html);
-      return DOMPurify.sanitize(html, { USE_PROFILES: { html: true } });
+      html = DOMPurify.sanitize(html, { USE_PROFILES: { html: true } });
+      html = wrapHtmlTablesForScroll(html);
+      return addExternalTargetToMarkdownAnchors(html);
     }
   } catch (_) {}
   return esc(raw).replace(/\n/g, '<br>');

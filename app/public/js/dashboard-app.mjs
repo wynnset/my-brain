@@ -63,8 +63,8 @@ document.addEventListener('alpine:init', function() {
         return isNaN(w) ? 320 : Math.min(560, Math.max(220, w));
       } catch (_) { return 320; }
     })(),
-    /** Domain tabs (Career / Finance / Business) — toggled from server from manifest + `*.db` files per tenant. */
-    dashboardPages: { career: true, finance: true, business: true },
+    /** Domain tabs — toggled from server from manifest + `*.db` files per tenant (`personal` / `family` via `action_domain` pages). */
+    dashboardPages: { career: true, finance: true, business: true, personal: false, family: false },
     /** Enabled nav entries from `workspace/dashboard.json` (see `/api/dashboard-manifest`). */
     dashboardNavPages: [],
     theme: (typeof localStorage !== 'undefined' && localStorage.getItem('theme')) || 'system',
@@ -182,17 +182,35 @@ document.addEventListener('alpine:init', function() {
     chatPlanAwaitingExecute: false,
     /** When set, markdown plan was saved under this path (owners-inbox). */
     chatPlanInboxFile: null,
+    /** From session: files touched in this chat under inbox / team / docs / brief (see server). */
+    chatWorkspaceTouches: [],
     /** Per slug: { status, summary, markdown?, error? } — full markdown for profile modal. */
     chatAgentMeta: {},
     /** slug -> Promise while `ensureChatAgentMeta` is in flight (dedupe concurrent loads). */
     _chatAgentMetaInflight: {},
-    /** Custom agent picker modal (name + role per agent). */
-    chatAgentPickerOpen: false,
+    /** Claude model alias from `/api/chat/models` (e.g. sonnet, opus, haiku). */
+    chatModel: 'haiku',
+    chatModelCatalog: [],
+    chatModelPickerOpen: false,
+    /** Edit user message → overwrite thread or fork + resend. */
+    chatUserMessageEditOpen: false,
+    chatUserMessageEditTargetId: null,
+    chatUserMessageEditDraft: '',
+    chatUserMessageEditApplying: false,
     chatAgentProfileOpen: false,
+    /** Slug whose brief is shown in the profile modal (may differ from `chatAgent` when chat is locked). */
+    chatAgentProfileViewing: null,
     chatAgentProfileLoading: false,
     chatAgentProfileError: '',
     chatAgentProfileHtml: '',
     _osMqListener: null,
+    /** True when the primary pointer is coarse (typical touch phones/tablets); keyboard newline hints stay hidden. */
+    chatCoarsePointer: (function() {
+      try {
+        return typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches;
+      } catch (_) { return false; }
+    })(),
+    _chatPointerCoarseMqListener: null,
     loginRequired: false,
     /** Multi-user: `{ login, displayName }` from `/api/auth-status` when signed in. */
     sessionAccount: null,
@@ -242,6 +260,8 @@ document.addEventListener('alpine:init', function() {
               career: !!d.dashboardPages.career,
               finance: !!d.dashboardPages.finance,
               business: !!d.dashboardPages.business,
+              personal: !!d.dashboardPages.personal,
+              family: !!d.dashboardPages.family,
             };
           }
           if (Array.isArray(d.dashboardNavPages)) {
@@ -259,7 +279,7 @@ document.addEventListener('alpine:init', function() {
           self.loadPage(self.page, true);
         }
       }, 60000);
-      this.loadChatAgents().finally(function() {
+      Promise.all([self.loadChatAgents(), self.loadChatModels()]).finally(function() {
         self.bootstrapChat().finally(function() {
           self.ensureChatAgentMeta(self.chatAgent);
           self.prefetchAllChatAgentMeta();
@@ -278,6 +298,14 @@ document.addEventListener('alpine:init', function() {
         self.viewportLg = typeof window !== 'undefined' && window.innerWidth >= 1024;
       };
       window.addEventListener('resize', this._onResizeViewport);
+      try {
+        var pmq = window.matchMedia('(pointer: coarse)');
+        this._chatPointerCoarseMqListener = function() {
+          self.chatCoarsePointer = pmq.matches;
+        };
+        this._chatPointerCoarseMqListener();
+        pmq.addEventListener('change', this._chatPointerCoarseMqListener);
+      } catch (_) {}
       self.pollOwnersInbox();
       self._ownersInboxPollTimer = setInterval(function() { self.pollOwnersInbox(); }, 30000);
     },
@@ -301,6 +329,25 @@ document.addEventListener('alpine:init', function() {
       } else {
         await this.openFileFromHash(f.dir, f.name);
       }
+    },
+
+    /** Open Files viewer from a workspace-relative path stored on the chat session. */
+    async openChatWorkspaceTouch(row) {
+      var rel = row && row.path ? String(row.path).replace(/\\/g, '/').trim() : '';
+      if (!rel) return;
+      this.chatOpen = true;
+      var slash = rel.indexOf('/');
+      if (slash < 0) {
+        if (rel === 'CYRUS.md' || rel === 'LARRY.md') {
+          await this.openFileFromHash('root', rel);
+          return;
+        }
+        return;
+      }
+      var dir = rel.slice(0, slash);
+      var name = rel.slice(slash + 1);
+      if (['owners-inbox', 'team-inbox', 'team', 'docs'].indexOf(dir) < 0) return;
+      await this.openFileFromHash(dir, name);
     },
 
     pushOwnerInboxToast(name) {
@@ -476,7 +523,7 @@ document.addEventListener('alpine:init', function() {
 
     closeChat() {
       this.chatOpen = false;
-      this.chatAgentPickerOpen = false;
+      this.closeChatAgentProfile();
       this._lockBodyForMobileChat(false);
       this.$nextTick(function() { this.refreshIcons(); }.bind(this));
     },
@@ -883,6 +930,8 @@ document.addEventListener('alpine:init', function() {
       this.chatOutboundInFlight = false;
       this.chatWorkPanels = [];
       this.resetChatPlanUiForNewShell();
+      this.chatWorkspaceTouches = [];
+      this.closeChatUserMessageEditor();
       try { localStorage.removeItem('brain_last_chat_id'); } catch (_) {}
     },
 
@@ -919,14 +968,31 @@ document.addEventListener('alpine:init', function() {
           : null;
     },
 
+    hydrateChatWorkspaceTouches(sess) {
+      var raw = sess && Array.isArray(sess.workspaceTouches) ? sess.workspaceTouches : [];
+      this.chatWorkspaceTouches = raw
+        .map(function (t) {
+          return {
+            path: t.path != null ? String(t.path) : '',
+            kind: t.kind === 'edited' ? 'edited' : 'added',
+            at: t.at != null ? String(t.at) : '',
+          };
+        })
+        .filter(function (t) {
+          return t.path;
+        });
+    },
+
     async createNewConversation() {
       var agent = this.normalizeChatAgentId(this.chatAgent);
       if (this.chatAgents.length && this.chatAgents.indexOf(agent) < 0) agent = this.chatAgents[0];
       this.chatAgent = agent;
+      var model = this.ensureChatModelFromCatalog(this.chatModel);
+      this.chatModel = model;
       var r = await fetchWithAuth('/api/chat/conversations', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ agent: agent }),
+        body: JSON.stringify({ agent: agent, model: model }),
       });
       if (!r.ok) {
         var errMsg = 'Could not create conversation';
@@ -942,6 +1008,7 @@ document.addEventListener('alpine:init', function() {
       this.chatSdkUsageSessionTotals = null;
       this.chatSessionTitle = 'New chat';
       this.resetChatPlanUiForNewShell();
+      this.chatWorkspaceTouches = [];
       try { localStorage.setItem('brain_last_chat_id', d.id); } catch (_) {}
       await this.loadConversationList();
     },
@@ -956,10 +1023,12 @@ document.addEventListener('alpine:init', function() {
           var sess = await r.json();
           this.chatConversationId = sess.id;
           this.chatAgent = this.normalizeChatAgentId(sess.agent);
+          if (sess.model) this.chatModel = this.ensureChatModelFromCatalog(sess.model);
           this.chatMessages = sess.messages || [];
           this.chatSdkUsageSessionTotals = sess.sdkUsageSessionTotals || null;
           this.chatSessionTitle = sess.title || 'Chat';
           this.hydrateChatPlanFromSession(sess);
+          this.hydrateChatWorkspaceTouches(sess);
           this.chatOutboundQueue = [];
           this.chatOutboundInFlight = false;
           this.chatWorkPanels = [];
@@ -976,7 +1045,7 @@ document.addEventListener('alpine:init', function() {
     },
 
     openChatHistory() {
-      this.chatAgentPickerOpen = false;
+      this.closeChatAgentProfile();
       this.chatHistoryOpen = true;
       this.loadConversationList();
       var self = this;
@@ -989,10 +1058,12 @@ document.addEventListener('alpine:init', function() {
       var sess = await r.json();
       this.chatConversationId = sess.id;
       this.chatAgent = this.normalizeChatAgentId(sess.agent);
+      if (sess.model) this.chatModel = this.ensureChatModelFromCatalog(sess.model);
       this.chatMessages = sess.messages || [];
       this.chatSdkUsageSessionTotals = sess.sdkUsageSessionTotals || null;
       this.chatSessionTitle = sess.title || 'Chat';
       this.hydrateChatPlanFromSession(sess);
+      this.hydrateChatWorkspaceTouches(sess);
       try { localStorage.setItem('brain_last_chat_id', id); } catch (_) {}
       this.chatHistoryOpen = false;
       this.chatOutboundQueue = [];
@@ -1010,11 +1081,174 @@ document.addEventListener('alpine:init', function() {
       this.chatMessages = sess.messages || [];
       this.chatSdkUsageSessionTotals = sess.sdkUsageSessionTotals || null;
       this.chatSessionTitle = sess.title || 'Chat';
+      if (sess.model) this.chatModel = this.ensureChatModelFromCatalog(sess.model);
       this.hydrateChatPlanFromSession(sess);
+      this.hydrateChatWorkspaceTouches(sess);
+    },
+
+    chatForkUiDisabled() {
+      return !this.chatConversationId || this.chatStreaming || this.chatOutboundInFlight;
+    },
+
+    chatUserMessageEditDisabled(m) {
+      if (!m || m.role !== 'user') return true;
+      if (!this.chatConversationId || this.chatStreaming || this.chatOutboundInFlight) return true;
+      if (this.chatOutboundQueue && this.chatOutboundQueue.length) return true;
+      var id = String(m.id || '');
+      if (id.indexOf('local-') === 0 || id.indexOf('err-') === 0) return true;
+      return false;
+    },
+
+    openChatUserMessageEditor(m) {
+      if (this.chatUserMessageEditDisabled(m)) return;
+      this.closeChatAgentProfile();
+      this.chatModelPickerOpen = false;
+      this.chatUserMessageEditTargetId = m.id;
+      this.chatUserMessageEditDraft = String(m.content || '');
+      this.chatUserMessageEditOpen = true;
+      var self = this;
+      this.$nextTick(function() {
+        self.refreshIcons();
+        try {
+          var el = self.$refs.chatUserMessageEditTextarea;
+          if (el && el.focus) el.focus();
+        } catch (_) {}
+      });
+    },
+
+    closeChatUserMessageEditor() {
+      this.chatUserMessageEditOpen = false;
+      this.chatUserMessageEditTargetId = null;
+      this.chatUserMessageEditDraft = '';
+      var self = this;
+      this.$nextTick(function() {
+        self.refreshIcons();
+      });
+    },
+
+    /**
+     * After editing a user message: truncate or fork, then send the edited text as a new turn.
+     * @param {'overwrite' | 'fork'} mode
+     */
+    async applyChatUserMessageEdit(mode) {
+      if (this.chatUserMessageEditApplying) return;
+      var tid = this.chatUserMessageEditTargetId;
+      var draft = String(this.chatUserMessageEditDraft || '').trim();
+      if (!tid) return;
+      if (!draft) {
+        alert('Message cannot be empty.');
+        return;
+      }
+      var planPhase = this.chatPlanAwaitingExecute ? 'execute' : this.chatPlanMode ? 'plan' : null;
+      var opts = { planPhase: planPhase };
+      this.chatUserMessageEditApplying = true;
+      try {
+        if (mode === 'overwrite') {
+          var r = await fetchWithAuth(
+            '/api/chat/conversations/' + encodeURIComponent(this.chatConversationId) + '/truncate-at-user',
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ messageId: tid }),
+            }
+          );
+          if (!r.ok) {
+            var errMsg = 'Could not update conversation';
+            try {
+              var ej = await r.json();
+              if (ej && ej.error) errMsg = ej.error;
+            } catch (_) {}
+            alert(errMsg);
+            return;
+          }
+          await this.refreshActiveConversation();
+          this.closeChatUserMessageEditor();
+          this.chatOutboundInFlight = true;
+          await this.runChatTurn(draft, [], opts);
+        } else if (mode === 'fork') {
+          var rf = await fetchWithAuth(
+            '/api/chat/conversations/' + encodeURIComponent(this.chatConversationId) + '/fork',
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ editUserMessageId: tid }),
+            }
+          );
+          if (!rf.ok) {
+            var errFork = 'Could not start new conversation';
+            try {
+              var ejf = await rf.json();
+              if (ejf && ejf.error) errFork = ejf.error;
+            } catch (_) {}
+            alert(errFork);
+            return;
+          }
+          var d = await rf.json();
+          if (!d || !d.id) {
+            alert('Could not start new conversation');
+            return;
+          }
+          await this.openConversation(d.id);
+          this.closeChatUserMessageEditor();
+          this.chatOutboundInFlight = true;
+          await this.runChatTurn(draft, [], opts);
+        }
+      } catch (e) {
+        alert('Could not resend: ' + (e.message || String(e)));
+      } finally {
+        this.chatUserMessageEditApplying = false;
+      }
+    },
+
+    /**
+     * Copy this conversation through the given assistant reply into a new saved session and open it.
+     */
+    async forkChatFromAssistantMessage(m) {
+      if (!m || m.role !== 'assistant' || this.chatForkUiDisabled()) return;
+      if (
+        !confirm(
+          'Start a new chat from this reply?\n\n' +
+            'Everything in this conversation up through this reply will be copied to a new conversation. The current chat stays unchanged.'
+        )
+      ) {
+        return;
+      }
+      try {
+        var r = await fetchWithAuth(
+          '/api/chat/conversations/' + encodeURIComponent(this.chatConversationId) + '/fork',
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ messageId: m.id }),
+          }
+        );
+        if (!r.ok) {
+          var errMsg = 'Could not fork conversation';
+          try {
+            var ej = await r.json();
+            if (ej && ej.error) errMsg = ej.error;
+          } catch (_) {}
+          alert(errMsg);
+          return;
+        }
+        var d = await r.json();
+        if (!d || !d.id) {
+          alert('Could not fork conversation');
+          return;
+        }
+        await this.openConversation(d.id);
+        this.$nextTick(function() {
+          this.focusChatPrompt();
+          this.refreshIcons();
+        }.bind(this));
+      } catch (e) {
+        alert('Could not fork conversation: ' + (e.message || String(e)));
+      }
     },
 
     async newChatConversation() {
-      this.chatAgentPickerOpen = false;
+      this.closeChatAgentProfile();
+      this.chatModelPickerOpen = false;
       try {
         if (this.chatConversationId && this.chatMessages.length === 0) {
           try {
@@ -1096,6 +1330,32 @@ document.addEventListener('alpine:init', function() {
       var p = this.currentNavPage();
       return p && p.description != null ? String(p.description) : '';
     },
+    /** Home “Domains” section: built-in domain pages and/or `action_domain` manifest tabs. */
+    homeShowDomainsBlock() {
+      var p = this.dashboardPages || {};
+      if (p.career || p.finance || p.business) return true;
+      return (this.dashboardNavPages || []).some(function(x) {
+        return x.template === 'action_domain';
+      });
+    },
+    ensureActionDomainPageState(slug) {
+      var s = String(slug || '');
+      if (!s) return;
+      if (!this.actionState[s]) {
+        this.actionState = Object.assign({}, this.actionState, {
+          [s]: { sort: 'date-urgency', group: 'none', range: 'all' },
+        });
+      }
+      if (!Object.prototype.hasOwnProperty.call(this.actionData, s)) {
+        this.actionData = Object.assign({}, this.actionData, { [s]: [] });
+      }
+      if (this.loadError[s] === undefined) {
+        this.loadError = Object.assign({}, this.loadError, { [s]: null });
+      }
+      if (this.pageReady[s] === undefined) {
+        this.pageReady = Object.assign({}, this.pageReady, { [s]: false });
+      }
+    },
     slugLinkForTemplate(tmpl) {
       var nav = this.dashboardNavPages || [];
       for (var i = 0; i < nav.length; i++) {
@@ -1137,6 +1397,7 @@ document.addEventListener('alpine:init', function() {
       }
       var closeMobileChat = this.isMobileFullWindowChat();
       this.page = p;
+      if (this.slugToTemplate(p) === 'action_domain') this.ensureActionDomainPageState(p);
       location.hash = p === 'home' ? '#/' : '#/' + p;
       if (closeMobileChat) this.closeChat();
     },
@@ -1197,6 +1458,7 @@ document.addEventListener('alpine:init', function() {
         this.editorPath = null;
       }
       this.page = nextPage;
+      if (this.slugToTemplate(this.page) === 'action_domain') this.ensureActionDomainPageState(this.page);
       if (this.isMobileFullWindowChat()) this.closeChat();
       this.loadPage(this.page, false);
     },
@@ -1246,7 +1508,7 @@ document.addEventListener('alpine:init', function() {
     getActionGroups(pageKey, opts) {
       opts = opts || {};
       var raw = this.actionData[pageKey] || [];
-      var s = this.actionState[pageKey];
+      var s = this.actionState[pageKey] || { sort: 'date-urgency', group: 'none', range: 'all' };
       var items = sortItems(filterItems(raw, s.range), s.sort);
       if (!items.length) return [];
       if (s.group === 'none') {
@@ -1338,7 +1600,8 @@ document.addEventListener('alpine:init', function() {
         this.actionItemPageKey = this.page === 'home' ? 'home' : this.page;
       }
       this.actionItemShowDomain = this.actionItemPageKey === 'home';
-      this.actionItemShowCareerFields = this.getPageTemplate() === 'career';
+      this.actionItemShowCareerFields =
+        this.getPageTemplate() === 'career';
       this.actionItemShowProjectCategory = true;
       this.actionItemDraft = {
         id: item.id,
@@ -1727,6 +1990,45 @@ document.addEventListener('alpine:init', function() {
         }
         return;
       }
+      if (template === 'action_domain') {
+        this.ensureActionDomainPageState(slug);
+        this.datatableHtml = '';
+        this.datatableLoadError = '';
+        this.datatableReady = false;
+        this.datatableTruncated = false;
+        this.sectionsPagePanels = [];
+        this.sectionsPageReady = false;
+        var adKey = 'ad:' + slug;
+        if (!force && this.cache[adKey] && now - this.cache[adKey].ts < STALE_MS) {
+          this.actionData[slug] = this.cache[adKey].data.actionItems || [];
+          this.pageReady[slug] = true;
+          return;
+        }
+        this.refreshing = true;
+        this.loadError[slug] = null;
+        this.pageReady[slug] = false;
+        try {
+          var resAd = await fetchWithAuth('/api/action-domain/' + encodeURIComponent(slug));
+          if (!resAd.ok) {
+            var errAd = {};
+            try {
+              errAd = await resAd.json();
+            } catch (_) {}
+            throw new Error((errAd && errAd.error) || 'HTTP ' + resAd.status);
+          }
+          var dataAd = await resAd.json();
+          this.cache[adKey] = { ts: Date.now(), data: dataAd };
+          this.actionData[slug] = dataAd.actionItems || [];
+          this.pageReady[slug] = true;
+          this.lastRefresh = 'Updated ' + new Date().toLocaleTimeString('en-CA', { hour: '2-digit', minute: '2-digit' });
+        } catch (eAd) {
+          this.loadError[slug] = 'Failed to load data. (' + (eAd.message || String(eAd)) + ')';
+          this.pageReady[slug] = true;
+        } finally {
+          this.refreshing = false;
+        }
+        return;
+      }
       this.datatableHtml = '';
       this.datatableLoadError = '';
       this.datatableReady = false;
@@ -1769,6 +2071,8 @@ document.addEventListener('alpine:init', function() {
           career: !!d.dashboardPages.career,
           finance: !!d.dashboardPages.finance,
           business: !!d.dashboardPages.business,
+          personal: !!d.dashboardPages.personal,
+          family: !!d.dashboardPages.family,
         };
       }
       if (Array.isArray(d.dashboardNavPages)) {
@@ -1784,6 +2088,28 @@ document.addEventListener('alpine:init', function() {
         { domain: 'finance',  label: 'Finance',  link: self.slugLinkForTemplate('finance'),  color: 'text-green-600 dark:text-green-400', show: pages.finance },
         { domain: 'business', label: 'Business', link: self.slugLinkForTemplate('business'), color: 'text-purple-600 dark:text-purple-400', show: pages.business },
       ].filter(function(d2) { return d2.show; });
+      var seenDomain = {};
+      domains.forEach(function(d0) { seenDomain[d0.domain] = true; });
+      (this.dashboardNavPages || []).forEach(function(navP) {
+        if (navP.template !== 'action_domain' || !navP.actionDomain) return;
+        var dom = String(navP.actionDomain);
+        if (seenDomain[dom]) return;
+        seenDomain[dom] = true;
+        var colorMap = {
+          personal: 'text-orange-600 dark:text-orange-400',
+          family: 'text-pink-600 dark:text-pink-400',
+          career: 'text-blue-600 dark:text-blue-400',
+          finance: 'text-green-600 dark:text-green-400',
+          business: 'text-purple-600 dark:text-purple-400',
+        };
+        domains.push({
+          domain: dom,
+          label: navP.label || dom,
+          link: '#/' + navP.slug,
+          color: colorMap[dom] || 'text-slate-600 dark:text-slate-300',
+          show: true,
+        });
+      });
       this.homeDomainCardsHtml = domains.map(function(d2) {
         var r = domainMap[d2.domain] || {};
         return statCard({
@@ -2380,30 +2706,49 @@ document.addEventListener('alpine:init', function() {
       return this.normalizeChatAgentId(this.chatAgent) === this.normalizeChatAgentId(slug);
     },
 
-    toggleChatAgentPicker() {
+    chatAgentSelectionLocked() {
+      return !!(this.chatMessages && this.chatMessages.length > 0);
+    },
+
+    isChatAgentProfileViewingPick(slug) {
+      var v = this.chatAgentProfileViewing;
+      if (v == null || v === '') return this.isActiveChatAgentPick(slug);
+      return this.normalizeChatAgentId(v) === this.normalizeChatAgentId(slug);
+    },
+
+    toggleChatAgentProfile() {
+      if (this.chatAgentProfileOpen) {
+        this.closeChatAgentProfile();
+        return;
+      }
+      this.chatModelPickerOpen = false;
+      this.openChatAgentProfile();
+    },
+
+    toggleChatModelPicker() {
       if (this.chatMessages.length > 0) return;
-      this.chatAgentPickerOpen = !this.chatAgentPickerOpen;
-      if (this.chatAgentPickerOpen) this.prefetchAllChatAgentMeta();
+      this.closeChatAgentProfile();
+      this.chatModelPickerOpen = !this.chatModelPickerOpen;
       var self = this;
       this.$nextTick(function () {
         self.refreshIcons();
       });
     },
 
-    closeChatAgentPicker() {
-      if (!this.chatAgentPickerOpen) return;
-      this.chatAgentPickerOpen = false;
+    closeChatModelPicker() {
+      if (!this.chatModelPickerOpen) return;
+      this.chatModelPickerOpen = false;
       var self = this;
       this.$nextTick(function () {
         self.refreshIcons();
       });
     },
 
-    async selectChatAgentFromPicker(slug) {
+    selectChatModelFromPicker(mid) {
       if (this.chatMessages.length > 0) return;
-      var next = this.normalizeChatAgentId(slug);
-      var cur = this.normalizeChatAgentId(this.chatAgent);
-      this.chatAgentPickerOpen = false;
+      var next = this.ensureChatModelFromCatalog(mid);
+      var cur = this.ensureChatModelFromCatalog(this.chatModel);
+      this.chatModelPickerOpen = false;
       var self = this;
       if (next === cur) {
         this.$nextTick(function () {
@@ -2411,8 +2756,7 @@ document.addEventListener('alpine:init', function() {
         });
         return;
       }
-      this.chatAgent = next;
-      await this.onChatAgentChange();
+      this.chatModel = next;
       this.$nextTick(function () {
         self.refreshIcons();
       });
@@ -2473,10 +2817,8 @@ document.addEventListener('alpine:init', function() {
       for (var i = 0; i < agents.length; i++) this.ensureChatAgentMeta(agents[i]);
     },
 
-    async openChatAgentProfile() {
-      this.chatAgentPickerOpen = false;
-      var id = this.normalizeChatAgentId(this.chatAgent);
-      this.chatAgentProfileOpen = true;
+    async loadChatAgentProfileForViewing(agentId) {
+      var id = this.normalizeChatAgentId(agentId);
       this.chatAgentProfileLoading = true;
       this.chatAgentProfileError = '';
       this.chatAgentProfileHtml = '';
@@ -2501,8 +2843,45 @@ document.addEventListener('alpine:init', function() {
       }
     },
 
+    async openChatAgentProfile() {
+      this.chatModelPickerOpen = false;
+      var id = this.normalizeChatAgentId(this.chatAgent);
+      this.chatAgentProfileViewing = id;
+      this.chatAgentProfileOpen = true;
+      this.prefetchAllChatAgentMeta();
+      await this.loadChatAgentProfileForViewing(id);
+    },
+
+    async switchChatAgentProfileSidebar(slug) {
+      var next = this.normalizeChatAgentId(slug);
+      var self = this;
+      var prev = this.chatAgentProfileViewing != null ? this.normalizeChatAgentId(this.chatAgentProfileViewing) : null;
+      if (prev === next && this.chatAgentProfileHtml && !this.chatAgentProfileError) {
+        var cached = this.chatAgentMeta[next];
+        if (cached && cached.status === 'ok' && cached.markdown) {
+          this.$nextTick(function () {
+            self.refreshIcons();
+          });
+          return;
+        }
+      }
+      this.chatAgentProfileViewing = next;
+      if (!this.chatAgentSelectionLocked()) {
+        var cur = this.normalizeChatAgentId(this.chatAgent);
+        if (next !== cur) {
+          this.chatAgent = next;
+          await this.onChatAgentChange();
+        }
+      }
+      await this.loadChatAgentProfileForViewing(next);
+      this.$nextTick(function () {
+        self.refreshIcons();
+      });
+    },
+
     closeChatAgentProfile() {
       this.chatAgentProfileOpen = false;
+      this.chatAgentProfileViewing = null;
       this.chatAgentProfileLoading = false;
       this.chatAgentProfileError = '';
       this.chatAgentProfileHtml = '';
@@ -2522,6 +2901,102 @@ document.addEventListener('alpine:init', function() {
       } catch (_) {
         this.chatAgents = ['cyrus'];
       }
+    },
+
+    async loadChatModels() {
+      var self = this;
+      try {
+        var r = await fetchWithAuth('/api/chat/models');
+        if (!r.ok) return;
+        var d = await r.json();
+        this.chatModelCatalog = Array.isArray(d.models) ? d.models : [];
+        var def =
+          (d.defaultModel && self.chatModelCatalog.some(function (m) { return m.id === d.defaultModel; })
+            ? d.defaultModel
+            : null) ||
+          (self.chatModelCatalog[0] && self.chatModelCatalog[0].id) ||
+          'haiku';
+        if (!self.chatModelCatalog.some(function (m) { return m.id === self.chatModel; })) {
+          self.chatModel = def;
+        }
+      } catch (_) {
+        this.chatModelCatalog = [];
+      }
+    },
+
+    ensureChatModelFromCatalog(id) {
+      var c = this.chatModelCatalog || [];
+      var s = String(id || '').trim().toLowerCase();
+      if (c.some(function (m) { return m.id === s; })) return s;
+      return c[0] && c[0].id ? c[0].id : 'haiku';
+    },
+
+    chatModelDisplayLabel(modelId) {
+      var id = String(modelId || '').trim().toLowerCase();
+      var row = (this.chatModelCatalog || []).find(function (m) { return m.id === id; });
+      return row ? row.label : modelId || 'Model';
+    },
+
+    chatModelSummaryLine(modelId) {
+      var id = String(modelId || '').trim().toLowerCase();
+      var row = (this.chatModelCatalog || []).find(function (m) { return m.id === id; });
+      if (!row) return '';
+      var ctx = row.contextLabel ? String(row.contextLabel) + ' ctx' : '';
+      var cost = row.costHint ? String(row.costHint) : '';
+      if (ctx && cost) return ctx + ' · ' + cost;
+      return ctx || cost;
+    },
+
+    chatModelPickerMetaLine(entry) {
+      if (!entry) return '';
+      var ctx = entry.contextLabel ? String(entry.contextLabel) + ' ctx' : '';
+      var cost = entry.costHint ? String(entry.costHint) : '';
+      if (ctx && cost) return ctx + ' · ' + cost;
+      return ctx || cost;
+    },
+
+    isActiveChatModelPick(mid) {
+      return this.ensureChatModelFromCatalog(this.chatModel) === this.ensureChatModelFromCatalog(mid);
+    },
+
+    chatPromptPlaceholderDesktop() {
+      if (this.chatCoarsePointer) return 'Ask your agent…';
+      return 'Ask your agent… (Enter to send, Shift+Enter or Cmd+Enter for newline)';
+    },
+
+    chatPromptPlaceholderMobile() {
+      if (this.chatCoarsePointer) return 'Ask…';
+      return 'Ask… (Enter to send, Shift+Enter or Cmd+Enter for newline)';
+    },
+
+    insertNewlineInChatComposer(el) {
+      if (!el || el.tagName !== 'TEXTAREA') return;
+      var start = el.selectionStart;
+      var end = el.selectionEnd;
+      var val = this.chatPrompt;
+      var pos = start + 1;
+      this.chatPrompt = val.slice(0, start) + '\n' + val.slice(end);
+      this.$nextTick(function() {
+        try {
+          el.selectionStart = el.selectionEnd = pos;
+        } catch (_) {}
+      });
+    },
+
+    /** Fine pointer: Enter sends, Shift/Cmd/Ctrl+Enter newline. Coarse (touch-primary): Enter always newline; use Send. */
+    onChatComposerEnterKeydown(e) {
+      if (this.chatCoarsePointer) {
+        e.preventDefault();
+        this.insertNewlineInChatComposer(e.target);
+        return;
+      }
+      if (e.shiftKey || e.metaKey || e.ctrlKey) {
+        e.preventDefault();
+        this.insertNewlineInChatComposer(e.target);
+        return;
+      }
+      e.preventDefault();
+      this.submitChat();
     },
 
     async submitChat() {
@@ -2632,6 +3107,7 @@ document.addEventListener('alpine:init', function() {
             agent: this.normalizeChatAgentId(this.chatAgent),
             prompt: prompt,
             conversationId: this.chatConversationId,
+            model: this.ensureChatModelFromCatalog(this.chatModel),
           };
           if (opts.planPhase) body.planPhase = opts.planPhase;
           if (opts.planPhase === 'execute' && this.chatPlanTodos && this.chatPlanTodos.length) {

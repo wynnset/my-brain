@@ -1,0 +1,95 @@
+/* Bottom “add / install app” bar — standalone CSS so it works on login + dashboard without Tailwind JIT on injected nodes. */
+body.pwa-install-banner-visible {
+  padding-bottom: calc(4.75rem + env(safe-area-inset-bottom, 0px));
+}
+#pwa-install-banner {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 55;
+  display: none;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  padding: 0.65rem 0.85rem;
+  padding-bottom: calc(0.65rem + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid rgb(226 232 240);
+  background: rgba(255, 255, 255, 0.96);
+  color: rgb(30 41 59);
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  font-size: 0.8125rem;
+  line-height: 1.35;
+  box-shadow: 0 -4px 24px rgba(15, 23, 42, 0.06);
+}
+html.dark #pwa-install-banner {
+  border-top-color: rgb(51 65 85);
+  background: rgba(30, 41, 59, 0.97);
+  color: rgb(241 245 249);
+  box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.25);
+}
+#pwa-install-banner[data-visible="1"] {
+  display: flex;
+}
+#pwa-install-banner .pwa-install-banner__text {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+#pwa-install-banner .pwa-install-banner__actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+#pwa-install-banner .pwa-install-banner__btn {
+  border: none;
+  cursor: pointer;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  padding: 0.45rem 0.85rem;
+  border-radius: 0.5rem;
+  background: rgb(79 70 229);
+  color: #fff;
+  white-space: nowrap;
+  transition: background 0.15s ease;
+}
+#pwa-install-banner .pwa-install-banner__btn:hover {
+  background: rgb(67 56 202);
+}
+#pwa-install-banner .pwa-install-banner__btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+#pwa-install-banner .pwa-install-banner__btn--ghost {
+  background: rgb(241 245 249);
+  color: rgb(51 65 85);
+}
+html.dark #pwa-install-banner .pwa-install-banner__btn--ghost {
+  background: rgb(51 65 85);
+  color: rgb(226 232 240);
+}
+#pwa-install-banner .pwa-install-banner__btn--ghost:hover {
+  background: rgb(226 232 240);
+  color: rgb(30 41 59);
+}
+html.dark #pwa-install-banner .pwa-install-banner__btn--ghost:hover {
+  background: rgb(71 85 105);
+  color: rgb(248 250 252);
+}
+#pwa-install-banner .pwa-install-banner__close {
+  border: none;
+  cursor: pointer;
+  padding: 0.35rem;
+  line-height: 0;
+  border-radius: 0.375rem;
+  background: transparent;
+  color: rgb(100 116 139);
+}
+#pwa-install-banner .pwa-install-banner__close:hover {
+  background: rgb(241 245 249);
+  color: rgb(51 65 85);
+}
+html.dark #pwa-install-banner .pwa-install-banner__close:hover {
+  background: rgb(51 65 85);
+  color: rgb(203 213 225);
+}

@@ -2,6 +2,13 @@
   "version": 1,
   "pages": [
     {
+      "slug": "family",
+      "label": "Family",
+      "description": "Open action items with domain = family (requires brain.db only)",
+      "template": "action_domain",
+      "domain": "family"
+    },
+    {
       "slug": "demo-query",
       "label": "Demo row",
       "description": "Example datatable page — runs one read-only SELECT",

@@ -5,6 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=5, viewport-fit=cover" />
   <title>Sign in — Cyrus</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" sizes="180x180">
+  <link rel="manifest" href="/site.webmanifest">
+  <meta name="theme-color" content="#f8fafc">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Cyrus">
+  <link rel="stylesheet" href="/pwa-install-banner.css">
   <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body class="min-h-screen bg-slate-100 dark:bg-slate-900 flex items-center justify-center p-4" style="touch-action: manipulation;">
@@ -81,5 +87,6 @@
       });
     })();
   </script>
+  <script defer src="/js/pwa-install-banner.js"></script>
 </body>
 </html>

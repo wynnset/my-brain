@@ -31,11 +31,11 @@ function registerCoreRoutes(app, ctx) {
           out.dashboardPages = r.dashboardPages;
           out.dashboardNavPages = dashManifest.navPayloadFromEnabled(r.enabledPages);
         } catch (_) {
-          out.dashboardPages = { career: false, finance: false, business: false };
+          out.dashboardPages = { career: false, finance: false, business: false, personal: false, family: false };
           out.dashboardNavPages = [];
         }
       } else {
-        out.dashboardPages = { career: false, finance: false, business: false };
+        out.dashboardPages = { career: false, finance: false, business: false, personal: false, family: false };
         out.dashboardNavPages = [];
       }
     } else {

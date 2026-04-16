@@ -1,5 +1,7 @@
 'use strict';
 
+const { ORCH_BRIEF_FILE, ORCH_BRIEF_LEGACY } = require('../lib/orchestrator-brief.js');
+
 /** @param {import("express").Application} app @param {Record<string, unknown>} ctx */
 module.exports = function registerChatRoutes(app, ctx) {
   const {
@@ -32,7 +34,106 @@ module.exports = function registerChatRoutes(app, ctx) {
   const CHAT_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   /** `cli` (default): spawn Claude Code. `sdk`: Claude Agent SDK in-process. */
   const BRAIN_CHAT_BACKEND = String(process.env.BRAIN_CHAT_BACKEND || 'cli').toLowerCase();
-  
+
+  /**
+   * Dashboard model picker: ids must match what Claude Code / Agent SDK accept (alias or full id).
+   * Pricing is approximate (API list rates; actual bill varies by tier and batch).
+   * @type {{ id: string, label: string, contextLabel: string, costHint: string }[]}
+   */
+  const CHAT_MODEL_CATALOG = [
+    {
+      id: 'sonnet',
+      label: 'Sonnet',
+      contextLabel: '200k',
+      costHint: '≈ $3 / $15 per M tok (in / out)',
+    },
+    {
+      id: 'opus',
+      label: 'Opus',
+      contextLabel: '200k',
+      costHint: '≈ $15 / $75 per M tok (in / out)',
+    },
+    {
+      id: 'haiku',
+      label: 'Haiku',
+      contextLabel: '200k',
+      costHint: '≈ $1 / $5 per M tok (in / out)',
+    },
+  ];
+  const CHAT_MODEL_IDS = new Set(CHAT_MODEL_CATALOG.map((m) => m.id));
+
+  function getDefaultChatModelId() {
+    const raw = String(process.env.BRAIN_CHAT_DEFAULT_MODEL || '').trim();
+    if (raw && CHAT_MODEL_IDS.has(raw)) return raw;
+    return CHAT_MODEL_IDS.has('haiku') ? 'haiku' : CHAT_MODEL_CATALOG[0] ? CHAT_MODEL_CATALOG[0].id : 'sonnet';
+  }
+
+  /** @param {string} id */
+  function isAllowedChatModelId(id) {
+    return CHAT_MODEL_IDS.has(String(id || '').trim().toLowerCase());
+  }
+
+  /**
+   * @param {object} sess
+   * @param {unknown} bodyModel
+   * @param {number} userMsgsBefore
+   * @returns {{ ok: true, model: string } | { ok: false, error: string }}
+   */
+  function resolveChatModelForRequest(sess, bodyModel, userMsgsBefore) {
+    const incoming =
+      bodyModel != null && String(bodyModel).trim() !== ''
+        ? String(bodyModel).trim().toLowerCase()
+        : '';
+    const rawStored = sess.model != null && String(sess.model).trim() !== '' ? String(sess.model).trim().toLowerCase() : '';
+    const stored = rawStored && isAllowedChatModelId(rawStored) ? rawStored : '';
+
+    if (userMsgsBefore > 0) {
+      if (incoming && !isAllowedChatModelId(incoming)) {
+        return { ok: false, error: 'Invalid model' };
+      }
+      if (incoming && stored && incoming !== stored) {
+        return { ok: false, error: `Model must match conversation (${stored})` };
+      }
+      const model = stored || incoming || getDefaultChatModelId();
+      return { ok: true, model };
+    }
+
+    const pick = incoming || stored || getDefaultChatModelId();
+    if (!isAllowedChatModelId(pick)) return { ok: false, error: 'Invalid model' };
+    return { ok: true, model: pick };
+  }
+
+  /** Last assistant message with a recorded catalog model (newest first). */
+  function inferRecordedModelFromMessages(messages) {
+    if (!Array.isArray(messages)) return null;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (!m || m.role !== 'assistant') continue;
+      const mid = m.model != null ? String(m.model).trim().toLowerCase() : '';
+      if (mid && isAllowedChatModelId(mid)) return mid;
+    }
+    return null;
+  }
+
+  /** Model recorded for this session (root field, else inferred from messages). */
+  function recordedModelForSession(sess) {
+    if (!sess || typeof sess !== 'object') return null;
+    const top = sess.model != null ? String(sess.model).trim().toLowerCase() : '';
+    if (top && isAllowedChatModelId(top)) return top;
+    return inferRecordedModelFromMessages(sess.messages);
+  }
+
+  function applyRecordedModelToSessionObject(o) {
+    if (!o || typeof o !== 'object') return;
+    const r = recordedModelForSession(o);
+    if (r) {
+      o.model = r;
+      return;
+    }
+    const raw = o.model != null ? String(o.model).trim() : '';
+    if (raw && !isAllowedChatModelId(raw.toLowerCase())) delete o.model;
+  }
+
   function chatSessionsDirForRequest(req) {
     return path.join(tenantDataDirForRequest(req), 'chat-sessions');
   }
@@ -72,9 +173,134 @@ module.exports = function registerChatRoutes(app, ctx) {
       const o = JSON.parse(fs.readFileSync(p, 'utf8'));
       if (!o || typeof o !== 'object' || !Array.isArray(o.messages)) return null;
       if (!o.id) o.id = id;
+      applyRecordedModelToSessionObject(o);
       return o;
     } catch (_) {
       return null;
+    }
+  }
+
+  /** Same top-level dirs as Files in the dashboard (+ workspace-root orchestrator brief). */
+  const CHAT_WORKSPACE_TOUCH_LIMIT = 200;
+  const FILES_TAB_PREFIXES = new Set(['owners-inbox', 'team-inbox', 'team', 'docs']);
+
+  function lastMessageCreatedIso(messages) {
+    if (!Array.isArray(messages) || !messages.length) return null;
+    const last = messages[messages.length - 1];
+    const iso = last && last.createdAt != null ? String(last.createdAt).trim() : '';
+    return iso || null;
+  }
+
+  function normalizeWorkspaceTouches(arr) {
+    const map = new Map();
+    for (const raw of Array.isArray(arr) ? arr : []) {
+      if (!raw || typeof raw !== 'object') continue;
+      let rel = String(raw.path || '')
+        .trim()
+        .replace(/\\/g, '/');
+      if (!rel) continue;
+      rel = rel.replace(/^\/+/, '');
+      const k = raw.kind === 'edited' ? 'edited' : raw.kind === 'added' ? 'added' : null;
+      if (!k) continue;
+      const at = String(raw.at || '').trim() || new Date().toISOString();
+      const prev = map.get(rel);
+      if (!prev || at >= prev.at) map.set(rel, { path: rel, kind: k, at });
+    }
+    let list = Array.from(map.values());
+    list.sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0));
+    if (list.length > CHAT_WORKSPACE_TOUCH_LIMIT) list = list.slice(0, CHAT_WORKSPACE_TOUCH_LIMIT);
+    list.sort((a, b) => a.path.localeCompare(b.path));
+    return list;
+  }
+
+  function filterTouchesThroughLastMessage(workspaceTouches, messages) {
+    const iso = lastMessageCreatedIso(messages);
+    if (!iso) return [];
+    const raw = Array.isArray(workspaceTouches) ? workspaceTouches : [];
+    return normalizeWorkspaceTouches(raw.filter((t) => t && t.at && String(t.at) <= iso));
+  }
+
+  function toWorkspaceRelativePosix(ws, rawPath) {
+    const raw = String(rawPath || '').trim();
+    if (!raw) return null;
+    const wsAbs = path.resolve(ws);
+    const abs = path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(wsAbs, raw);
+    const norm = path.normalize(abs);
+    const rel = path.relative(wsAbs, norm);
+    if (!rel || rel === '.' || rel.startsWith('..') || path.isAbsolute(rel)) return null;
+    return rel.split(path.sep).join('/');
+  }
+
+  function isTrackedWorkspaceRel(relPosix) {
+    if (!relPosix) return false;
+    const seg = relPosix.split('/').filter(Boolean);
+    if (!seg.length) return false;
+    if (FILES_TAB_PREFIXES.has(seg[0])) return true;
+    if (seg.length === 1 && (seg[0] === ORCH_BRIEF_FILE || seg[0] === ORCH_BRIEF_LEGACY)) return true;
+    return false;
+  }
+
+  function touchKindForSdkTool(toolName) {
+    const n = String(toolName || '')
+      .trim()
+      .toLowerCase();
+    if (!n) return null;
+    if (n === 'write' || n === 'create') return 'added';
+    if (n === 'edit' || n === 'multiedit' || n.includes('str_replace') || n === 'notebookedit' || n.includes('patch'))
+      return 'edited';
+    return null;
+  }
+
+  function collectFilePathsFromToolInput(toolInput) {
+    const ti = toolInput && typeof toolInput === 'object' ? toolInput : null;
+    if (!ti) return [];
+    const out = [];
+    const push = (p) => {
+      const s = typeof p === 'string' ? p.trim() : '';
+      if (s) out.push(s);
+    };
+    push(ti.file_path);
+    push(ti.path);
+    push(ti.target_file);
+    push(ti.filePath);
+    push(ti.file);
+    if (Array.isArray(ti.file_paths)) for (const p of ti.file_paths) push(p);
+    if (Array.isArray(ti.paths)) for (const p of ti.paths) push(p);
+    if (Array.isArray(ti.edits)) {
+      for (const ed of ti.edits) {
+        if (ed && typeof ed === 'object') push(ed.file_path || ed.path);
+      }
+    }
+    return [...new Set(out)];
+  }
+
+  function appendSdkPostToolTouchesToPending(ws, pending, toolName, toolInput) {
+    const kind = touchKindForSdkTool(toolName);
+    if (!kind) return;
+    for (const fp of collectFilePathsFromToolInput(toolInput)) {
+      const rel = toWorkspaceRelativePosix(ws, fp);
+      if (!rel || !isTrackedWorkspaceRel(rel)) continue;
+      pending.push({ path: rel, kind });
+    }
+  }
+
+  function mergePendingWorkspaceTouchesIntoSession(req, conversationId, pendingPairs) {
+    if (!pendingPairs || !pendingPairs.length) return;
+    const p = chatSessionPath(req, conversationId);
+    if (!p) return;
+    const fresh = readChatSession(req, conversationId);
+    if (!fresh) return;
+    const now = new Date().toISOString();
+    const base = normalizeWorkspaceTouches(fresh.workspaceTouches);
+    const merged = normalizeWorkspaceTouches([
+      ...base,
+      ...pendingPairs.map((x) => ({ path: x.path, kind: x.kind, at: now })),
+    ]);
+    fresh.workspaceTouches = merged;
+    try {
+      atomicWriteChatSession(p, fresh);
+    } catch (e) {
+      console.warn('[chat] workspaceTouches merge failed', e.message);
     }
   }
   
@@ -242,7 +468,7 @@ module.exports = function registerChatRoutes(app, ctx) {
   
   /**
    * Persists a readable plan to owners-inbox (server-side; plan mode stays read-only for the agent).
-   * @returns {null | { dir: 'owners-inbox', name: string }}
+   * @returns {null | { dir: 'owners-inbox', name: string, touchKind: 'added' | 'edited' }}
    */
   function writeChatPlanMarkdownToOwnersInbox(ws, conversationId, { planTodos, planMarkdown, assistantContent, sessionTitle }) {
     const todos = sanitizePlanTodoItems(planTodos || []);
@@ -257,6 +483,10 @@ module.exports = function registerChatRoutes(app, ctx) {
     } catch (_) {
       return null;
     }
+    let planFileExisted = false;
+    try {
+      planFileExisted = fs.existsSync(fullPath);
+    } catch (_) {}
     const titleLine = String(sessionTitle || 'Plan')
       .trim()
       .replace(/\s+/g, ' ')
@@ -294,7 +524,7 @@ module.exports = function registerChatRoutes(app, ctx) {
       console.warn('[chat-plan] owners-inbox write failed', e.message);
       return null;
     }
-    return { dir: 'owners-inbox', name };
+    return { dir: 'owners-inbox', name, touchKind: planFileExisted ? 'edited' : 'added' };
   }
   
   function persistChatPlanToSession(req, conversationId, { planTodos, planMarkdown, lastPhase, planInboxFile }) {
@@ -423,6 +653,92 @@ module.exports = function registerChatRoutes(app, ctx) {
       }
     }
   }
+
+  /** Deep-clone a stored message with a new id (forked conversations). */
+  function cloneMessageForFork(m) {
+    if (!m || (m.role !== 'user' && m.role !== 'assistant')) return null;
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    const out = {
+      id,
+      role: m.role,
+      content: String(m.content || ''),
+      createdAt: m.createdAt || now,
+    };
+    if (m.role === 'assistant') {
+      const mid = m.model != null ? String(m.model).trim().toLowerCase() : '';
+      if (mid && isAllowedChatModelId(mid)) out.model = mid;
+      if (m.error === true) out.error = true;
+      if (m.sdkBilling && typeof m.sdkBilling === 'object') {
+        const sb = JSON.parse(JSON.stringify(m.sdkBilling));
+        delete sb.userMessageId;
+        const hasUsd = sb.totalCostUsd != null && Number.isFinite(sb.totalCostUsd);
+        const hasUsage = sb.usage && typeof sb.usage === 'object' && Object.keys(sb.usage).length > 0;
+        const hasModelUsage =
+          sb.modelUsage && typeof sb.modelUsage === 'object' && Object.keys(sb.modelUsage).length > 0;
+        const hasNumTurns = typeof sb.numTurns === 'number' && Number.isFinite(sb.numTurns);
+        const hasSubtype = sb.resultSubtype != null && String(sb.resultSubtype).trim() !== '';
+        if (hasUsd || hasUsage || hasModelUsage || hasNumTurns || hasSubtype) out.sdkBilling = sb;
+      }
+    }
+    return out;
+  }
+
+  /** Rebuild session rollup totals from assistant messages' sdkBilling. */
+  function sdkTotalsFromMessages(messages) {
+    const sess = { sdkUsageSessionTotals: { totalCostUsd: 0, usage: {}, modelUsage: {} } };
+    for (const m of messages || []) {
+      if (m && m.role === 'assistant' && m.sdkBilling) mergeSdkBillingIntoSessionTotals(sess, m.sdkBilling);
+    }
+    const t = sess.sdkUsageSessionTotals;
+    const hasCost = typeof t.totalCostUsd === 'number' && Number.isFinite(t.totalCostUsd) && t.totalCostUsd !== 0;
+    const hasUsage = t.usage && typeof t.usage === 'object' && Object.keys(t.usage).length > 0;
+    const hasModelUsage = t.modelUsage && typeof t.modelUsage === 'object' && Object.keys(t.modelUsage).length > 0;
+    if (!hasCost && !hasUsage && !hasModelUsage) return null;
+    return t;
+  }
+
+  /** Remove dashboard plan fields and Agent SDK resume id (truncate / fork mid-thread). */
+  function stripForkBranchPlanAndResume(sess) {
+    if (!sess || typeof sess !== 'object') return;
+    sess.planExecutePending = false;
+    delete sess.planTodos;
+    delete sess.planMarkdown;
+    delete sess.planLastPhase;
+    delete sess.planInboxFile;
+    delete sess.planUpdatedAt;
+    delete sess.agentSdkSessionId;
+  }
+
+  /**
+   * When the forked transcript ends at the same point as the source (last message), copy pending plan state.
+   * @param {Record<string, unknown>} newSess
+   * @param {Record<string, unknown>} source
+   */
+  function copyPendingPlanIfForkAtSessionTail(newSess, source) {
+    if (!newSess || !source || source.planExecutePending !== true) {
+      stripForkBranchPlanAndResume(newSess);
+      return;
+    }
+    const todos = sanitizePlanTodoItems(source.planTodos || []);
+    if (!todos.length) {
+      stripForkBranchPlanAndResume(newSess);
+      return;
+    }
+    newSess.planExecutePending = true;
+    newSess.planTodos = todos;
+    if (typeof source.planMarkdown === 'string' && source.planMarkdown) {
+      newSess.planMarkdown = source.planMarkdown.slice(0, CHAT_PLAN_SESSION_MARKDOWN_MAX);
+    }
+    if (source.planLastPhase) newSess.planLastPhase = source.planLastPhase;
+    if (source.planInboxFile && source.planInboxFile.dir && source.planInboxFile.name) {
+      newSess.planInboxFile = {
+        dir: String(source.planInboxFile.dir),
+        name: String(source.planInboxFile.name),
+      };
+    }
+    if (source.planUpdatedAt) newSess.planUpdatedAt = source.planUpdatedAt;
+  }
   
   // ─── POST /api/chat — spawn claude with agent system prompt ───────────────────
   /** CLI spawn target; SDK uses `pathToClaudeCodeExecutable` (same search order). */
@@ -532,6 +848,47 @@ module.exports = function registerChatRoutes(app, ctx) {
     ].join('\n');
     return `${basePrompt}\n\n${block}`;
   }
+
+  /** Appended after proprietary rules so every dashboard chat sees manifest rules + optional full `docs/system.md`. */
+  function appendDashboardManifestChatGuidance(req, basePrompt) {
+    const rules = [
+      '---',
+      '',
+      '## Workspace dashboard manifest (mandatory when relevant)',
+      '',
+      'If the user asks about **dashboard tabs**, **`dashboard.json`**, **custom pages**, **`action_items.domain`** values (e.g. family, personal), or adding a **Family** / **Personal** area like Career/Finance:',
+      '',
+      '1. Treat **`docs/system.md`** in this workspace as authoritative — read it (section **Dashboard manifest**) before advising.',
+      '2. Valid manifest **`template`** values are: **`career`**, **`finance`**, **`business`**, **`action_domain`**, **`datatable`**, **`sections`**. There is **no** `template: "family"` — use **`"template": "action_domain"`** with **`"domain": "family"`** (and a unique **`slug`**) for a standard action-item tab backed only by **`brain.db`.**',
+      '3. Use **`datatable`** / **`sections`** for arbitrary read-only **SQL** over tenant SQLite files — not when the user wants the same **action list** UX as Finance for one domain.',
+      '4. Do **not** tell the user to edit **`app/`** server source files to add a domain tab unless they explicitly need a **new template type** not covered in `docs/system.md`.',
+      '',
+    ].join('\n');
+    let out = `${basePrompt}\n\n${rules}`;
+    try {
+      const ws = workspaceDirForRequest(req);
+      const docPath = path.join(ws, 'docs', 'system.md');
+      if (fs.existsSync(docPath)) {
+        const st = fs.statSync(docPath);
+        const maxBytes = 24000;
+        if (st.isFile() && st.size > 0 && st.size <= maxBytes) {
+          const body = fs.readFileSync(docPath, 'utf8');
+          out += [
+            '---',
+            '',
+            '## `docs/system.md` (workspace copy for this session)',
+            '',
+            'If the following diverges from the file on disk, prefer the file the user sees in **`docs/system.md`.**',
+            '',
+            body,
+          ].join('\n');
+        }
+      }
+    } catch (err) {
+      console.warn('[chat] dashboard manifest guidance:', err.message);
+    }
+    return out;
+  }
   
   /**
    * Env for the Claude CLI / Agent SDK child.
@@ -539,6 +896,8 @@ module.exports = function registerChatRoutes(app, ctx) {
    */
   function envForClaudeChat(opts = {}) {
     const env = { ...process.env };
+    const modelOverride = opts.model != null && String(opts.model).trim() !== '' ? String(opts.model).trim() : '';
+    if (modelOverride) env.ANTHROPIC_MODEL = modelOverride;
     const apiKey = normalizeAnthropicApiKey(env.ANTHROPIC_API_KEY);
     const hasApiKey = Boolean(apiKey);
     if (hasApiKey) env.ANTHROPIC_API_KEY = apiKey;
@@ -779,6 +1138,7 @@ module.exports = function registerChatRoutes(app, ctx) {
       items.push({
         id: sess.id,
         agent: sess.agent,
+        model: recordedModelForSession(sess),
         title: sess.title || 'Chat',
         updatedAt: sess.updatedAt || sess.createdAt,
       });
@@ -787,9 +1147,16 @@ module.exports = function registerChatRoutes(app, ctx) {
     res.json({ conversations: items.slice(0, CHAT_LIST_LIMIT) });
   });
   
+  app.get('/api/chat/models', (req, res) => {
+    res.json({ models: CHAT_MODEL_CATALOG, defaultModel: getDefaultChatModelId() });
+  });
+
   app.post('/api/chat/conversations', (req, res) => {
     const agent = (req.body && req.body.agent) || '';
     if (!agent) return res.status(400).json({ error: 'Missing agent' });
+    const rawModel = req.body && req.body.model != null ? String(req.body.model).trim().toLowerCase() : '';
+    const model = rawModel ? (isAllowedChatModelId(rawModel) ? rawModel : null) : getDefaultChatModelId();
+    if (rawModel && !model) return res.status(400).json({ error: 'Invalid model' });
     const ws = workspaceDirForRequest(req);
     const systemFile = isOrchestratorChatAgent(agent)
       ? (multiUserMode() ? resolveOrchestratorBriefPathInWorkspace(ws) : resolveOrchestratorBriefPath())
@@ -798,7 +1165,7 @@ module.exports = function registerChatRoutes(app, ctx) {
     ensureChatSessionsDir(req);
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
-    const sess = { id, agent, title: 'New chat', createdAt: now, updatedAt: now, messages: [] };
+    const sess = { id, agent, model: model || getDefaultChatModelId(), title: 'New chat', createdAt: now, updatedAt: now, messages: [] };
     const p = chatSessionPath(req, id);
     atomicWriteChatSession(p, sess);
     res.json({ id });
@@ -808,6 +1175,153 @@ module.exports = function registerChatRoutes(app, ctx) {
     const sess = readChatSession(req, req.params.id);
     if (!sess) return res.status(404).json({ error: 'Conversation not found' });
     res.json(sess);
+  });
+
+  /**
+   * Fork:
+   * - { messageId } — copy through that assistant reply (inclusive).
+   * - { editUserMessageId } — copy messages strictly before that user turn (for edit-and-resend in a new chat; client sends the new text via POST /api/chat).
+   */
+  app.post('/api/chat/conversations/:id/fork', (req, res) => {
+    const sourceId = req.params.id;
+    const body = req.body || {};
+    const assistantMsgId = body.messageId != null ? String(body.messageId).trim() : '';
+    const editUserId = body.editUserMessageId != null ? String(body.editUserMessageId).trim() : '';
+
+    if (assistantMsgId && editUserId) {
+      return res.status(400).json({ error: 'Use either messageId or editUserMessageId, not both' });
+    }
+
+    if (editUserId) {
+      const source = readChatSession(req, sourceId);
+      if (!source) return res.status(404).json({ error: 'Conversation not found' });
+      const messages = Array.isArray(source.messages) ? source.messages : [];
+      const uidx = messages.findIndex((m) => m && String(m.id) === editUserId && m.role === 'user');
+      if (uidx < 0) return res.status(400).json({ error: 'User message not found' });
+
+      const prefix = messages.slice(0, uidx);
+      const cloned = [];
+      for (const m of prefix) {
+        const c = cloneMessageForFork(m);
+        if (c) cloned.push(c);
+      }
+      ensureChatSessionsDir(req);
+      const now = new Date().toISOString();
+
+      const newId = crypto.randomUUID();
+      const model =
+        recordedModelForSession({ ...source, messages: cloned }) || getDefaultChatModelId();
+      const srcTitle = String(source.title || 'Chat').trim() || 'Chat';
+      const title = `Fork · ${srcTitle.length > 120 ? `${srcTitle.slice(0, 117)}…` : srcTitle}`;
+
+      /** @type {Record<string, unknown>} */
+      const newSess = {
+        id: newId,
+        agent: source.agent,
+        model,
+        title,
+        createdAt: now,
+        updatedAt: now,
+        messages: cloned,
+      };
+
+      const totals = sdkTotalsFromMessages(cloned);
+      if (totals) newSess.sdkUsageSessionTotals = totals;
+      newSess.workspaceTouches = filterTouchesThroughLastMessage(source.workspaceTouches, cloned);
+
+      const userWasLastInSource = uidx === messages.length - 1;
+      if (userWasLastInSource) copyPendingPlanIfForkAtSessionTail(newSess, source);
+      else stripForkBranchPlanAndResume(newSess);
+
+      try {
+        atomicWriteChatSession(chatSessionPath(req, newId), newSess);
+      } catch (err) {
+        return res.status(500).json({ error: err.message || 'Could not save forked conversation' });
+      }
+      return res.json({ id: newId });
+    }
+
+    if (!assistantMsgId) return res.status(400).json({ error: 'Missing messageId' });
+    const source = readChatSession(req, sourceId);
+    if (!source) return res.status(404).json({ error: 'Conversation not found' });
+    const messages = Array.isArray(source.messages) ? source.messages : [];
+    const idx = messages.findIndex((m) => m && String(m.id) === assistantMsgId && m.role === 'assistant');
+    if (idx < 0) return res.status(400).json({ error: 'Message not found or not an assistant reply' });
+
+    const slice = messages.slice(0, idx + 1);
+    const cloned = [];
+    for (const m of slice) {
+      const c = cloneMessageForFork(m);
+      if (c) cloned.push(c);
+    }
+    if (!cloned.length) return res.status(400).json({ error: 'Nothing to fork' });
+
+    ensureChatSessionsDir(req);
+    const newId = crypto.randomUUID();
+    const now = new Date().toISOString();
+    const model =
+      recordedModelForSession({ ...source, messages: cloned }) || getDefaultChatModelId();
+    const srcTitle = String(source.title || 'Chat').trim() || 'Chat';
+    const title = `Fork · ${srcTitle.length > 120 ? `${srcTitle.slice(0, 117)}…` : srcTitle}`;
+
+    /** @type {Record<string, unknown>} */
+    const newSess = {
+      id: newId,
+      agent: source.agent,
+      model,
+      title,
+      createdAt: now,
+      updatedAt: now,
+      messages: cloned,
+    };
+
+    const totals = sdkTotalsFromMessages(cloned);
+    if (totals) newSess.sdkUsageSessionTotals = totals;
+    newSess.workspaceTouches = filterTouchesThroughLastMessage(source.workspaceTouches, cloned);
+
+    const forkAtTail = idx === messages.length - 1;
+    if (forkAtTail) copyPendingPlanIfForkAtSessionTail(newSess, source);
+    else stripForkBranchPlanAndResume(newSess);
+
+    try {
+      atomicWriteChatSession(chatSessionPath(req, newId), newSess);
+    } catch (err) {
+      return res.status(500).json({ error: err.message || 'Could not save forked conversation' });
+    }
+    res.json({ id: newId });
+  });
+
+  /**
+   * Remove a user message and every message after it (for edit-and-resend in place).
+   * Body: { messageId: string } — must be a user message id in the session.
+   */
+  app.post('/api/chat/conversations/:id/truncate-at-user', (req, res) => {
+    const convId = req.params.id;
+    const messageId = req.body && req.body.messageId != null ? String(req.body.messageId).trim() : '';
+    if (!messageId) return res.status(400).json({ error: 'Missing messageId' });
+    const sess = readChatSession(req, convId);
+    if (!sess) return res.status(404).json({ error: 'Conversation not found' });
+    const messages = Array.isArray(sess.messages) ? sess.messages : [];
+    const idx = messages.findIndex((m) => m && String(m.id) === messageId && m.role === 'user');
+    if (idx < 0) return res.status(400).json({ error: 'User message not found' });
+
+    sess.messages = messages.slice(0, idx);
+    stripForkBranchPlanAndResume(sess);
+    sess.workspaceTouches = filterTouchesThroughLastMessage(sess.workspaceTouches, sess.messages);
+    const totals = sdkTotalsFromMessages(sess.messages);
+    if (totals) sess.sdkUsageSessionTotals = totals;
+    else delete sess.sdkUsageSessionTotals;
+
+    const hasUser = sess.messages.some((m) => m && m.role === 'user');
+    if (!hasUser) sess.title = 'New chat';
+
+    sess.updatedAt = new Date().toISOString();
+    try {
+      atomicWriteChatSession(chatSessionPath(req, convId), sess);
+    } catch (err) {
+      return res.status(500).json({ error: err.message || 'Could not update conversation' });
+    }
+    res.json({ ok: true });
   });
   
   app.delete('/api/chat/conversations/:id', (req, res) => {
@@ -867,6 +1381,11 @@ module.exports = function registerChatRoutes(app, ctx) {
     if (agent && agent !== sessionAgent) {
       return res.status(400).json({ error: `Agent must match conversation (${sessionAgent})` });
     }
+
+    const userMsgsBefore = sess.messages.filter((m) => m.role === 'user').length;
+    const modelPick = resolveChatModelForRequest(sess, body.model, userMsgsBefore);
+    if (!modelPick.ok) return res.status(400).json({ error: modelPick.error });
+    sess.model = modelPick.model;
   
     const ws = workspaceDirForRequest(req);
     const systemFile = isOrchestratorChatAgent(sessionAgent)
@@ -891,6 +1410,7 @@ module.exports = function registerChatRoutes(app, ctx) {
     }
     systemPrompt = augmentChatSystemPromptForMultiUser(req, systemPrompt);
     systemPrompt = appendProprietaryAssistantInstructions(systemPrompt);
+    systemPrompt = appendDashboardManifestChatGuidance(req, systemPrompt);
     if (planPhase === 'plan') systemPrompt += CHAT_PLAN_PHASE_SYSTEM_SUFFIX;
     if (planPhase === 'execute') systemPrompt += CHAT_EXECUTE_PLAN_SYSTEM_SUFFIX;
     if (hadPendingPlan && !planPhase) systemPrompt += CHAT_PLAN_REVISION_CHAT_SUFFIX;
@@ -919,7 +1439,7 @@ module.exports = function registerChatRoutes(app, ctx) {
     res.setHeader('Connection', 'keep-alive');
   
     console.log(
-      `[chat] backend=${BRAIN_CHAT_BACKEND} agent=${sessionAgent} conversation=${conversationId}` +
+      `[chat] backend=${BRAIN_CHAT_BACKEND} agent=${sessionAgent} model=${sess.model} conversation=${conversationId}` +
         (planPhase ? ` planPhase=${planPhase}` : '')
     );
   
@@ -942,18 +1462,30 @@ module.exports = function registerChatRoutes(app, ctx) {
      * @param {string} content
      * @param {boolean} errFlag
      * @param {null | { userMessageId?: string, totalCostUsd?: number | null, usage?: Record<string, number> | null, modelUsage?: Record<string, Record<string, number>> | null, numTurns?: number, resultSubtype?: string }} [billing] Agent SDK snapshot for this assistant turn
+     * @param {string} assistantModelId Catalog model id used for this assistant turn (stored on the message and session).
      * @returns {null | Record<string, unknown>} Saved session, or null if nothing was written
      */
-    function appendAssistantToSession(content, errFlag, billing) {
+    function appendAssistantToSession(content, errFlag, billing, assistantModelId) {
       if (assistantSaved) return null;
       assistantSaved = true;
       const fresh = readChatSession(req, conversationId);
       if (!fresh) return null;
+      const fromArg =
+        assistantModelId != null && String(assistantModelId).trim() && isAllowedChatModelId(String(assistantModelId).trim().toLowerCase())
+          ? String(assistantModelId).trim().toLowerCase()
+          : '';
+      const fromSession =
+        fresh.model != null && String(fresh.model).trim() && isAllowedChatModelId(String(fresh.model).trim().toLowerCase())
+          ? String(fresh.model).trim().toLowerCase()
+          : '';
+      const turnModel = fromSession || fromArg || inferRecordedModelFromMessages(fresh.messages) || getDefaultChatModelId();
+      fresh.model = turnModel;
       const msg = {
         id: crypto.randomUUID(),
         role: 'assistant',
         content: content || '',
         createdAt: new Date().toISOString(),
+        model: turnModel,
       };
       if (errFlag) msg.error = true;
       if (billing) {
@@ -1024,6 +1556,7 @@ module.exports = function registerChatRoutes(app, ctx) {
   
     if (BRAIN_CHAT_BACKEND === 'sdk') {
       (async () => {
+        let pendingWorkspaceTouches = [];
         try {
           const runner = await import(pathToFileURL(path.join(__dirname, '..', '..', 'chat-sdk-runner.mjs')).href);
           const freshSess = readChatSession(req, conversationId) || sess;
@@ -1045,6 +1578,7 @@ module.exports = function registerChatRoutes(app, ctx) {
           const allowedTools = allowedRaw ? allowedRaw.split(',').map((t) => t.trim()).filter(Boolean) : undefined;
           const chatEnv = envForClaudeChat({
             tenantDataDir: multiUserMode() ? tenantDataDirForRequest(req) : null,
+            model: sess.model,
           });
           const perm = runner.parsePermissionOptions(process.env.BRAIN_CHAT_PERMISSION_MODE);
           const chatDataDir = tenantDataDirForRequest(req);
@@ -1059,6 +1593,7 @@ module.exports = function registerChatRoutes(app, ctx) {
             resume: useResume ? freshSess.agentSdkSessionId : undefined,
             cwd: chatWorkspaceDir,
             env: chatEnv,
+            model: sess.model,
             tools: toolsOpt,
             allowedTools,
             permissionMode: perm.permissionMode,
@@ -1088,7 +1623,11 @@ module.exports = function registerChatRoutes(app, ctx) {
               } catch (_) {}
             },
             onInitSession: (sid) => mergeAgentSdkSessionIntoSession(req, conversationId, sid),
+            onPostToolUse: ({ toolName, toolInput }) => {
+              appendSdkPostToolTouchesToPending(chatWorkspaceDir, pendingWorkspaceTouches, toolName, toolInput);
+            },
           });
+          mergePendingWorkspaceTouchesIntoSession(req, conversationId, pendingWorkspaceTouches);
           if (!assistantSaved) {
             let content = (out.finalText || assistantBuf || '').trim();
             if (!content && out.errors && out.errors.length) content = out.errors.join('\n');
@@ -1101,7 +1640,7 @@ module.exports = function registerChatRoutes(app, ctx) {
                 (b.modelUsage && Object.keys(b.modelUsage).length > 0))
                 ? { ...b, userMessageId: userMsg.id }
                 : null;
-            const saved = appendAssistantToSession(content || '', Boolean(out.hadError), billing);
+            const saved = appendAssistantToSession(content || '', Boolean(out.hadError), billing, sess.model);
             if (saved && billing) {
               const last = saved.messages[saved.messages.length - 1];
               try {
@@ -1130,6 +1669,11 @@ module.exports = function registerChatRoutes(app, ctx) {
                   lastPhase: 'plan',
                   planInboxFile,
                 });
+                if (planInboxFile && planInboxFile.touchKind) {
+                  mergePendingWorkspaceTouchesIntoSession(req, conversationId, [
+                    { path: `owners-inbox/${String(planInboxFile.name)}`, kind: planInboxFile.touchKind },
+                  ]);
+                }
                 try {
                   const mdOut =
                     planMarkdown.length > 12000 ? `${planMarkdown.slice(0, 12000)}\n…` : planMarkdown;
@@ -1173,6 +1717,11 @@ module.exports = function registerChatRoutes(app, ctx) {
                     lastPhase: 'plan',
                     planInboxFile: planInboxFileChat,
                   });
+                  if (planInboxFileChat && planInboxFileChat.touchKind) {
+                    mergePendingWorkspaceTouchesIntoSession(req, conversationId, [
+                      { path: `owners-inbox/${String(planInboxFileChat.name)}`, kind: planInboxFileChat.touchKind },
+                    ]);
+                  }
                   try {
                     const mdOut =
                       mdChat.length > 12000 ? `${mdChat.slice(0, 12000)}\n…` : mdChat;
@@ -1191,12 +1740,13 @@ module.exports = function registerChatRoutes(app, ctx) {
           }
           if (out.sessionId) mergeAgentSdkSessionIntoSession(req, conversationId, out.sessionId);
         } catch (err) {
+          mergePendingWorkspaceTouchesIntoSession(req, conversationId, pendingWorkspaceTouches);
           const errText = err && err.message ? err.message : String(err);
           console.error('[chat-sdk]', err);
           try {
             res.write(`data: ${JSON.stringify({ error: errText })}\n\n`);
           } catch (_) {}
-          appendAssistantToSession(`[Error] ${errText}`, true);
+          appendAssistantToSession(`[Error] ${errText}`, true, null, sess.model);
         } finally {
           endSSE();
         }
@@ -1210,6 +1760,7 @@ module.exports = function registerChatRoutes(app, ctx) {
     proc = spawn(CLAUDE_BIN, ['-p', '--dangerously-skip-permissions'], {
       env: envForClaudeChat({
         tenantDataDir: multiUserMode() ? tenantDataDirForRequest(req) : null,
+        model: sess.model,
       }),
       cwd: workspaceDirForRequest(req),
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -1223,7 +1774,7 @@ module.exports = function registerChatRoutes(app, ctx) {
       try {
         res.write(`data: ${JSON.stringify({ error: errText })}\n\n`);
       } catch (_) {}
-      appendAssistantToSession(`[Error] ${errText}`, true);
+      appendAssistantToSession(`[Error] ${errText}`, true, null, sess.model);
       endSSE();
     });
   
@@ -1248,7 +1799,7 @@ module.exports = function registerChatRoutes(app, ctx) {
           content = `[Process exited with code ${code}]`;
         }
         const errFlag = code !== 0 && code !== null && !String(assistantBuf).trim();
-        appendAssistantToSession(content, errFlag);
+        appendAssistantToSession(content, errFlag, null, sess.model);
       }
       endSSE();
     });

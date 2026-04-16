@@ -128,12 +128,14 @@ export function parsePermissionOptions(spec) {
  * @param {string} [opts.auditLogPath]
  * @param {boolean} [opts.auditTools]
  * @param {number} [opts.maxTurns]
+ * @param {string} [opts.model] Claude model id or alias (e.g. sonnet, claude-sonnet-4-6)
  * @param {AbortSignal} [opts.abortSignal]
  * @param {(chunk: string) => void} opts.onTextChunk
  * @param {(payload: { tool: string, detail: string }) => void} [opts.onTool]
  * @param {(agentId: string) => void} [opts.onSegmentAgent] when a Task / Agent subagent handoff is detected (best-effort from tool_input)
  * @param {(line: string) => void} [opts.onLog]
  * @param {(sessionId: string) => void} [opts.onInitSession]
+ * @param {(evt: { toolName: string, toolInput: unknown }) => void} [opts.onPostToolUse] runs after each tool invocation (even when file audit logging is disabled)
  * @returns {Promise<{ finalText: string, sessionId: string | null, hadError: boolean, errors: string[], sdkBilling: ReturnType<typeof snapshotSdkBillingFromResultMessage> }>}
  */
 export async function runAgentSdkQuery(opts) {
@@ -155,47 +157,56 @@ export async function runAgentSdkQuery(opts) {
 
   const auditPath = opts.auditLogPath || path.join(opts.cwd, 'chat-tool-audit.log');
   const shouldAudit = opts.auditTools !== false;
-  const hooks = shouldAudit
-    ? {
-        PostToolUse: [
-          {
-            hooks: [
-              async (input) => {
-                try {
-                  const tool = input?.tool_name || 'unknown';
-                  const line = `${new Date().toISOString()}\t${tool}\t${JSON.stringify(input?.tool_input ?? {}).slice(0, 500)}\n`;
-                  fs.appendFileSync(auditPath, line, 'utf8');
-                } catch (_) {}
-                opts.onLog?.(`[tool] ${input?.tool_name || 'tool'}`);
-                try {
-                  const name = input?.tool_name;
-                  const ti = input?.tool_input;
-                  if (isDelegationToolName(name) && ti && typeof ti === 'object' && opts.onSegmentAgent) {
-                    const raw =
-                      ti.subagent_type ??
-                      ti.subagentType ??
-                      ti.agent ??
-                      ti.agent_id ??
-                      ti.agentId;
-                    if (raw != null && String(raw).trim()) {
-                      const slug = String(raw)
-                        .trim()
-                        .toLowerCase()
-                        .replace(/\s+/g, '_')
-                        .replace(/-/g, '_');
-                      if (!GENERIC_SUBAGENT_SEGMENT_SKIP.has(slug)) {
-                        opts.onSegmentAgent(slug);
+  const postToolCb = typeof opts.onPostToolUse === 'function' ? opts.onPostToolUse : null;
+  const hooks =
+    shouldAudit || postToolCb
+      ? {
+          PostToolUse: [
+            {
+              hooks: [
+                async (input) => {
+                  if (shouldAudit) {
+                    try {
+                      const tool = input?.tool_name || 'unknown';
+                      const line = `${new Date().toISOString()}\t${tool}\t${JSON.stringify(input?.tool_input ?? {}).slice(0, 500)}\n`;
+                      fs.appendFileSync(auditPath, line, 'utf8');
+                    } catch (_) {}
+                    opts.onLog?.(`[tool] ${input?.tool_name || 'tool'}`);
+                  }
+                  try {
+                    const name = input?.tool_name;
+                    const ti = input?.tool_input;
+                    if (isDelegationToolName(name) && ti && typeof ti === 'object' && opts.onSegmentAgent) {
+                      const raw =
+                        ti.subagent_type ??
+                        ti.subagentType ??
+                        ti.agent ??
+                        ti.agent_id ??
+                        ti.agentId;
+                      if (raw != null && String(raw).trim()) {
+                        const slug = String(raw)
+                          .trim()
+                          .toLowerCase()
+                          .replace(/\s+/g, '_')
+                          .replace(/-/g, '_');
+                        if (!GENERIC_SUBAGENT_SEGMENT_SKIP.has(slug)) {
+                          opts.onSegmentAgent(slug);
+                        }
                       }
                     }
+                  } catch (_) {}
+                  if (postToolCb) {
+                    try {
+                      postToolCb({ toolName: input?.tool_name || '', toolInput: input?.tool_input });
+                    } catch (_) {}
                   }
-                } catch (_) {}
-                return {};
-              },
-            ],
-          },
-        ],
-      }
-    : undefined;
+                  return {};
+                },
+              ],
+            },
+          ],
+        }
+      : undefined;
 
   let abortController;
   if (opts.abortSignal) {
@@ -223,6 +234,7 @@ export async function runAgentSdkQuery(opts) {
   if (hooks) options.hooks = hooks;
   if (opts.resume) options.resume = opts.resume;
   if (opts.pathToClaudeCodeExecutable) options.pathToClaudeCodeExecutable = opts.pathToClaudeCodeExecutable;
+  if (opts.model && String(opts.model).trim()) options.model = String(opts.model).trim();
 
   let assistantBuf = '';
   let sessionIdOut = null;

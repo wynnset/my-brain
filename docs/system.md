@@ -108,7 +108,44 @@ Browser  →  public/dashboard.html + public/js/*.mjs  (hash routes: #/, #/caree
          SQLite under DB_DIR (single-tenant) or users/<uuid>/data/ (multi-user)
 ```
 
-**Main JSON endpoints:** `/api/health`, `/api/auth-status`, `/api/login`, `/api/logout`, `/api/dashboard`, `/api/dashboard-manifest`, `/api/dashboard-page/:slug`, `/api/dashboard-section/...`, `/api/career`, `/api/finance`, `/api/business`, `/api/action-items/:id`, `/api/files`, `/api/upload`, `/api/chat`, `/api/db`, orchestrator brief routes (`/api/cyrus`, …).
+**Main JSON endpoints:** `/api/health`, `/api/auth-status`, `/api/login`, `/api/logout`, `/api/dashboard`, `/api/dashboard-manifest`, `/api/dashboard-page/:slug`, `/api/dashboard-section/...`, `/api/career`, `/api/finance`, `/api/business`, `/api/action-domain/:slug`, `/api/action-items/:id`, `/api/files`, `/api/upload`, `/api/chat`, `/api/db`, orchestrator brief routes (`/api/cyrus`, …).
+
+### Dashboard manifest (`workspace/dashboard.json`)
+
+The dashboard reads **`workspace/dashboard.json`** (see `app/server/dashboard/dashboard-manifest.js`). This file controls **which nav tabs exist** for that workspace. It is the right place for users to add pages **without** editing application server code.
+
+| `template` | Purpose | Typical fields |
+|------------|---------|----------------|
+| **`career`**, **`finance`**, **`business`** | First-class domain dashboards (fixed APIs + rich UI). Each needs its default SQLite file(s) on disk (`launchpad.db`, `finance.db`, `wynnset.db`) before the tab enables. | `slug`, `label`, optional `description` |
+| **`action_domain`** | One nav tab listing **open** `action_items` for a single `brain.db` domain (same UX as the action list on Finance/Business). Use this for **`personal`** or **`family`** (or any allowed domain) **without** new server routes. | `slug`, `label`, **`domain`**: one of `career`, `finance`, `business`, `personal`, `family` (must match `action_items.domain`). Requires **`brain.db`**. |
+| **`datatable`** | Read-only table from one tenant DB: one **`SELECT`**. | `slug`, `label`, **`db`** (basename), **`sql`** |
+| **`sections`** | Several **`datatable`** sections on one tab. | `slug`, `label`, **`sections`**: `[{ id, label, template: "datatable", db, sql }, …]` |
+
+**Important distinctions for assistants:**
+
+- **`action_items.domain`** in `brain.db` (e.g. `family`) is **data**, not a dashboard template name. You do **not** add a new template called `family` in JSON.
+- To give the user a **Family** (or **Personal**) tab with filters, complete, and edit like other domain lists: add a page with `"template": "action_domain"` and `"domain": "family"` (or `"personal"`), with a unique **`slug`** (e.g. `family`).
+- **`datatable`** / **`sections`** are for **SQL-driven** read-only views (any tenant `*.db`). They do not add the rich Career/Finance/Business chrome; use **`action_domain`** when the goal is **action items for one domain** only.
+- Telling the user to edit **`app/server/routes/domain.js`**, **`dashboard-manifest.js`**, or **`dashboard.html`** to add a domain tab is **almost always wrong** unless they are explicitly extending the **product** with a new manifest template type.
+
+**Example — `family` tab via manifest only:**
+
+```json
+{
+  "version": 1,
+  "pages": [
+    {
+      "slug": "family",
+      "label": "Family",
+      "description": "Family priorities and open tasks",
+      "template": "action_domain",
+      "domain": "family"
+    }
+  ]
+}
+```
+
+Multi-user tenants with **no** `dashboard.json` start with **no** default domain pages (Home + Files only) until they add `pages` or copy an example from **`tenant-defaults/dashboard.example.json`**.
 
 ### Dashboard pages (built-in templates)
 
@@ -119,7 +156,7 @@ Browser  →  public/dashboard.html + public/js/*.mjs  (hash routes: #/, #/caree
 | **Finance** | `brain.db` + `finance.db` + `wynnset.db` | Finance actions, balances, burn rate, compliance |
 | **Business** | `brain.db` + `wynnset.db` | Business actions, compliance, COA, ledger stats |
 
-**`workspace/dashboard.json`** (resolved by `server/dashboard/` manifest code) can add custom **datatable** and **sections** pages; the manifest API exposes nav and SQL-backed pages when the required `*.db` files exist.
+**`action_domain`** pages (declared in `dashboard.json`) reuse the same action-item list behaviour as the domains above, scoped to one `domain` value and **`brain.db`** only.
 
 ### Client UX (brief)
 

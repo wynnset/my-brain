@@ -80,7 +80,22 @@ body { touch-action: manipulation; }
 .dark .chat-md-output a { color: rgb(165 180 252); }
 .chat-md-output blockquote { margin: 0.5em 0; padding-left: 0.85em; border-left: 3px solid rgb(203 213 225); color: rgb(100 116 139); }
 .dark .chat-md-output blockquote { border-color: rgb(71 85 105); color: rgb(148 163 184); }
+/* Wide tables: scroll inside the column instead of expanding the page (dashboard + markdown). */
+.dashboard-table-x-scroll {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+}
+.chat-md-output .dashboard-table-x-scroll {
+  margin: 0.65em 0;
+}
 .chat-md-output table { border-collapse: collapse; font-size: 0.9em; margin: 0.65em 0; width: 100%; }
+.chat-md-output .dashboard-table-x-scroll > table {
+  margin: 0;
+  width: max(100%, max-content);
+}
 .chat-md-output th, .chat-md-output td { border: 1px solid rgb(226 232 240); padding: 0.35em 0.5em; text-align: left; }
 .dark .chat-md-output th, .dark .chat-md-output td { border-color: rgb(51 65 85); }
 .chat-md-output th { background: rgb(248 250 252); font-weight: 600; }

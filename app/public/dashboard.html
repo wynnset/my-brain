@@ -1126,6 +1126,14 @@ tailwind.config = {
                         </details>
                       </template>
                       <button type="button"
+                        class="icon-btn h-7 w-7 shrink-0 rounded-md text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-300 hover:bg-slate-100 dark:hover:bg-slate-700/80 transition-colors"
+                        title="Copy this reply"
+                        aria-label="Copy this reply"
+                        @click="copyChatAssistantMessage(m)">
+                        <i x-show="chatCopiedAssistantMessageId !== m.id" data-lucide="copy" class="h-3.5 w-3.5" aria-hidden="true"></i>
+                        <i x-show="chatCopiedAssistantMessageId === m.id" x-cloak data-lucide="check" class="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" aria-hidden="true"></i>
+                      </button>
+                      <button type="button"
                         class="icon-btn h-7 w-7 shrink-0 rounded-md text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-300 hover:bg-slate-100 dark:hover:bg-slate-700/80 transition-colors disabled:pointer-events-none disabled:opacity-40"
                         title="Start a new chat from this reply"
                         aria-label="Start a new chat from this reply"
@@ -1352,6 +1360,14 @@ tailwind.config = {
                       <pre class="max-h-40 overflow-auto border-t border-slate-100 dark:border-slate-700 px-2 py-1.5 font-mono text-[10px] leading-snug text-slate-700 dark:text-slate-300 whitespace-pre-wrap break-words" x-text="chatSdkBillingDetailText(m.sdkBilling)"></pre>
                     </details>
                   </template>
+                  <button type="button"
+                    class="icon-btn h-7 w-7 shrink-0 rounded-md text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-300 hover:bg-slate-100 dark:hover:bg-slate-700/80 transition-colors"
+                    title="Copy this reply"
+                    aria-label="Copy this reply"
+                    @click="copyChatAssistantMessage(m)">
+                    <i x-show="chatCopiedAssistantMessageId !== m.id" data-lucide="copy" class="h-3.5 w-3.5" aria-hidden="true"></i>
+                    <i x-show="chatCopiedAssistantMessageId === m.id" x-cloak data-lucide="check" class="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" aria-hidden="true"></i>
+                  </button>
                   <button type="button"
                     class="icon-btn h-7 w-7 shrink-0 rounded-md text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-300 hover:bg-slate-100 dark:hover:bg-slate-700/80 transition-colors disabled:pointer-events-none disabled:opacity-40"
                     title="Start a new chat from this reply"

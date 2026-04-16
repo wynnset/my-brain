@@ -197,6 +197,9 @@ document.addEventListener('alpine:init', function() {
     chatUserMessageEditTargetId: null,
     chatUserMessageEditDraft: '',
     chatUserMessageEditApplying: false,
+    /** Briefly set to an assistant `message.id` after copy succeeds (checkmark in UI). */
+    chatCopiedAssistantMessageId: null,
+    _chatCopyFlashTimer: null,
     chatAgentProfileOpen: false,
     /** Slug whose brief is shown in the profile modal (may differ from `chatAgent` when chat is locked). */
     chatAgentProfileViewing: null,
@@ -1197,6 +1200,42 @@ document.addEventListener('alpine:init', function() {
         alert('Could not resend: ' + (e.message || String(e)));
       } finally {
         this.chatUserMessageEditApplying = false;
+      }
+    },
+
+    /**
+     * Copy assistant reply text (markdown source) to the clipboard.
+     */
+    async copyChatAssistantMessage(m) {
+      if (!m || m.role !== 'assistant') return;
+      var text = String(m.content || '').replace(/\r\n/g, '\n');
+      if (!text.trim()) return;
+      try {
+        if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+          await navigator.clipboard.writeText(text);
+        } else {
+          var ta = document.createElement('textarea');
+          ta.value = text;
+          ta.setAttribute('readonly', '');
+          ta.style.position = 'fixed';
+          ta.style.left = '-9999px';
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand('copy');
+          document.body.removeChild(ta);
+        }
+        this.chatCopiedAssistantMessageId = m.id;
+        clearTimeout(this._chatCopyFlashTimer);
+        var self = this;
+        this._chatCopyFlashTimer = setTimeout(function() {
+          self.chatCopiedAssistantMessageId = null;
+        }, 2000);
+        this.$nextTick(function() {
+          this.refreshIcons();
+        }.bind(this));
+      } catch (e) {
+        console.warn('[chat] copy', e.message || e);
+        alert('Could not copy to clipboard');
       }
     },
 

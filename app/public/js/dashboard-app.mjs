@@ -1,4 +1,7 @@
-import { appendAssistantStreamChunk } from '../shared/stream-chunk.mjs';
+import {
+  appendAssistantStreamChunk,
+  isGenericSdkSubagentId,
+} from '../shared/stream-chunk.mjs';
 import {
   DOMAIN_CLASSES,
   ICON_SVG_ARROW_DOWN,
@@ -6,7 +9,11 @@ import {
   ICON_SVG_CHECK,
   brainFileHash,
   buildWeekCardHtml,
-  datatableHtmlFromPayload,
+  createDatatableInteractiveState,
+  formatDatatableCell,
+  formatDatatableCellBundle,
+  renderAccountCardsHtml,
+  richSectionHtmlFromPayload,
   daysFrom,
   empty,
   esc,
@@ -21,6 +28,9 @@ import {
   localDateKey,
   makeTable,
   parseAgentBriefSummary,
+  CHAT_LONG_WAIT_THRESHOLD_SEC,
+  formatChatWaitingStatusLine,
+  pickChatWorkStartedLine,
   pickHomeGreeting,
   progressBar,
   renderActionItemMarkdown,
@@ -108,6 +118,8 @@ document.addEventListener('alpine:init', function() {
     businessComplianceHtml: '',
     businessCoaSections: [],
     datatableHtml: '',
+    /** Standalone `datatable` template page: columns/rows + UI state (sort, filter, page). */
+    datatableInteractive: null,
     datatableLoadError: '',
     datatableReady: false,
     datatableTruncated: false,
@@ -151,6 +163,9 @@ document.addEventListener('alpine:init', function() {
     chatSdkUsageSessionTotals: null,
     chatConversations: [],
     chatSessionTitle: '',
+    /** Inline rename: click title → edit; saved via PATCH. */
+    chatTitleEditing: false,
+    chatTitleDraft: '',
     chatHistoryOpen: false,
     chatStreaming: false,
     /** True from start of a turn (upload + stream) until turn finishes and queue is empty. */
@@ -163,10 +178,9 @@ document.addEventListener('alpine:init', function() {
      * Each { id, agentId, lines: [{id,text}], expanded, done, startedAt, endedAt }.
      */
     chatWorkPanels: [],
-    /** Bumped every second while streaming so elapsed labels stay reactive. */
+    /** Bumped every second while streaming for reactive UI (waiting-line copy, etc.). */
     chatUiTick: 0,
     chatWorkingStartedAt: null,
-    chatElapsedSec: 0,
     _chatElapsedTimer: null,
     chatAbortController: null,
     chatRetryPrompt: '',
@@ -299,6 +313,7 @@ document.addEventListener('alpine:init', function() {
       }
       this._onResizeViewport = function() {
         self.viewportLg = typeof window !== 'undefined' && window.innerWidth >= 1024;
+        self.syncChatComposerHeights();
       };
       window.addEventListener('resize', this._onResizeViewport);
       try {
@@ -484,6 +499,7 @@ document.addEventListener('alpine:init', function() {
           if (el && typeof el.focus === 'function') {
             try { el.focus({ preventScroll: true }); } catch (_) { el.focus(); }
           }
+          self.syncChatComposerHeights();
         };
         requestAnimationFrame(function() {
           requestAnimationFrame(tryFocus);
@@ -750,17 +766,6 @@ document.addEventListener('alpine:init', function() {
       return String(n).charAt(0).toUpperCase();
     },
 
-    workPanelElapsedLabel(panel) {
-      var _tick = this.chatUiTick;
-      void _tick;
-      if (!panel || !panel.startedAt) return '';
-      if (panel.done && panel.endedAt) {
-        var s = Math.max(0, Math.round((panel.endedAt - panel.startedAt) / 1000));
-        return s + 's';
-      }
-      return Math.floor((Date.now() - panel.startedAt) / 1000) + 's';
-    },
-
     initChatWorkPanelsForTurn() {
       this.chatWorkPanels = [];
       this._appendWorkPanel(this.normalizeWorkPanelAgentId(this.chatAgent), true);
@@ -789,10 +794,21 @@ document.addEventListener('alpine:init', function() {
       this.$nextTick(function() { this.scrollChatToBottom(); }.bind(this));
     },
 
-    /** Server/SDK detected a delegated agent; upgrade an empty placeholder panel when applicable. */
+    /**
+     * Server/SDK confirmed a delegation handoff to a real team agent. Open (or
+     * promote) a work panel so the UI shows "<agent> is working" instead of the
+     * parent agent. Generic SDK subagent ids are ignored by the server, but we
+     * re-check here defensively and also require the slug to be a known team
+     * member so "General-purpose" / stray ids never surface as speakers.
+     */
     applySegmentAgentFromStream(agentId) {
       if (agentId == null || !String(agentId).trim()) return;
+      if (isGenericSdkSubagentId(agentId)) return;
       var aid = this.normalizeWorkPanelAgentId(String(agentId).trim().toLowerCase().replace(/\s+/g, '_'));
+      var known = (this.chatAgents || []).some(function (slug) {
+        return this.normalizeChatAgentId(slug) === aid;
+      }, this);
+      if (!known) return;
       var panels = this.chatWorkPanels;
       var last = panels.length ? panels[panels.length - 1] : null;
       if (last && !last.done && last.agentId === aid) {
@@ -821,13 +837,102 @@ document.addEventListener('alpine:init', function() {
       this.scrollChatToBottom();
     },
 
+    /** One live log line for connect/waiting; copy refreshes at least every 5s (see formatChatWaitingStatusLine). */
+    appendChatWaitingStatusLine(startedText) {
+      var panels = this.chatWorkPanels;
+      if (!panels.length) this.initChatWorkPanelsForTurn();
+      var p = panels[panels.length - 1];
+      if (p.done) return;
+      for (var j = 0; j < p.lines.length; j++) {
+        if (p.lines[j].waitingSlot) return;
+      }
+      var sec = this.chatWorkingStartedAt ? Math.floor((Date.now() - this.chatWorkingStartedAt) / 1000) : 0;
+      p.lines.push({
+        id: 'wl-' + Date.now() + '-wait-' + Math.random().toString(36).slice(2, 6),
+        text: formatChatWaitingStatusLine(sec, startedText),
+        waitingSlot: true,
+        _startedText: startedText,
+      });
+      if (p.lines.length > 120) p.lines.shift();
+      this.scrollChatToBottom();
+    },
+
+    /** True while streaming past the long-wait threshold — bumps with chatUiTick every second. */
+    chatStreamFeelsLong() {
+      var _tick = this.chatUiTick;
+      void _tick;
+      if (!this.chatStreaming || this.chatWorkingStartedAt == null) return false;
+      return (
+        Math.floor((Date.now() - this.chatWorkingStartedAt) / 1000) > CHAT_LONG_WAIT_THRESHOLD_SEC
+      );
+    },
+
+    refreshChatWaitingStatusLineIfStreaming() {
+      if (!this.chatStreaming || this.chatWorkingStartedAt == null) return;
+      var sec = Math.floor((Date.now() - this.chatWorkingStartedAt) / 1000);
+      var panels = this.chatWorkPanels || [];
+      if (!panels.length) return;
+      var p = panels[panels.length - 1];
+      if (!p || p.done || !p.lines || !p.lines.length) return;
+      var line = null;
+      for (var i = 0; i < p.lines.length; i++) {
+        if (p.lines[i].waitingSlot) {
+          line = p.lines[i];
+          break;
+        }
+      }
+      if (!line || line._startedText == null) return;
+      var next = formatChatWaitingStatusLine(sec, line._startedText);
+      if (line.text === next) return;
+      line.text = next;
+      this.chatUiTick = Date.now();
+    },
+
+    /** Drop playful “waiting” lines once assistant text, tools, or stderr appear (any panel). */
+    clearAllWorkPanelWaitingSlots() {
+      var panels = this.chatWorkPanels || [];
+      var changed = false;
+      for (var pi = 0; pi < panels.length; pi++) {
+        var p = panels[pi];
+        if (p.done || !p.lines || !p.lines.length) continue;
+        var next = p.lines.filter(function(l) {
+          return !l.waitingSlot;
+        });
+        if (next.length !== p.lines.length) {
+          p.lines = next;
+          changed = true;
+        }
+      }
+      if (changed) {
+        this.chatUiTick = Date.now();
+        this.scrollChatToBottom();
+      }
+    },
+
+    /**
+     * Resolve the target of a `Task` / `Agent` delegation from its tool_input to a
+     * real team-member slug (one of `this.chatAgents`). Returns null for generic
+     * SDK preset subagents (general-purpose, explore, …) and for unrecognized
+     * names — in those cases the parent agent remains the active speaker and no
+     * new "<name> is working" panel is opened.
+     */
     guessWorkAgentFromTaskDetail(detail) {
       var raw = String(detail || '');
-      var dl = raw.toLowerCase();
       var agents = this.chatAgents || [];
-      for (var i = 0; i < agents.length; i++) {
-        var a = String(agents[i] || '').toLowerCase();
-        if (a && dl.indexOf(a) >= 0) return this.normalizeChatAgentId(agents[i]);
+      var teamSet = {};
+      for (var ai = 0; ai < agents.length; ai++) {
+        var slug = this.normalizeChatAgentId(agents[ai]);
+        if (slug) teamSet[slug] = true;
+      }
+      var self = this;
+      function resolveFromRaw(candidate) {
+        if (candidate == null) return null;
+        var s = String(candidate).trim();
+        if (!s) return null;
+        if (isGenericSdkSubagentId(s)) return null;
+        var id = self.normalizeChatAgentId(s);
+        if (id && teamSet[id]) return id;
+        return null;
       }
       try {
         if (/^\s*\{/.test(raw)) {
@@ -843,15 +948,24 @@ document.addEventListener('alpine:init', function() {
                     ? o.agent_id
                     : o.agentId;
           if (sub != null && String(sub).trim()) {
-            var id = this.normalizeChatAgentId(String(sub).trim());
-            if (id) return id;
+            if (isGenericSdkSubagentId(sub)) return null;
+            var fromJson = resolveFromRaw(sub);
+            if (fromJson) return fromJson;
           }
         }
       } catch (_) {}
+      for (var i = 0; i < agents.length; i++) {
+        var a = String(agents[i] || '').toLowerCase();
+        if (a.length < 2) continue;
+        try {
+          var re = new RegExp('\\b' + a.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'i');
+          if (re.test(raw)) return this.normalizeChatAgentId(agents[i]);
+        } catch (_) {}
+      }
       var m =
         raw.match(/\byou are\s+([A-Za-z][A-Za-z0-9_-]*)\s*,/i) ||
         raw.match(/\byou are\s+([A-Za-z][A-Za-z0-9_-]*)\b/i);
-      if (m) return this.normalizeChatAgentId(m[1]);
+      if (m) return resolveFromRaw(m[1]);
       return null;
     },
 
@@ -925,6 +1039,8 @@ document.addEventListener('alpine:init', function() {
 
     /** Local-only chat shell: no server session until the user sends a message. */
     enterDraftChatState() {
+      this.chatTitleEditing = false;
+      this.chatTitleDraft = '';
       this.chatConversationId = null;
       this.chatMessages = [];
       this.chatSdkUsageSessionTotals = null;
@@ -1006,6 +1122,8 @@ document.addEventListener('alpine:init', function() {
         throw new Error(errMsg);
       }
       var d = await r.json();
+      this.chatTitleEditing = false;
+      this.chatTitleDraft = '';
       this.chatConversationId = d.id;
       this.chatMessages = [];
       this.chatSdkUsageSessionTotals = null;
@@ -1024,6 +1142,8 @@ document.addEventListener('alpine:init', function() {
         var r = await fetchWithAuth('/api/chat/conversations/' + encodeURIComponent(last));
         if (r.ok) {
           var sess = await r.json();
+          this.chatTitleEditing = false;
+          this.chatTitleDraft = '';
           this.chatConversationId = sess.id;
           this.chatAgent = this.normalizeChatAgentId(sess.agent);
           if (sess.model) this.chatModel = this.ensureChatModelFromCatalog(sess.model);
@@ -1059,6 +1179,8 @@ document.addEventListener('alpine:init', function() {
       var r = await fetchWithAuth('/api/chat/conversations/' + encodeURIComponent(id));
       if (!r.ok) return;
       var sess = await r.json();
+      this.chatTitleEditing = false;
+      this.chatTitleDraft = '';
       this.chatConversationId = sess.id;
       this.chatAgent = this.normalizeChatAgentId(sess.agent);
       if (sess.model) this.chatModel = this.ensureChatModelFromCatalog(sess.model);
@@ -1087,6 +1209,69 @@ document.addEventListener('alpine:init', function() {
       if (sess.model) this.chatModel = this.ensureChatModelFromCatalog(sess.model);
       this.hydrateChatPlanFromSession(sess);
       this.hydrateChatWorkspaceTouches(sess);
+    },
+
+    startChatTitleEdit() {
+      if (!this.chatConversationId) return;
+      this.chatTitleDraft = this.chatSessionTitle || 'Chat';
+      this.chatTitleEditing = true;
+      var self = this;
+      this.$nextTick(function() {
+        var wide = false;
+        try {
+          wide = window.matchMedia && window.matchMedia('(min-width: 1024px)').matches;
+        } catch (_) {}
+        var el = wide ? self.$refs.chatTitleInputDesktop : self.$refs.chatTitleInputMobile;
+        try {
+          if (el && el.focus) el.focus();
+          if (el && el.select) el.select();
+        } catch (_) {}
+      });
+    },
+
+    cancelChatTitleEdit() {
+      this.chatTitleEditing = false;
+      this.chatTitleDraft = '';
+    },
+
+    async commitChatTitleEdit() {
+      if (!this.chatTitleEditing) return;
+      var id = this.chatConversationId;
+      if (!id) {
+        this.cancelChatTitleEdit();
+        return;
+      }
+      var trimmed = String(this.chatTitleDraft || '').trim();
+      if (!trimmed) trimmed = this.chatSessionTitle || 'Chat';
+      if (trimmed === (this.chatSessionTitle || 'Chat')) {
+        this.chatTitleEditing = false;
+        this.chatTitleDraft = '';
+        return;
+      }
+      try {
+        var r = await fetchWithAuth('/api/chat/conversations/' + encodeURIComponent(id), {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: trimmed }),
+        });
+        if (!r.ok) {
+          var errMsg = 'Could not rename conversation';
+          try {
+            var ej = await r.json();
+            if (ej && ej.error) errMsg = ej.error;
+          } catch (_) {}
+          alert(errMsg);
+          return;
+        }
+        var d = await r.json();
+        if (d && d.title != null) this.chatSessionTitle = String(d.title);
+        else this.chatSessionTitle = trimmed;
+        this.chatTitleEditing = false;
+        this.chatTitleDraft = '';
+        await this.loadConversationList();
+      } catch (e) {
+        alert('Could not rename: ' + (e.message || String(e)));
+      }
     },
 
     chatForkUiDisabled() {
@@ -1369,6 +1554,12 @@ document.addEventListener('alpine:init', function() {
       var p = this.currentNavPage();
       return p && p.description != null ? String(p.description) : '';
     },
+    /** Sections page: `half` = one column on md+ (pair two halves for a 2-column row). */
+    sectionsPanelGridClass(panel) {
+      var base = 'scroll-mt-4 min-w-0 col-span-1';
+      if (panel && panel.layout === 'half') return base + ' md:col-span-1';
+      return base + ' md:col-span-2';
+    },
     /** Home “Domains” section: built-in domain pages and/or `action_domain` manifest tabs. */
     homeShowDomainsBlock() {
       var p = this.dashboardPages || {};
@@ -1395,10 +1586,30 @@ document.addEventListener('alpine:init', function() {
         this.pageReady = Object.assign({}, this.pageReady, { [s]: false });
       }
     },
+    /** State for `template: "todos"` blocks inside a `sections` page (key = pageSlug:sectionId). */
+    ensureTodosSectionState(todosKey) {
+      var s = String(todosKey || '');
+      if (!s) return;
+      if (!this.actionState[s]) {
+        this.actionState = Object.assign({}, this.actionState, {
+          [s]: { sort: 'date-urgency', group: 'none', range: 'all' },
+        });
+      }
+      if (!Object.prototype.hasOwnProperty.call(this.actionData, s)) {
+        this.actionData = Object.assign({}, this.actionData, { [s]: [] });
+      }
+      if (this.loadError[s] === undefined) {
+        this.loadError = Object.assign({}, this.loadError, { [s]: null });
+      }
+    },
     slugLinkForTemplate(tmpl) {
       var nav = this.dashboardNavPages || [];
+      var t = String(tmpl || '');
       for (var i = 0; i < nav.length; i++) {
-        if (nav[i].template === tmpl) return '#/' + nav[i].slug;
+        if (nav[i].slug === t) return '#/' + nav[i].slug;
+      }
+      for (var j = 0; j < nav.length; j++) {
+        if (nav[j].template === t) return '#/' + nav[j].slug;
       }
       return '#/';
     },
@@ -1419,7 +1630,7 @@ document.addEventListener('alpine:init', function() {
         var nav = this.dashboardNavPages || [];
         var bySlug = nav.some(function(x) { return x.slug === p; });
         if (!bySlug && ['career', 'finance', 'business'].indexOf(p) >= 0) {
-          var hit = nav.find(function(x) { return x.template === p; });
+          var hit = nav.find(function(x) { return x.slug === p || x.template === p; });
           p = hit ? hit.slug : 'home';
         } else if (!bySlug) {
           p = 'home';
@@ -1477,7 +1688,7 @@ document.addEventListener('alpine:init', function() {
           nextPage = raw;
         } else if (['career', 'finance', 'business'].indexOf(raw) >= 0) {
           var nav = this.dashboardNavPages || [];
-          var legacy = nav.find(function(x) { return x.template === raw; });
+          var legacy = nav.find(function(x) { return x.slug === raw || x.template === raw; });
           if (legacy) {
             nextPage = legacy.slug;
             history.replaceState(null, '', '#/' + legacy.slug);
@@ -1640,7 +1851,7 @@ document.addEventListener('alpine:init', function() {
       }
       this.actionItemShowDomain = this.actionItemPageKey === 'home';
       this.actionItemShowCareerFields =
-        this.getPageTemplate() === 'career';
+        this.page === 'career' || this.getPageTemplate() === 'career';
       this.actionItemShowProjectCategory = true;
       this.actionItemDraft = {
         id: item.id,
@@ -1715,10 +1926,119 @@ document.addEventListener('alpine:init', function() {
           self.$nextTick(function() { self.refreshIcons(); });
         });
     },
+    datatableFormatCell(columnName, raw) {
+      return formatDatatableCell(columnName, raw);
+    },
+    datatableColumnLabel(tb, col) {
+      return (tb && tb.columnLabels && tb.columnLabels[col]) || col;
+    },
+    datatableSpecFor(tb, col) {
+      return tb && tb.specByKey ? tb.specByKey[col] : null;
+    },
+    datatableCellBundle(tb, col, row) {
+      var spec = this.datatableSpecFor(tb, col);
+      return formatDatatableCellBundle(col, row[col], row, spec);
+    },
+    datatableCellUsesHtml(tb, col, row) {
+      return this.datatableCellBundle(tb, col, row).useHtml;
+    },
+    datatableCellText(tb, col, row) {
+      return this.datatableCellBundle(tb, col, row).text;
+    },
+    datatableCellHtml(tb, col, row) {
+      return this.datatableCellBundle(tb, col, row).html;
+    },
+    datatableFilteredRows(tb) {
+      if (!tb || !tb.rows) return [];
+      var cols = tb.columns || [];
+      var q = (tb.filter || '').trim().toLowerCase();
+      if (!q) return tb.rows.slice();
+      return tb.rows.filter(function(row) {
+        for (var i = 0; i < cols.length; i++) {
+          var ck = cols[i];
+          var v = row[ck];
+          if (v != null && String(v).toLowerCase().indexOf(q) >= 0) return true;
+          var sp = tb.specByKey && tb.specByKey[ck];
+          if (sp && sp.secondaryKey) {
+            var v2 = row[sp.secondaryKey];
+            if (v2 != null && String(v2).toLowerCase().indexOf(q) >= 0) return true;
+          }
+        }
+        return false;
+      });
+    },
+    datatableCmp(va, vb) {
+      if (va == null && vb == null) return 0;
+      if (va == null) return 1;
+      if (vb == null) return -1;
+      if (typeof va === 'boolean' || typeof vb === 'boolean') {
+        return String(va).localeCompare(String(vb));
+      }
+      var na = Number(va);
+      var nb = Number(vb);
+      if (
+        !Number.isNaN(na) &&
+        !Number.isNaN(nb) &&
+        String(va).trim() !== '' &&
+        String(vb).trim() !== '' &&
+        String(va).trim() === String(na) &&
+        String(vb).trim() === String(nb)
+      ) {
+        return na - nb;
+      }
+      return String(va).localeCompare(String(vb), undefined, { numeric: true, sensitivity: 'base' });
+    },
+    datatableSortedRows(tb) {
+      var rows = this.datatableFilteredRows(tb);
+      var sk = tb.sortKey;
+      if (!sk) return rows;
+      var dir = tb.sortDir === 'desc' ? -1 : 1;
+      var self = this;
+      return rows.slice().sort(function(a, b) {
+        return self.datatableCmp(a[sk], b[sk]) * dir;
+      });
+    },
+    datatablePageSlice(tb) {
+      var rows = this.datatableSortedRows(tb);
+      var ps = tb.pageSize || 50;
+      var totalP = Math.max(1, Math.ceil(rows.length / ps) || 1);
+      if ((tb.page || 1) > totalP) tb.page = totalP;
+      if ((tb.page || 1) < 1) tb.page = 1;
+      var p = tb.page || 1;
+      var start = (p - 1) * ps;
+      return rows.slice(start, start + ps);
+    },
+    datatableFilteredCount(tb) {
+      return this.datatableFilteredRows(tb).length;
+    },
+    datatableTotalPages(tb) {
+      var n = this.datatableFilteredRows(tb).length;
+      var ps = tb.pageSize || 50;
+      return Math.max(1, Math.ceil(n / ps) || 1);
+    },
+    datatableToggleSort(tb, col) {
+      if (!tb) return;
+      if (tb.sortKey === col) tb.sortDir = tb.sortDir === 'asc' ? 'desc' : 'asc';
+      else {
+        tb.sortKey = col;
+        tb.sortDir = 'asc';
+      }
+      tb.page = 1;
+    },
+
     completeActionItem(item, pageKey) {
       var self = this;
       if (!item || item.id == null) return;
-      var pk = pageKey != null && pageKey !== '' ? pageKey : (this.page === 'home' ? 'home' : this.page);
+      var pk;
+      if (pageKey != null && pageKey !== '') {
+        if (typeof pageKey === 'string' && pageKey.indexOf(':') >= 0) {
+          pk = self.page === 'home' ? 'home' : self.page;
+        } else {
+          pk = pageKey;
+        }
+      } else {
+        pk = this.page === 'home' ? 'home' : this.page;
+      }
       fetchWithAuth('/api/action-items/' + item.id, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -1749,6 +2069,7 @@ document.addEventListener('alpine:init', function() {
       var now = Date.now();
       if (name === 'files') {
         this.datatableHtml = '';
+        this.datatableInteractive = null;
         this.datatableLoadError = '';
         this.datatableReady = false;
         this.datatableTruncated = false;
@@ -1759,6 +2080,7 @@ document.addEventListener('alpine:init', function() {
       }
       if (name === 'usage') {
         this.datatableHtml = '';
+        this.datatableInteractive = null;
         this.datatableLoadError = '';
         this.datatableReady = false;
         this.datatableTruncated = false;
@@ -1790,6 +2112,7 @@ document.addEventListener('alpine:init', function() {
       }
       if (name === 'home') {
         this.datatableHtml = '';
+        this.datatableInteractive = null;
         this.datatableLoadError = '';
         this.datatableReady = false;
         this.datatableTruncated = false;
@@ -1825,7 +2148,9 @@ document.addEventListener('alpine:init', function() {
       var slug = name;
       var template = this.slugToTemplate(slug);
       if (!template && ['career', 'finance', 'business'].indexOf(slug) >= 0) {
-        var hit = (this.dashboardNavPages || []).find(function(p) { return p.template === slug; });
+        var hit = (this.dashboardNavPages || []).find(function(p) {
+          return p.slug === slug || p.template === slug;
+        });
         if (hit) {
           slug = hit.slug;
           template = hit.template;
@@ -1840,9 +2165,11 @@ document.addEventListener('alpine:init', function() {
       }
       if (template === 'sections') {
         this.datatableHtml = '';
+        this.datatableInteractive = null;
         this.datatableLoadError = '';
         this.datatableReady = false;
         this.datatableTruncated = false;
+        this.pageReady[slug] = false;
         var navPage = this.currentNavPage();
         var secList = navPage && navPage.sections ? navPage.sections : [];
         this.sectionsPagePanels = [];
@@ -1852,6 +2179,7 @@ document.addEventListener('alpine:init', function() {
             {
               id: '_empty',
               label: '',
+              layout: 'full',
               html: '',
               error: 'No sections configured for this page.',
               loading: false,
@@ -1860,17 +2188,40 @@ document.addEventListener('alpine:init', function() {
             },
           ];
           this.sectionsPageReady = true;
+          this.pageReady[slug] = true;
           return;
         }
         var allCached = !force;
         if (!force) {
           for (var ci = 0; ci < secList.length; ci++) {
             var sc0 = secList[ci];
-            if (!sc0.enabled || sc0.template !== 'datatable') continue;
-            var ckey0 = 'ds:' + slug + ':' + sc0.id;
-            if (!this.cache[ckey0] || now - this.cache[ckey0].ts >= STALE_MS) {
-              allCached = false;
-              break;
+            if (!sc0.enabled) continue;
+            if (sc0.template === 'datatable') {
+              var ckeyDs = 'ds:' + slug + ':' + sc0.id;
+              if (!this.cache[ckeyDs] || now - this.cache[ckeyDs].ts >= STALE_MS) {
+                allCached = false;
+                break;
+              }
+            } else if (sc0.template === 'todos') {
+              var ckeyTodo0 = 'dTodo:' + slug + ':' + sc0.id;
+              if (!this.cache[ckeyTodo0] || now - this.cache[ckeyTodo0].ts >= STALE_MS) {
+                allCached = false;
+                break;
+              }
+            } else if (
+              sc0.template === 'funnel_bars' ||
+              sc0.template === 'progress_card' ||
+              sc0.template === 'stat_cards' ||
+              sc0.template === 'grouped_accordion' ||
+              sc0.template === 'metric_datatable' ||
+              sc0.template === 'account_cards' ||
+              sc0.template === 'link_groups'
+            ) {
+              var ckeyRv0 = 'dView:' + slug + ':' + sc0.id;
+              if (!this.cache[ckeyRv0] || now - this.cache[ckeyRv0].ts >= STALE_MS) {
+                allCached = false;
+                break;
+              }
             }
           }
         } else {
@@ -1884,6 +2235,7 @@ document.addEventListener('alpine:init', function() {
               cachedBuilt.push({
                 id: sc1.id,
                 label: sc1.label,
+                layout: sc1.layout === 'half' ? 'half' : 'full',
                 html: '',
                 error: '',
                 loading: false,
@@ -1891,32 +2243,80 @@ document.addEventListener('alpine:init', function() {
                 skipReason: 'Waiting for required database file under your account.',
                 truncated: false,
               });
-            } else if (sc1.template !== 'datatable') {
+            } else if (sc1.template === 'todos') {
+              var ckeyT = 'dTodo:' + slug + ':' + sc1.id;
+              var tk = slug + ':' + sc1.id;
+              this.ensureTodosSectionState(tk);
+              var dataTodo = this.cache[ckeyT].data;
+              this.actionData[tk] = (dataTodo && dataTodo.actionItems) || [];
+              this.loadError[tk] = null;
               cachedBuilt.push({
                 id: sc1.id,
                 label: sc1.label,
+                layout: sc1.layout === 'half' ? 'half' : 'full',
+                template: 'todos',
+                todosKey: tk,
+                actionDomain: sc1.domain || (dataTodo && dataTodo.actionDomain) || '',
+                todosReady: true,
+                html: '',
+                error: '',
+                loading: false,
+                skipped: false,
+                truncated: false,
+              });
+            } else if (
+              sc1.template === 'funnel_bars' ||
+              sc1.template === 'progress_card' ||
+              sc1.template === 'stat_cards' ||
+              sc1.template === 'grouped_accordion' ||
+              sc1.template === 'metric_datatable' ||
+              sc1.template === 'account_cards' ||
+              sc1.template === 'link_groups'
+            ) {
+              var ckeyRv = 'dView:' + slug + ':' + sc1.id;
+              var dataRv = this.cache[ckeyRv].data;
+              cachedBuilt.push({
+                id: sc1.id,
+                label: sc1.label,
+                layout: sc1.layout === 'half' ? 'half' : 'full',
+                template: sc1.template,
+                html: richSectionHtmlFromPayload(dataRv),
+                error: '',
+                loading: false,
+                skipped: false,
+                truncated: false,
+              });
+            } else if (sc1.template === 'datatable') {
+              var ckey1 = 'ds:' + slug + ':' + sc1.id;
+              var dataC = this.cache[ckey1].data;
+              cachedBuilt.push({
+                id: sc1.id,
+                label: sc1.label,
+                layout: sc1.layout === 'half' ? 'half' : 'full',
+                template: 'datatable',
+                table: createDatatableInteractiveState(dataC),
+                html: '',
+                error: '',
+                loading: false,
+                skipped: false,
+                truncated: !!(dataC && dataC.truncated),
+              });
+            } else {
+              cachedBuilt.push({
+                id: sc1.id,
+                label: sc1.label,
+                layout: sc1.layout === 'half' ? 'half' : 'full',
                 html: '',
                 error: 'This section type is not supported in the browser yet.',
                 loading: false,
                 skipped: false,
                 truncated: false,
               });
-            } else {
-              var ckey1 = 'ds:' + slug + ':' + sc1.id;
-              var bx0 = datatableHtmlFromPayload(this.cache[ckey1].data);
-              cachedBuilt.push({
-                id: sc1.id,
-                label: sc1.label,
-                html: bx0.html,
-                error: '',
-                loading: false,
-                skipped: false,
-                truncated: bx0.truncated,
-              });
             }
           }
           this.sectionsPagePanels = cachedBuilt;
           this.sectionsPageReady = true;
+          this.pageReady[slug] = true;
           return;
         }
         this.refreshing = true;
@@ -1928,6 +2328,7 @@ document.addEventListener('alpine:init', function() {
               built.push({
                 id: sec.id,
                 label: sec.label,
+                layout: sec.layout === 'half' ? 'half' : 'full',
                 html: '',
                 error: '',
                 loading: false,
@@ -1937,10 +2338,113 @@ document.addEventListener('alpine:init', function() {
               });
               continue;
             }
+            if (sec.template === 'todos') {
+              var tk2 = slug + ':' + sec.id;
+              var ckTodo = 'dTodo:' + slug + ':' + sec.id;
+              this.ensureTodosSectionState(tk2);
+              this.loadError[tk2] = null;
+              try {
+                var resTodo = await fetchWithAuth(
+                  '/api/dashboard-section-todos/' + encodeURIComponent(slug) + '/' + encodeURIComponent(sec.id),
+                );
+                if (!resTodo.ok) {
+                  var errTodo = {};
+                  try {
+                    errTodo = await resTodo.json();
+                  } catch (_) {}
+                  throw new Error((errTodo && errTodo.error) || 'HTTP ' + resTodo.status);
+                }
+                var dataTodo2 = await resTodo.json();
+                this.cache[ckTodo] = { ts: Date.now(), data: dataTodo2 };
+                this.actionData[tk2] = dataTodo2.actionItems || [];
+                built.push({
+                  id: sec.id,
+                  label: sec.label,
+                  layout: sec.layout === 'half' ? 'half' : 'full',
+                  template: 'todos',
+                  todosKey: tk2,
+                  actionDomain: sec.domain || dataTodo2.actionDomain || '',
+                  todosReady: true,
+                  html: '',
+                  error: '',
+                  loading: false,
+                  skipped: false,
+                  truncated: false,
+                });
+              } catch (errTodo2) {
+                this.loadError[tk2] = errTodo2.message || String(errTodo2);
+                this.actionData[tk2] = [];
+                built.push({
+                  id: sec.id,
+                  label: sec.label,
+                  layout: sec.layout === 'half' ? 'half' : 'full',
+                  template: 'todos',
+                  todosKey: tk2,
+                  actionDomain: sec.domain || '',
+                  todosReady: true,
+                  html: '',
+                  error: '',
+                  loading: false,
+                  skipped: false,
+                  truncated: false,
+                });
+              }
+              continue;
+            }
+            if (
+              sec.template === 'funnel_bars' ||
+              sec.template === 'progress_card' ||
+              sec.template === 'stat_cards' ||
+              sec.template === 'grouped_accordion' ||
+              sec.template === 'metric_datatable' ||
+              sec.template === 'account_cards' ||
+              sec.template === 'link_groups'
+            ) {
+              var ckView = 'dView:' + slug + ':' + sec.id;
+              try {
+                var resV = await fetchWithAuth(
+                  '/api/dashboard-section-view/' + encodeURIComponent(slug) + '/' + encodeURIComponent(sec.id),
+                );
+                if (!resV.ok) {
+                  var errV = {};
+                  try {
+                    errV = await resV.json();
+                  } catch (_) {}
+                  throw new Error((errV && errV.error) || 'HTTP ' + resV.status);
+                }
+                var dataV2 = await resV.json();
+                this.cache[ckView] = { ts: Date.now(), data: dataV2 };
+                built.push({
+                  id: sec.id,
+                  label: sec.label,
+                  layout: sec.layout === 'half' ? 'half' : 'full',
+                  template: sec.template,
+                  html: richSectionHtmlFromPayload(dataV2),
+                  error: '',
+                  loading: false,
+                  skipped: false,
+                  truncated: false,
+                });
+              } catch (errV2) {
+                built.push({
+                  id: sec.id,
+                  label: sec.label,
+                  layout: sec.layout === 'half' ? 'half' : 'full',
+                  template: sec.template,
+                  html: '',
+                  error: errV2.message || String(errV2),
+                  loading: false,
+                  skipped: false,
+                  truncated: false,
+                });
+              }
+              continue;
+            }
             if (sec.template !== 'datatable') {
               built.push({
                 id: sec.id,
                 label: sec.label,
+                layout: sec.layout === 'half' ? 'half' : 'full',
                 html: '',
                 error: 'This section type is not supported in the browser yet.',
                 loading: false,
@@ -1963,20 +2467,24 @@ document.addEventListener('alpine:init', function() {
               }
               var dataS = await resS.json();
               this.cache[ck] = { ts: Date.now(), data: dataS };
-              var bx = datatableHtmlFromPayload(dataS);
               built.push({
                 id: sec.id,
                 label: sec.label,
-                html: bx.html,
+                layout: sec.layout === 'half' ? 'half' : 'full',
+                template: 'datatable',
+                table: createDatatableInteractiveState(dataS),
+                html: '',
                 error: '',
                 loading: false,
                 skipped: false,
-                truncated: bx.truncated,
+                truncated: !!dataS.truncated,
               });
             } catch (errS) {
               built.push({
                 id: sec.id,
                 label: sec.label,
+                layout: sec.layout === 'half' ? 'half' : 'full',
+                template: 'datatable',
                 html: '',
                 error: errS.message || String(errS),
                 loading: false,
@@ -1987,6 +2495,7 @@ document.addEventListener('alpine:init', function() {
           }
           this.sectionsPagePanels = built;
           this.sectionsPageReady = true;
+          this.pageReady[slug] = true;
           this.lastRefresh = 'Updated ' + new Date().toLocaleTimeString('en-CA', { hour: '2-digit', minute: '2-digit' });
         } finally {
           this.refreshing = false;
@@ -1997,13 +2506,16 @@ document.addEventListener('alpine:init', function() {
         this.sectionsPagePanels = [];
         this.sectionsPageReady = false;
         this.datatableHtml = '';
+        this.datatableInteractive = null;
         this.datatableLoadError = '';
         this.datatableReady = false;
         this.datatableTruncated = false;
+        this.pageReady[slug] = false;
         var dtKey = 'dt:' + slug;
         if (!force && this.cache[dtKey] && (now - this.cache[dtKey].ts < STALE_MS)) {
           this.renderDatatable(this.cache[dtKey].data);
           this.datatableReady = true;
+          this.pageReady[slug] = true;
           return;
         }
         this.refreshing = true;
@@ -2020,10 +2532,13 @@ document.addEventListener('alpine:init', function() {
           this.cache[dtKey] = { ts: Date.now(), data: dataDt };
           this.renderDatatable(dataDt);
           this.datatableReady = true;
+          this.pageReady[slug] = true;
           this.lastRefresh = 'Updated ' + new Date().toLocaleTimeString('en-CA', { hour: '2-digit', minute: '2-digit' });
         } catch (e) {
+          this.datatableInteractive = null;
           this.datatableLoadError = 'Failed to load table. (' + (e.message || String(e)) + ')';
           this.datatableReady = true;
+          this.pageReady[slug] = true;
         } finally {
           this.refreshing = false;
         }
@@ -2032,6 +2547,7 @@ document.addEventListener('alpine:init', function() {
       if (template === 'action_domain') {
         this.ensureActionDomainPageState(slug);
         this.datatableHtml = '';
+        this.datatableInteractive = null;
         this.datatableLoadError = '';
         this.datatableReady = false;
         this.datatableTruncated = false;
@@ -2069,6 +2585,7 @@ document.addEventListener('alpine:init', function() {
         return;
       }
       this.datatableHtml = '';
+      this.datatableInteractive = null;
       this.datatableLoadError = '';
       this.datatableReady = false;
       this.datatableTruncated = false;
@@ -2098,9 +2615,8 @@ document.addEventListener('alpine:init', function() {
     },
 
     renderDatatable(d) {
-      var b = datatableHtmlFromPayload(d);
-      this.datatableHtml = b.html;
-      this.datatableTruncated = b.truncated;
+      this.datatableInteractive = createDatatableInteractiveState(d);
+      this.datatableTruncated = !!(d && d.truncated);
     },
 
     renderHome(d) {
@@ -2220,16 +2736,7 @@ document.addEventListener('alpine:init', function() {
     renderFinance(d) {
       this.actionData.finance = d.actionItems || [];
       var snapshots = d.accountSnapshots || [];
-      var ownerColors = { personal: 'border-l-blue-400', business: 'border-l-purple-400', joint: 'border-l-teal-400' };
-      this.financeAccountsHtml = snapshots.length ? snapshots.map(function(s) {
-        var isDebt = ['credit_card','loc','mortgage'].indexOf(s.account_type) >= 0;
-        var balColor = isDebt ? 'text-red-600 dark:text-red-400' : 'text-emerald-600 dark:text-emerald-400';
-        return '<div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 border-l-4 ' + (ownerColors[s.owner] || 'border-l-slate-300') + ' p-3">' +
-          '<p class="text-xs text-slate-500 dark:text-slate-400 truncate">' + esc(s.name) + '</p>' +
-          '<p class="text-lg font-bold mt-0.5 ' + balColor + '">' + fmtCurrency(s.balance) + '</p>' +
-          '<p class="text-xs text-slate-400 dark:text-slate-500">' + esc(s.account_type) + ' · ' + esc(s.owner) + ' · ' + fmtDate(s.snapshot_date) + '</p>' +
-          '</div>';
-      }).join('') : empty('No account snapshots');
+      this.financeAccountsHtml = renderAccountCardsHtml(snapshots);
       this.financeBurnHtml = makeTable([
         { key: 'month', label: 'Month' },
         { key: 'total_burn', label: 'Total Burn', render: function(v) { return fmtCurrency(v); } },
@@ -2724,6 +3231,10 @@ document.addEventListener('alpine:init', function() {
       if (a === 'cyrus' || a === 'larry') return 'Cyrus';
       if (a === 'owner') return 'Owner';
       if (!a) return 'Cyrus';
+      // Generic SDK subagent ids (general-purpose, explore, …) must never surface
+      // in the UI; if one slipped through we fall back to Cyrus so the "is working"
+      // banner stays in the agent vocabulary the user actually recognizes.
+      if (isGenericSdkSubagentId(a)) return 'Cyrus';
       return a.charAt(0).toUpperCase() + a.slice(1);
     },
     normalizeChatAgentId(agentId) {
@@ -3008,8 +3519,43 @@ document.addEventListener('alpine:init', function() {
       return 'Ask… (Enter to send, Shift+Enter or Cmd+Enter for newline)';
     },
 
+    /** Visible chat composer (desktop sidebar vs mobile full-screen). */
+    activeChatComposerEl() {
+      try {
+        var wide = typeof window !== 'undefined' && window.matchMedia('(min-width: 1024px)').matches;
+        return wide ? this.$refs.chatPromptDesktop : this.$refs.chatPromptMobile;
+      } catch (_) {
+        return null;
+      }
+    },
+
+    /**
+     * Grow the chat textarea with content, up to half the viewport height; scroll inside when taller.
+     */
+    adjustChatComposerHeight(el) {
+      if (!el || el.tagName !== 'TEXTAREA') return;
+      try {
+        var r = el.getBoundingClientRect();
+        if (!r.width && !r.height) return;
+      } catch (_) {
+        return;
+      }
+      var maxPx = Math.floor(window.innerHeight * 0.5);
+      el.style.height = 'auto';
+      var full = el.scrollHeight;
+      var next = Math.min(full, maxPx);
+      el.style.height = next + 'px';
+      el.style.overflowY = full > maxPx ? 'auto' : 'hidden';
+    },
+
+    syncChatComposerHeights() {
+      var el = this.activeChatComposerEl();
+      if (el) this.adjustChatComposerHeight(el);
+    },
+
     insertNewlineInChatComposer(el) {
       if (!el || el.tagName !== 'TEXTAREA') return;
+      var self = this;
       var start = el.selectionStart;
       var end = el.selectionEnd;
       var val = this.chatPrompt;
@@ -3019,6 +3565,7 @@ document.addEventListener('alpine:init', function() {
         try {
           el.selectionStart = el.selectionEnd = pos;
         } catch (_) {}
+        self.adjustChatComposerHeight(el);
       });
     },
 
@@ -3039,9 +3586,9 @@ document.addEventListener('alpine:init', function() {
     },
 
     async submitChat() {
-      if (!this.chatPrompt.trim()) return;
-      var prompt = this.chatPrompt.trim();
       var files = this.chatFiles && this.chatFiles.length ? this.chatFiles.slice() : [];
+      if (!this.chatPrompt.trim() && !files.length) return;
+      var prompt = this.chatPrompt.trim() || '(See attached file(s).)';
       var planPhase = this.chatPlanAwaitingExecute ? 'execute' : this.chatPlanMode ? 'plan' : null;
       if (this.chatOutboundInFlight) {
         this.chatOutboundQueue.push({
@@ -3056,6 +3603,7 @@ document.addEventListener('alpine:init', function() {
         this.$nextTick(function() {
           self.scrollChatToBottom();
           self.refreshIcons();
+          self.syncChatComposerHeights();
         });
         return;
       }
@@ -3082,6 +3630,7 @@ document.addEventListener('alpine:init', function() {
         this.$nextTick(function() {
           self.scrollChatToBottom();
           self.refreshIcons();
+          self.syncChatComposerHeights();
         });
         return;
       }
@@ -3126,17 +3675,19 @@ document.addEventListener('alpine:init', function() {
         this.initChatWorkPanelsForTurn();
         this.chatStreamDraft = '';
         this.chatWorkingStartedAt = Date.now();
-        this.chatElapsedSec = 0;
         this.chatUiTick = Date.now();
         this._clearChatElapsedTimer();
         this._chatElapsedTimer = setInterval(function() {
-          if (self.chatWorkingStartedAt) self.chatElapsedSec = Math.floor((Date.now() - self.chatWorkingStartedAt) / 1000);
           self.chatUiTick = Date.now();
+          self.refreshChatWaitingStatusLineIfStreaming();
         }, 1000);
         this.chatMessages.push({ id: optimisticId, role: 'user', content: prompt });
         this.chatPrompt = '';
         this.chatStreaming = true;
-        this.$nextTick(function() { self.refreshIcons(); });
+        this.$nextTick(function() {
+          self.refreshIcons();
+          self.syncChatComposerHeights();
+        });
         this.chatAbortController = new AbortController();
         this.chatRetryPrompt = prompt;
         var streamOk = false;
@@ -3161,6 +3712,9 @@ document.addEventListener('alpine:init', function() {
           if (!res.ok) {
             this.chatMessages = this.chatMessages.filter(function(m) { return m.id !== optimisticId; });
             this.chatPrompt = prompt;
+            this.$nextTick(function() {
+              self.syncChatComposerHeights();
+            });
             var errMsg = 'Chat request failed: ' + res.status;
             try {
               var ej = await res.json();
@@ -3195,24 +3749,29 @@ document.addEventListener('alpine:init', function() {
                   self.applySegmentAgentFromStream(msg.segmentAgent);
                 }
                 if (msg.status === 'started') {
-                  self.appendWorkLineToCurrentPanel('Connected — waiting for the model…', 's');
+                  self.appendChatWaitingStatusLine(pickChatWorkStartedLine());
                 }
-                if (msg.heartbeat) {
-                  self.appendWorkLineToCurrentPanel(
-                    'Still working… (' + (msg.elapsedSec != null ? msg.elapsedSec + 's' : '') + ')',
-                    'h'
-                  );
+                if (msg.text) {
+                  self.clearAllWorkPanelWaitingSlots();
+                  self.chatStreamDraft = appendAssistantStreamChunk(self.chatStreamDraft, msg.text);
                 }
-                if (msg.text) self.chatStreamDraft = appendAssistantStreamChunk(self.chatStreamDraft, msg.text);
                 if (msg.error) {
+                  self.clearAllWorkPanelWaitingSlots();
                   self.appendWorkLineToCurrentPanel('[stderr] ' + String(msg.error).trim().slice(0, 500), 'e');
                 }
                 if (msg.tool) {
+                  self.clearAllWorkPanelWaitingSlots();
                   var td = msg.toolDetail ? String(msg.toolDetail).trim().slice(0, 240) : '';
                   self.appendWorkLineToCurrentPanel(td ? msg.tool + ': ' + td : String(msg.tool), 'tool');
+                  // Open a new "<agent> is working" panel only when delegation targets a
+                  // real team member. Generic SDK presets (general-purpose, explore, …)
+                  // and unknown slugs are intentionally ignored here: the parent agent
+                  // (Cyrus or whoever delegated) stays the visible speaker. The server
+                  // also emits a `segmentAgent` event for confirmed team handoffs — see
+                  // applySegmentAgentFromStream for that path.
                   if (isChatDelegationToolName(msg.tool)) {
                     var guessed = self.guessWorkAgentFromTaskDetail(msg.toolDetail || '');
-                    self.openNewWorkPanelForAgent(guessed || '_delegate');
+                    if (guessed) self.openNewWorkPanelForAgent(guessed);
                   }
                 }
                 if (msg.sdkUsageSessionTotals != null) {
@@ -3271,6 +3830,9 @@ document.addEventListener('alpine:init', function() {
           } else if (!acceptedByServer) {
             self.chatMessages = self.chatMessages.filter(function(m) { return m.id !== optimisticId; });
             self.chatPrompt = prompt;
+            self.$nextTick(function() {
+              self.syncChatComposerHeights();
+            });
             self.chatMessages.push({
               id: 'err-' + Date.now(),
               role: 'assistant',
@@ -3332,6 +3894,35 @@ document.addEventListener('alpine:init', function() {
         var self = this;
         this.$nextTick(function() { self.refreshIcons(); });
       }
+    },
+
+    /**
+     * Add pasted images (or other files) from the clipboard to chat attachments, same as drag/drop.
+     * Uses Clipboard API items/files; prevents default only when file data is present.
+     */
+    handleChatPaste(e) {
+      var cd = e.clipboardData;
+      if (!cd) return;
+      var files = [];
+      if (cd.items && cd.items.length) {
+        for (var i = 0; i < cd.items.length; i++) {
+          var item = cd.items[i];
+          if (item.kind === 'file') {
+            var f = item.getAsFile();
+            if (f) files.push(f);
+          }
+        }
+      }
+      if (!files.length && cd.files && cd.files.length) {
+        files = Array.from(cd.files);
+      }
+      if (!files.length) return;
+      e.preventDefault();
+      this.chatFiles = this.chatFiles.concat(files);
+      var self = this;
+      this.$nextTick(function() {
+        self.refreshIcons();
+      });
     },
 
     handleChatFileSelect(e) {

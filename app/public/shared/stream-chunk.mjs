@@ -22,3 +22,36 @@ export function appendAssistantStreamChunk(existing, chunk) {
   }
   return e + c;
 }
+
+/**
+ * Normalize a raw subagent identifier (from `Task` / `Agent` tool_input) to a simple
+ * slug: lowercased, hyphens and whitespace folded to underscores. Returns '' for
+ * empty / non-scalar input so callers can short-circuit.
+ */
+export function normalizeSubagentIdSlug(raw) {
+  if (raw == null) return '';
+  const s = String(raw).trim();
+  if (!s) return '';
+  return s.toLowerCase().replace(/\s+/g, '_').replace(/-/g, '_');
+}
+
+/**
+ * Built-in Claude Agent SDK subagent preset ids (general-purpose, explore, shell, …).
+ * These are NOT team-member slugs; neither the server nor the client should open a
+ * dedicated "<name> is working" panel for them — the parent agent stays the speaker.
+ */
+const GENERIC_SDK_SUBAGENT_SLUGS = new Set([
+  'explore',
+  'generalpurpose',
+  'general_purpose',
+  'plan',
+  'shell',
+  'cursor_guide',
+  'best_of_n_runner',
+]);
+
+export function isGenericSdkSubagentId(raw) {
+  const slug = normalizeSubagentIdSlug(raw);
+  if (!slug) return false;
+  return GENERIC_SDK_SUBAGENT_SLUGS.has(slug);
+}

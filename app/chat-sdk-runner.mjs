@@ -4,7 +4,11 @@
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
-import { appendAssistantStreamChunk } from './public/shared/stream-chunk.mjs';
+import {
+  appendAssistantStreamChunk,
+  isGenericSdkSubagentId,
+  normalizeSubagentIdSlug,
+} from './public/shared/stream-chunk.mjs';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 
@@ -20,17 +24,6 @@ function isDelegationToolName(name) {
   const n = String(name || '').trim().toLowerCase();
   return n === 'task' || n === 'agent';
 }
-
-/** SDK preset subagent ids — not team slugs; emitting segmentAgent would duplicate the UI panel opened from tool detail heuristics. */
-const GENERIC_SUBAGENT_SEGMENT_SKIP = new Set([
-  'explore',
-  'generalpurpose',
-  'general_purpose',
-  'plan',
-  'shell',
-  'best_of_n_runner',
-  'best-of-n-runner',
-]);
 
 /**
  * Serializable billing snapshot from an Agent SDK `result` message.
@@ -183,15 +176,9 @@ export async function runAgentSdkQuery(opts) {
                         ti.agent ??
                         ti.agent_id ??
                         ti.agentId;
-                      if (raw != null && String(raw).trim()) {
-                        const slug = String(raw)
-                          .trim()
-                          .toLowerCase()
-                          .replace(/\s+/g, '_')
-                          .replace(/-/g, '_');
-                        if (!GENERIC_SUBAGENT_SEGMENT_SKIP.has(slug)) {
-                          opts.onSegmentAgent(slug);
-                        }
+                      const slug = normalizeSubagentIdSlug(raw);
+                      if (slug && !isGenericSdkSubagentId(slug)) {
+                        opts.onSegmentAgent(slug);
                       }
                     }
                   } catch (_) {}

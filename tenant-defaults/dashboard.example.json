@@ -17,16 +17,23 @@
       "sql": "SELECT 1 AS n, 'ok' AS status"
     },
     {
-      "slug": "demo-sections",
-      "label": "Demo bundle",
+      "slug": "money",
+      "label": "Money overview",
+      "description": "Example multi-database `sections` page — brain action items + finance.db table (use any slug; section ids must be unique per page)",
       "template": "sections",
       "sections": [
         {
-          "id": "counts",
-          "label": "Counts",
+          "id": "todos",
+          "label": "Todos",
+          "template": "todos",
+          "domain": "finance"
+        },
+        {
+          "id": "recent-tx",
+          "label": "Recent transactions",
           "template": "datatable",
-          "db": "brain",
-          "sql": "SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table'"
+          "db": "finance",
+          "sql": "SELECT date, category, amount FROM transactions ORDER BY date DESC LIMIT 50"
         }
       ]
     }

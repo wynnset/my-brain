@@ -29,7 +29,8 @@ module.exports = function registerChatRoutes(app, ctx) {
 
   // ─── Chat sessions (JSON files under tenant dataDir/chat-sessions) ─────────────
   const CHAT_LIST_LIMIT = 200;
-  const CHAT_HEARTBEAT_MS = Number(process.env.BRAIN_CHAT_HEARTBEAT_MS) || 20000;
+  /** SSE keepalive while the model runs; UI copy rotates on its own — this only needs to beat proxy timeouts. */
+  const CHAT_HEARTBEAT_MS = Number(process.env.BRAIN_CHAT_HEARTBEAT_MS) || 5000;
   const CHAT_MAX_TRANSCRIPT_CHARS = Number(process.env.BRAIN_CHAT_MAX_TRANSCRIPT_CHARS) || 100000;
   const CHAT_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   /** `cli` (default): spawn Claude Code. `sdk`: Claude Agent SDK in-process. */
@@ -51,7 +52,7 @@ module.exports = function registerChatRoutes(app, ctx) {
       id: 'opus',
       label: 'Opus',
       contextLabel: '200k',
-      costHint: '≈ $15 / $75 per M tok (in / out)',
+      costHint: '≈ $5 / $25 per M tok (in / out)',
     },
     {
       id: 'haiku',
@@ -849,6 +850,25 @@ module.exports = function registerChatRoutes(app, ctx) {
     return `${basePrompt}\n\n${block}`;
   }
 
+  /** Appended to every dashboard chat — avoid phantom “file saved / exists” claims without tool evidence. */
+  function appendWorkspaceFileEvidenceInstructions(basePrompt) {
+    const block = [
+      '---',
+      '',
+      '## Workspace files: only claim what tools confirmed (mandatory)',
+      '',
+      'Do **not** tell the user that a file **exists**, **is saved**, **was written**, **is in the workspace**, or that they **can open** it, unless **one** of these is true:',
+      '',
+      '1. A **write / create / edit** (or equivalent) tool **succeeded** in **this** turn for that path; or',
+      '2. A **read / list / glob** tool in **this** turn returned that path and you are reporting what you actually observed.',
+      '',
+      'If you are **recommending** a path the user could create, or you **did not** run a successful write: say clearly that the file **does not exist yet** or that you **have not verified** it on disk — do **not** phrase it as already present.',
+      'Do **not** infer file existence from earlier chat, memory, documentation, or typical project layout when the user needs the file to actually be there; **use a tool** to verify first if unsure.',
+      '',
+    ].join('\n');
+    return `${basePrompt}\n\n${block}`;
+  }
+
   /** Appended after proprietary rules so every dashboard chat sees manifest rules + optional full `docs/system.md`. */
   function appendDashboardManifestChatGuidance(req, basePrompt) {
     const rules = [
@@ -862,6 +882,7 @@ module.exports = function registerChatRoutes(app, ctx) {
       '2. Valid manifest **`template`** values are: **`career`**, **`finance`**, **`business`**, **`action_domain`**, **`datatable`**, **`sections`**. There is **no** `template: "family"` — use **`"template": "action_domain"`** with **`"domain": "family"`** (and a unique **`slug`**) for a standard action-item tab backed only by **`brain.db`.**',
       '3. Use **`datatable`** / **`sections`** for arbitrary read-only **SQL** over tenant SQLite files — not when the user wants the same **action list** UX as Finance for one domain.',
       '4. Do **not** tell the user to edit **`app/`** server source files to add a domain tab unless they explicitly need a **new template type** not covered in `docs/system.md`.',
+      '5. When you tell the user where a workspace file lives, prefer **workspace-relative** paths (`owners-inbox/name.md`, `docs/guide.md`, or root files like `` `Notes.md` ``) so the dashboard can link them in chat. Avoid relying on host paths like `/data/users/.../workspace/...` as the only pointer.',
       '',
     ].join('\n');
     let out = `${basePrompt}\n\n${rules}`;
@@ -1177,6 +1198,23 @@ module.exports = function registerChatRoutes(app, ctx) {
     res.json(sess);
   });
 
+  app.patch('/api/chat/conversations/:id', (req, res) => {
+    const id = req.params.id;
+    const sess = readChatSession(req, id);
+    if (!sess) return res.status(404).json({ error: 'Conversation not found' });
+    const raw = req.body && req.body.title != null ? String(req.body.title) : '';
+    const title = raw.trim().slice(0, 200);
+    if (!title) return res.status(400).json({ error: 'Title cannot be empty' });
+    sess.title = title;
+    sess.updatedAt = new Date().toISOString();
+    try {
+      atomicWriteChatSession(chatSessionPath(req, id), sess);
+    } catch (err) {
+      return res.status(500).json({ error: err.message || 'Could not save conversation' });
+    }
+    res.json({ ok: true, title: sess.title });
+  });
+
   /**
    * Fork:
    * - { messageId } — copy through that assistant reply (inclusive).
@@ -1410,6 +1448,7 @@ module.exports = function registerChatRoutes(app, ctx) {
     }
     systemPrompt = augmentChatSystemPromptForMultiUser(req, systemPrompt);
     systemPrompt = appendProprietaryAssistantInstructions(systemPrompt);
+    systemPrompt = appendWorkspaceFileEvidenceInstructions(systemPrompt);
     systemPrompt = appendDashboardManifestChatGuidance(req, systemPrompt);
     if (planPhase === 'plan') systemPrompt += CHAT_PLAN_PHASE_SYSTEM_SUFFIX;
     if (planPhase === 'execute') systemPrompt += CHAT_EXECUTE_PLAN_SYSTEM_SUFFIX;

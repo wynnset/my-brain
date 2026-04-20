@@ -108,7 +108,7 @@ Browser  →  public/dashboard.html + public/js/*.mjs  (hash routes: #/, #/caree
          SQLite under DB_DIR (single-tenant) or users/<uuid>/data/ (multi-user)
 ```
 
-**Main JSON endpoints:** `/api/health`, `/api/auth-status`, `/api/login`, `/api/logout`, `/api/dashboard`, `/api/dashboard-manifest`, `/api/dashboard-page/:slug`, `/api/dashboard-section/...`, `/api/career`, `/api/finance`, `/api/business`, `/api/action-domain/:slug`, `/api/action-items/:id`, `/api/files`, `/api/upload`, `/api/chat`, `/api/db`, orchestrator brief routes (`/api/cyrus`, …).
+**Main JSON endpoints:** `/api/health`, `/api/auth-status`, `/api/login`, `/api/logout`, `/api/dashboard`, `/api/dashboard-manifest`, `/api/dashboard-page/:slug`, `/api/dashboard-section/...`, `/api/dashboard-section-todos/...`, `/api/dashboard-section-view/...`, `/api/career`, `/api/finance`, `/api/business`, `/api/action-domain/:slug`, `/api/action-items/:id`, `/api/files`, `/api/upload`, `/api/chat`, `/api/db`, orchestrator brief routes (`/api/cyrus`, …).
 
 ### Dashboard manifest (`workspace/dashboard.json`)
 
@@ -116,16 +116,16 @@ The dashboard reads **`workspace/dashboard.json`** (see `app/server/dashboard/da
 
 | `template` | Purpose | Typical fields |
 |------------|---------|----------------|
-| **`career`**, **`finance`**, **`business`** | First-class domain dashboards (fixed APIs + rich UI). Each needs its default SQLite file(s) on disk (`launchpad.db`, `finance.db`, `wynnset.db`) before the tab enables. | `slug`, `label`, optional `description` |
+| **`career`**, **`finance`**, **`business`** | Legacy first-class dashboards backed by **`/api/career`** etc. (rich HTML). Still supported in custom manifests. Each needs its default SQLite file(s) on disk (`launchpad.db`, `finance.db`, `wynnset.db`) before the tab enables. | `slug`, `label`, optional `description` |
+| **`sections`** | Stack **`todos`**, **`funnel_bars`**, **`progress_card`**, **`stat_cards`**, **`grouped_accordion`**, **`metric_datatable`**, **`account_cards`** (balance **card grid** from SQL — `name`, `account_type`, `owner`, `balance`, `snapshot_date`), **`link_groups`** (static link columns; optional **`db`** gating), and/or **`datatable`**. Aliases **`job_pipeline`** → `funnel_bars`, **`week_card`** → `progress_card` (launchpad defaults). Optional **`layout`**: `full` (default) or `half` / `condensed` / `narrow` for a two-column grid on medium+ screens. | `account_cards`: **`db`** + **`sql`**. `link_groups`: edit **`groups`** in **`dashboard.json`**. Section **`id`**s: lowercase letters, digits, hyphens. |
 | **`action_domain`** | One nav tab listing **open** `action_items` for a single `brain.db` domain (same UX as the action list on Finance/Business). Use this for **`personal`** or **`family`** (or any allowed domain) **without** new server routes. | `slug`, `label`, **`domain`**: one of `career`, `finance`, `business`, `personal`, `family` (must match `action_items.domain`). Requires **`brain.db`**. |
 | **`datatable`** | Read-only table from one tenant DB: one **`SELECT`**. | `slug`, `label`, **`db`** (basename), **`sql`** |
-| **`sections`** | Several **`datatable`** sections on one tab. | `slug`, `label`, **`sections`**: `[{ id, label, template: "datatable", db, sql }, …]` |
 
 **Important distinctions for assistants:**
 
 - **`action_items.domain`** in `brain.db` (e.g. `family`) is **data**, not a dashboard template name. You do **not** add a new template called `family` in JSON.
 - To give the user a **Family** (or **Personal**) tab with filters, complete, and edit like other domain lists: add a page with `"template": "action_domain"` and `"domain": "family"` (or `"personal"`), with a unique **`slug`** (e.g. `family`).
-- **`datatable`** / **`sections`** are for **SQL-driven** read-only views (any tenant `*.db`). They do not add the rich Career/Finance/Business chrome; use **`action_domain`** when the goal is **action items for one domain** only.
+- **`datatable`** / **`sections`** are for **SQL-driven** read-only views (any tenant `*.db`). Use **`action_domain`** when the goal is **interactive action items for one domain** (complete, edit, snooze) **without** writing SQL sections.
 - Telling the user to edit **`app/server/routes/domain.js`**, **`dashboard-manifest.js`**, or **`dashboard.html`** to add a domain tab is **almost always wrong** unless they are explicitly extending the **product** with a new manifest template type.
 
 **Example — `family` tab via manifest only:**
@@ -149,12 +149,14 @@ Multi-user tenants with **no** `dashboard.json` start with **no** default domain
 
 ### Dashboard pages (built-in templates)
 
+When **`workspace/dashboard.json` is omitted** (single-tenant only), the app ships default **Career**, **Finance**, and **Business** tabs as **`template: "sections"`** pages: each tab runs the same read-only SQL (against `brain`, `launchpad`, `finance`, and/or `wynnset` DB files) that previously powered the legacy JSON APIs—composed sections, sortable/filterable tables in the browser, no per-domain server edits.
+
 | Area | Data | Purpose |
 |------|------|---------|
 | **Home** | `brain.db` + optional `launchpad.db` | All-domain action items, summary cards, active week |
-| **Career** | `brain.db` + `launchpad.db` | Career actions, pipeline, applications, goals |
-| **Finance** | `brain.db` + `finance.db` + `wynnset.db` | Finance actions, balances, burn rate, compliance |
-| **Business** | `brain.db` + `wynnset.db` | Business actions, compliance, COA, ledger stats |
+| **Career** | `brain.db` + `launchpad.db` | Sections: actions, pipeline, applications, goals, outreach, consulting |
+| **Finance** | `brain.db` + `finance.db` + `wynnset.db` | Sections: actions, burn, categories, accounts, compliance, trial balance, … |
+| **Business** | `brain.db` + `wynnset.db` | Sections: actions, compliance, ledger, chart of accounts |
 
 **`action_domain`** pages (declared in `dashboard.json`) reuse the same action-item list behaviour as the domains above, scoped to one `domain` value and **`brain.db`** only.
 

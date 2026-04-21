@@ -3323,6 +3323,12 @@ document.addEventListener('alpine:init', function() {
 
     openPdfViewer(dir, name) { this.openAssetViewer(dir, name, 'pdf'); },
 
+    /** Reset all viewer scroll containers to the top (Alpine `<template>`-rendered nodes use `data-viewer-scroll`). */
+    _resetViewerScroll() {
+      var nodes = document.querySelectorAll('[data-viewer-scroll]');
+      for (var i = 0; i < nodes.length; i++) nodes[i].scrollTop = 0;
+    },
+
     /** Open the viewer in an asset mode (pdf/image/video/audio) that streams bytes directly from /api/files. */
     openAssetViewer(dir, name, mode) {
       this.editorOpen = false;
@@ -3333,7 +3339,10 @@ document.addEventListener('alpine:init', function() {
       this.viewerDisplayMode = mode;
       this.viewerOpen = true;
       var self = this;
-      this.$nextTick(function() { self.refreshIcons(); });
+      this.$nextTick(function() {
+        self.refreshIcons();
+        self._resetViewerScroll();
+      });
     },
 
     showDownloadOnlyPanel(dir, name) {
@@ -3345,7 +3354,10 @@ document.addEventListener('alpine:init', function() {
       this.viewerDisplayMode = 'download';
       this.viewerOpen = true;
       var self = this;
-      this.$nextTick(function() { self.refreshIcons(); });
+      this.$nextTick(function() {
+        self.refreshIcons();
+        self._resetViewerScroll();
+      });
     },
 
     editFromViewer() {
@@ -3378,14 +3390,20 @@ document.addEventListener('alpine:init', function() {
         this.viewerDisplayMode = /\.md$/i.test(name) ? 'markdown' : 'text';
         this.viewerOpen = true;
         var self = this;
-        this.$nextTick(function() { self.refreshIcons(); });
+        this.$nextTick(function() {
+          self.refreshIcons();
+          self._resetViewerScroll();
+        });
       } catch (err) {
         this.viewerContent = '';
         this.viewerLoadError = err.message || 'Could not load file';
         this.viewerDisplayMode = 'error';
         this.viewerOpen = true;
         var self = this;
-        this.$nextTick(function() { self.refreshIcons(); });
+        this.$nextTick(function() {
+          self.refreshIcons();
+          self._resetViewerScroll();
+        });
       }
     },
 

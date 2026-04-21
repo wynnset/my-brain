@@ -1097,23 +1097,23 @@ tailwind.config = {
               </button>
             </div>
           </div>
-          <div x-show="viewerDisplayMode === 'markdown'" class="flex-1 overflow-auto p-4 text-sm text-slate-700 dark:text-slate-200 min-h-0 chat-md-output" x-html="viewerMarkdownHtml()"></div>
-          <pre x-show="viewerDisplayMode === 'text'" x-cloak class="flex-1 overflow-auto p-4 text-xs text-slate-700 dark:text-slate-200 font-mono whitespace-pre-wrap min-h-0" x-text="viewerContent"></pre>
+          <div x-show="viewerDisplayMode === 'markdown'" data-viewer-scroll class="flex-1 overflow-auto p-4 text-sm text-slate-700 dark:text-slate-200 min-h-0 chat-md-output" x-html="viewerMarkdownHtml()"></div>
+          <pre x-show="viewerDisplayMode === 'text'" x-cloak data-viewer-scroll class="flex-1 overflow-auto p-4 text-xs text-slate-700 dark:text-slate-200 font-mono whitespace-pre-wrap min-h-0" x-text="viewerContent"></pre>
           <template x-if="viewerDisplayMode === 'pdf'">
             <iframe class="flex-1 w-full min-h-[min(70vh,32rem)] border-0 bg-slate-100 dark:bg-slate-900" :title="viewerTitle" :src="viewerAssetUrl()"></iframe>
           </template>
           <template x-if="viewerDisplayMode === 'image'">
-            <div class="flex-1 overflow-auto min-h-0 bg-slate-100 dark:bg-slate-900 flex items-center justify-center p-4">
-              <img :src="viewerAssetUrl()" :alt="viewerTitle" class="max-w-full max-h-full object-contain" @error="viewerLoadError = 'Could not display image'; viewerDisplayMode = 'error';" />
+            <div data-viewer-scroll class="flex-1 overflow-auto min-h-0 bg-slate-100 dark:bg-slate-900 p-4 text-center">
+              <img :src="viewerAssetUrl()" :alt="viewerTitle" class="inline-block max-w-full h-auto" @error="viewerLoadError = 'Could not display image'; viewerDisplayMode = 'error';" />
             </div>
           </template>
           <template x-if="viewerDisplayMode === 'video'">
-            <div class="flex-1 overflow-auto min-h-0 bg-slate-900 flex items-center justify-center p-4">
-              <video :src="viewerAssetUrl()" controls preload="metadata" class="max-w-full max-h-full" @error="viewerLoadError = 'Could not play video'; viewerDisplayMode = 'error';"></video>
+            <div data-viewer-scroll class="flex-1 overflow-auto min-h-0 bg-slate-900 p-4 text-center">
+              <video :src="viewerAssetUrl()" controls preload="metadata" class="inline-block max-w-full h-auto" @error="viewerLoadError = 'Could not play video'; viewerDisplayMode = 'error';"></video>
             </div>
           </template>
           <template x-if="viewerDisplayMode === 'audio'">
-            <div class="flex-1 overflow-auto min-h-0 flex flex-col items-center justify-center gap-4 p-8 bg-slate-50 dark:bg-slate-900">
+            <div data-viewer-scroll class="flex-1 overflow-auto min-h-0 flex flex-col items-center gap-4 p-8 bg-slate-50 dark:bg-slate-900">
               <i data-lucide="music" class="w-12 h-12 text-slate-400 dark:text-slate-500"></i>
               <div class="text-sm font-medium text-slate-700 dark:text-slate-200 truncate max-w-full" x-text="viewerTitle"></div>
               <audio :src="viewerAssetUrl()" controls preload="metadata" class="w-full max-w-md" @error="viewerLoadError = 'Could not play audio'; viewerDisplayMode = 'error';"></audio>
@@ -1971,23 +1971,23 @@ tailwind.config = {
         </button>
       </div>
     </div>
-    <div x-show="viewerDisplayMode === 'markdown'" class="flex-1 overflow-auto p-5 text-sm text-slate-700 dark:text-slate-200 min-h-0 chat-md-output" x-html="viewerMarkdownHtml()"></div>
-    <pre x-show="viewerDisplayMode === 'text'" x-cloak class="flex-1 overflow-auto p-5 text-xs text-slate-700 dark:text-slate-200 font-mono whitespace-pre-wrap min-h-0" x-text="viewerContent"></pre>
+    <div x-show="viewerDisplayMode === 'markdown'" data-viewer-scroll class="flex-1 overflow-auto p-5 text-sm text-slate-700 dark:text-slate-200 min-h-0 chat-md-output" x-html="viewerMarkdownHtml()"></div>
+    <pre x-show="viewerDisplayMode === 'text'" x-cloak data-viewer-scroll class="flex-1 overflow-auto p-5 text-xs text-slate-700 dark:text-slate-200 font-mono whitespace-pre-wrap min-h-0" x-text="viewerContent"></pre>
     <template x-if="viewerDisplayMode === 'pdf'">
       <iframe class="flex-1 w-full min-h-[50vh] border-0 bg-slate-100 dark:bg-slate-900" :title="viewerTitle" :src="viewerAssetUrl()"></iframe>
     </template>
     <template x-if="viewerDisplayMode === 'image'">
-      <div class="flex-1 overflow-auto min-h-0 bg-slate-100 dark:bg-slate-900 flex items-center justify-center p-4">
-        <img :src="viewerAssetUrl()" :alt="viewerTitle" class="max-w-full max-h-full object-contain" @error="viewerLoadError = 'Could not display image'; viewerDisplayMode = 'error';" />
+      <div data-viewer-scroll class="flex-1 overflow-auto min-h-0 bg-slate-100 dark:bg-slate-900 p-4 text-center">
+        <img :src="viewerAssetUrl()" :alt="viewerTitle" class="inline-block max-w-full h-auto" @error="viewerLoadError = 'Could not display image'; viewerDisplayMode = 'error';" />
       </div>
     </template>
     <template x-if="viewerDisplayMode === 'video'">
-      <div class="flex-1 overflow-auto min-h-0 bg-slate-900 flex items-center justify-center p-4">
-        <video :src="viewerAssetUrl()" controls preload="metadata" class="max-w-full max-h-full" @error="viewerLoadError = 'Could not play video'; viewerDisplayMode = 'error';"></video>
+      <div data-viewer-scroll class="flex-1 overflow-auto min-h-0 bg-slate-900 p-4 text-center">
+        <video :src="viewerAssetUrl()" controls preload="metadata" class="inline-block max-w-full h-auto" @error="viewerLoadError = 'Could not play video'; viewerDisplayMode = 'error';"></video>
       </div>
     </template>
     <template x-if="viewerDisplayMode === 'audio'">
-      <div class="flex-1 overflow-auto min-h-0 flex flex-col items-center justify-center gap-4 p-8 bg-slate-50 dark:bg-slate-900">
+      <div data-viewer-scroll class="flex-1 overflow-auto min-h-0 flex flex-col items-center gap-4 p-8 bg-slate-50 dark:bg-slate-900">
         <i data-lucide="music" class="w-12 h-12 text-slate-400 dark:text-slate-500"></i>
         <div class="text-sm font-medium text-slate-700 dark:text-slate-200 truncate max-w-full" x-text="viewerTitle"></div>
         <audio :src="viewerAssetUrl()" controls preload="metadata" class="w-full max-w-md" @error="viewerLoadError = 'Could not play audio'; viewerDisplayMode = 'error';"></audio>

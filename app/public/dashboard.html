@@ -1322,7 +1322,8 @@ tailwind.config = {
         </details>
       </div>
       <div class="flex flex-col flex-1 min-h-0 min-w-0">
-        <div class="flex-1 overflow-y-auto p-3 text-sm min-h-0 min-w-0" x-ref="chatScrollDesktop">
+        <div class="relative flex flex-col flex-1 min-h-0 min-w-0">
+        <div class="flex-1 overflow-y-auto p-3 text-sm min-h-0 min-w-0" x-ref="chatScrollDesktop" @scroll.passive="handleChatScroll($event)">
           <template x-if="!chatMessages.length && !chatStreaming && !chatOutboundInFlight && !chatOutboundQueue.length">
             <p class="chat-md-placeholder text-slate-400 dark:text-slate-500 text-sm">Send a message to start this conversation.</p>
           </template>
@@ -1414,6 +1415,15 @@ tailwind.config = {
                 <p x-show="chatStreaming" x-cloak class="text-[11px] text-slate-400 dark:text-slate-500 pl-11">Stop anytime · tap a card to expand full activity</p>
               </div>
             </template>
+          </div>
+        </div>
+          <div class="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center z-20" x-show="chatShowNewRepliesButton" x-cloak>
+            <button type="button" @click="jumpChatToLatest()"
+              class="pointer-events-auto inline-flex items-center gap-1.5 rounded-full bg-slate-800 text-white hover:bg-slate-900 text-xs font-medium px-3 py-1.5 shadow-lg dark:bg-slate-600 dark:hover:bg-slate-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-800 transition-colors"
+              aria-label="Jump to newest replies">
+              <i data-lucide="arrow-down" class="h-3.5 w-3.5" aria-hidden="true"></i>
+              <span>New replies below</span>
+            </button>
           </div>
         </div>
         <div x-show="!chatStreaming && chatMessages.length && chatMessages[chatMessages.length - 1].error" class="px-3 pt-1 shrink-0" x-cloak>
@@ -1576,7 +1586,8 @@ tailwind.config = {
     </details>
   </div>
   <div class="flex flex-col flex-1 min-h-0 min-w-0">
-    <div class="flex-1 overflow-y-auto p-3 text-sm min-h-0 min-w-0" x-ref="chatScrollMobile">
+    <div class="relative flex flex-col flex-1 min-h-0 min-w-0">
+    <div class="flex-1 overflow-y-auto p-3 text-sm min-h-0 min-w-0" x-ref="chatScrollMobile" @scroll.passive="handleChatScroll($event)">
       <template x-if="!chatMessages.length && !chatStreaming && !chatOutboundInFlight && !chatOutboundQueue.length">
         <p class="chat-md-placeholder text-slate-400 dark:text-slate-500 text-sm">Send a message to start this conversation.</p>
       </template>
@@ -1668,6 +1679,15 @@ tailwind.config = {
             <p x-show="chatStreaming" x-cloak class="text-[11px] text-slate-400 dark:text-slate-500 pl-11">Stop anytime · tap a card for full activity</p>
           </div>
         </template>
+      </div>
+    </div>
+      <div class="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center z-20" x-show="chatShowNewRepliesButton" x-cloak>
+        <button type="button" @click="jumpChatToLatest()"
+          class="pointer-events-auto inline-flex items-center gap-1.5 rounded-full bg-slate-800 text-white hover:bg-slate-900 text-xs font-medium px-3 py-1.5 shadow-lg dark:bg-slate-600 dark:hover:bg-slate-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-800 transition-colors"
+          aria-label="Jump to newest replies">
+          <i data-lucide="arrow-down" class="h-3.5 w-3.5" aria-hidden="true"></i>
+          <span>New replies below</span>
+        </button>
       </div>
     </div>
     <div class="shrink-0 border-t border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 pb-[max(0.75rem,env(safe-area-inset-bottom))]">

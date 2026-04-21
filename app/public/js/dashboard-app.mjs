@@ -178,6 +178,21 @@ document.addEventListener('alpine:init', function() {
      * Each { id, agentId, lines: [{id,text}], expanded, done, startedAt, endedAt }.
      */
     chatWorkPanels: [],
+    /**
+     * True when stream-driven content arrived while the user was scrolled up,
+     * so we suppressed the auto-follow. Reveals a "New replies below" pill
+     * that jumps back to the latest on click. Reset when the user scrolls
+     * near the bottom or we force-scroll on user-driven actions.
+     */
+    chatShowNewRepliesButton: false,
+    /**
+     * Sticky "pinned near bottom" flags updated on scroll events — used to
+     * decide whether stream-driven appends should auto-follow to the newest
+     * content. Kept separately for desktop and mobile because both scroll
+     * containers exist in the DOM (only one is visible at a time via CSS).
+     */
+    _chatPinnedDesktop: true,
+    _chatPinnedMobile: true,
     /** Bumped every second while streaming for reactive UI (waiting-line copy, etc.). */
     chatUiTick: 0,
     chatWorkingStartedAt: null,
@@ -1078,7 +1093,7 @@ document.addEventListener('alpine:init', function() {
       var self = this;
       this.$nextTick(function() {
         self.refreshIcons();
-        self.scrollChatToBottom();
+        self.scrollChatToBottom({ force: true });
       });
     },
 
@@ -1094,14 +1109,80 @@ document.addEventListener('alpine:init', function() {
       }
     },
 
-    scrollChatToBottom() {
+    /**
+     * Scroll the chat transcript to the newest content. By default this only
+     * follows when the user was already pinned near the bottom so that
+     * stream-driven appends do not yank them away from earlier messages they
+     * are reading. Pass `{ force: true }` for user-initiated actions (send,
+     * jump-to-latest, open conversation, expand panel) that should always
+     * land on the latest content.
+     *
+     * The pinned state is tracked by a scroll listener on each container
+     * (see `handleChatScroll`) rather than re-checked at call-time, because
+     * Alpine re-renders between the caller and `$nextTick` would otherwise
+     * make freshly-appended content look like an upward scroll.
+     *
+     * @param {{ force?: boolean }} [opts]
+     */
+    scrollChatToBottom(opts) {
+      var force = !!(opts && opts.force);
       var self = this;
       this.$nextTick(function() {
         var d = self.$refs.chatScrollDesktop;
         var m = self.$refs.chatScrollMobile;
-        if (d) d.scrollTop = d.scrollHeight;
-        if (m) m.scrollTop = m.scrollHeight;
+        var anyUnpinnedVisible = false;
+        if (d) {
+          if (force || self._chatPinnedDesktop) {
+            d.scrollTop = d.scrollHeight;
+            self._chatPinnedDesktop = true;
+          } else if (d.offsetParent !== null) {
+            anyUnpinnedVisible = true;
+          }
+        }
+        if (m) {
+          if (force || self._chatPinnedMobile) {
+            m.scrollTop = m.scrollHeight;
+            self._chatPinnedMobile = true;
+          } else if (m.offsetParent !== null) {
+            anyUnpinnedVisible = true;
+          }
+        }
+        if (force) {
+          self.chatShowNewRepliesButton = false;
+        } else if (anyUnpinnedVisible) {
+          self.chatShowNewRepliesButton = true;
+        }
       });
+    },
+
+    /** True when the scroll container is within a small threshold of the bottom. */
+    _isChatScrollNearBottom(el) {
+      if (!el) return true;
+      var gap = el.scrollHeight - el.clientHeight - el.scrollTop;
+      return gap <= 80;
+    },
+
+    /**
+     * Bound to the scroll containers. Updates the sticky pinned flag for the
+     * emitting container and hides the "New replies below" pill once the
+     * user is caught up again.
+     */
+    handleChatScroll(e) {
+      var el = e && e.target;
+      if (!el) return;
+      var pinned = this._isChatScrollNearBottom(el);
+      if (el === this.$refs.chatScrollDesktop) {
+        this._chatPinnedDesktop = pinned;
+      } else if (el === this.$refs.chatScrollMobile) {
+        this._chatPinnedMobile = pinned;
+      }
+      if (pinned) this.chatShowNewRepliesButton = false;
+    },
+
+    /** User clicked the "New replies below" pill: jump to latest and hide it. */
+    jumpChatToLatest() {
+      this.chatShowNewRepliesButton = false;
+      this.scrollChatToBottom({ force: true });
     },
 
     maybeRequestNotificationPermission() {
@@ -1142,6 +1223,9 @@ document.addEventListener('alpine:init', function() {
       this.chatOutboundQueue = [];
       this.chatOutboundInFlight = false;
       this.chatWorkPanels = [];
+      this.chatShowNewRepliesButton = false;
+      this._chatPinnedDesktop = true;
+      this._chatPinnedMobile = true;
       this.resetChatPlanUiForNewShell();
       this.chatWorkspaceTouches = [];
       this.closeChatUserMessageEditor();
@@ -1288,8 +1372,11 @@ document.addEventListener('alpine:init', function() {
       this.chatOutboundQueue = [];
       this.chatOutboundInFlight = false;
       this.chatWorkPanels = [];
+      this.chatShowNewRepliesButton = false;
+      this._chatPinnedDesktop = true;
+      this._chatPinnedMobile = true;
       await this.loadConversationList();
-      this.$nextTick(function() { this.scrollChatToBottom(); this.refreshIcons(); }.bind(this));
+      this.$nextTick(function() { this.scrollChatToBottom({ force: true }); this.refreshIcons(); }.bind(this));
     },
 
     async refreshActiveConversation() {
@@ -3713,7 +3800,7 @@ document.addEventListener('alpine:init', function() {
         this.chatFiles = [];
         var self = this;
         this.$nextTick(function() {
-          self.scrollChatToBottom();
+          self.scrollChatToBottom({ force: true });
           self.refreshIcons();
           self.syncChatComposerHeights();
         });
@@ -3740,7 +3827,7 @@ document.addEventListener('alpine:init', function() {
         this.chatPrompt = '';
         var self = this;
         this.$nextTick(function() {
-          self.scrollChatToBottom();
+          self.scrollChatToBottom({ force: true });
           self.refreshIcons();
           self.syncChatComposerHeights();
         });
@@ -3796,6 +3883,7 @@ document.addEventListener('alpine:init', function() {
         this.chatMessages.push({ id: optimisticId, role: 'user', content: prompt });
         this.chatPrompt = '';
         this.chatStreaming = true;
+        this.scrollChatToBottom({ force: true });
         this.$nextTick(function() {
           self.refreshIcons();
           self.syncChatComposerHeights();

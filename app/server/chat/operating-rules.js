@@ -3,11 +3,14 @@
 /**
  * Server-managed operating rules appended to dashboard chat system prompts.
  *
- * Two files live beside this one:
+ * Three files live beside this one:
  *
  *   - `orchestrator-operating-rules.md` — appended to Cyrus's prompt only.
  *   - `subagent-operating-rules.md`     — appended to every team member's
  *     prompt when they run as a `Task` subagent.
+ *   - `platform-confidentiality.md`     — appended to every dashboard chat
+ *     (Cyrus and direct team-member chats) on every tenant; keeps the
+ *     implementation stack of the assistant private.
  *
  * Content is cached in memory at first read so the hot path adds ~zero cost.
  * Set `BRAIN_CHAT_RELOAD_RULES=1` to skip the cache during local prompt
@@ -21,11 +24,14 @@ const path = require('path');
 
 const ORCHESTRATOR_RULES_FILE = path.join(__dirname, 'orchestrator-operating-rules.md');
 const SUBAGENT_RULES_FILE = path.join(__dirname, 'subagent-operating-rules.md');
+const PLATFORM_CONFIDENTIALITY_FILE = path.join(__dirname, 'platform-confidentiality.md');
 
 /** @type {{ path: string, mtimeMs: number, text: string } | null} */
 let orchestratorCache = null;
 /** @type {{ path: string, mtimeMs: number, text: string } | null} */
 let subagentCache = null;
+/** @type {{ path: string, mtimeMs: number, text: string } | null} */
+let platformConfidentialityCache = null;
 
 function shouldBypassCache() {
   return process.env.BRAIN_CHAT_RELOAD_RULES === '1';
@@ -74,6 +80,13 @@ function readSubagentOperatingRules() {
   return r.text;
 }
 
+/** Full contents of the platform-confidentiality markdown (empty string if missing). */
+function readPlatformConfidentialityRules() {
+  const r = readWithCache(PLATFORM_CONFIDENTIALITY_FILE, platformConfidentialityCache);
+  platformConfidentialityCache = r.cache;
+  return r.text;
+}
+
 /**
  * Append the orchestrator operating-rules block to a base Cyrus system prompt.
  * Caller decides where in the prompt pipeline to apply it (typically last,
@@ -87,10 +100,26 @@ function appendOrchestratorOperatingRules(basePrompt) {
   return `${basePrompt}\n\n---\n\n${rules.trim()}\n`;
 }
 
+/**
+ * Append the platform-confidentiality block to any dashboard chat system
+ * prompt (Cyrus or a directly-chatted team member). Keeps the implementation
+ * stack of the assistant private regardless of tenant-level prompt content.
+ *
+ * @param {string} basePrompt
+ */
+function appendPlatformConfidentialityRules(basePrompt) {
+  const rules = readPlatformConfidentialityRules();
+  if (!rules.trim()) return basePrompt;
+  return `${basePrompt}\n\n---\n\n${rules.trim()}\n`;
+}
+
 module.exports = {
   readOrchestratorOperatingRules,
   readSubagentOperatingRules,
+  readPlatformConfidentialityRules,
   appendOrchestratorOperatingRules,
+  appendPlatformConfidentialityRules,
   ORCHESTRATOR_RULES_FILE,
   SUBAGENT_RULES_FILE,
+  PLATFORM_CONFIDENTIALITY_FILE,
 };

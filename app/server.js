@@ -211,6 +211,35 @@ function getRegistryReadonly() {
   return registryReadonlyDb;
 }
 
+// ─── Stream-error safety net ─────────────────────────────────────────────────
+// The Claude Agent SDK spawns the `claude` CLI as a child process with stdio
+// pipes. If that child (or a stdio MCP server we spawn, or an SSE client that
+// disconnected mid-stream) is killed/closed, a pending write surfaces an
+// asynchronous `'error'` event on the underlying Socket. Because the SDK does
+// not attach its own listener, Node treats it as unhandled and the whole
+// dashboard dies. Swallow these benign pipe errors so a transient chat failure
+// does not take the server down — they still get logged for debugging.
+function isBenignStreamError(err) {
+  if (!err || typeof err !== 'object') return false;
+  const code = err.code;
+  return code === 'EPIPE' || code === 'ECONNRESET' || code === 'ERR_STREAM_DESTROYED';
+}
+process.on('uncaughtException', (err) => {
+  if (isBenignStreamError(err)) {
+    console.warn(`[server] ignored stream error: ${err.code} ${err.syscall || ''} ${err.message || ''}`.trim());
+    return;
+  }
+  console.error('[server] uncaughtException:', err);
+  process.exit(1);
+});
+process.on('unhandledRejection', (reason) => {
+  if (isBenignStreamError(reason)) {
+    console.warn(`[server] ignored stream rejection: ${reason.code} ${reason.message || ''}`.trim());
+    return;
+  }
+  console.error('[server] unhandledRejection:', reason);
+});
+
 // ─── Graceful shutdown ────────────────────────────────────────────────────────
 process.on('SIGINT', () => {
   [brain, launchpad, finance, wynnset].forEach((db) => {

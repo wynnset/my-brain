@@ -84,6 +84,61 @@ function extractToolLabelFromAssistant(message) {
   return null;
 }
 
+/**
+ * Collect every delegation `tool_use` block in an assistant message (may be
+ * more than one when the model fires parallel `Task` calls in the same turn).
+ * Returns `{ id, agent }` pairs with normalized agent slugs; filters out
+ * generic SDK presets (general-purpose, explore, …) so the UI only shows
+ * lifecycle for real team members.
+ *
+ * @param {unknown} message
+ * @returns {{ id: string, agent: string }[]}
+ */
+function extractDelegationStartsFromAssistant(message) {
+  const out = [];
+  const content = message && typeof message === 'object' ? message.content : null;
+  if (!Array.isArray(content)) return out;
+  for (const block of content) {
+    if (!block || block.type !== 'tool_use' || !block.name) continue;
+    if (!isDelegationToolName(block.name)) continue;
+    const inp = block.input && typeof block.input === 'object' ? block.input : {};
+    const raw =
+      inp.subagent_type ??
+      inp.subagentType ??
+      inp.agent ??
+      inp.agent_id ??
+      inp.agentId;
+    const slug = normalizeSubagentIdSlug(raw);
+    if (!slug) continue;
+    if (isGenericSdkSubagentId(slug)) continue;
+    const id = typeof block.id === 'string' ? block.id : '';
+    out.push({ id, agent: slug });
+  }
+  return out;
+}
+
+/**
+ * Collect every `tool_result` block in a user message — these arrive when a
+ * `Task` subagent (or any tool) finishes. We pair them with the `tool_use_id`
+ * we recorded when the Task started to emit matching segment-end events.
+ *
+ * @param {unknown} message
+ * @returns {{ id: string, ok: boolean }[]}
+ */
+function extractToolResultsFromUser(message) {
+  const out = [];
+  const content = message && typeof message === 'object' ? message.content : null;
+  if (!Array.isArray(content)) return out;
+  for (const block of content) {
+    if (!block || block.type !== 'tool_result') continue;
+    const id = typeof block.tool_use_id === 'string' ? block.tool_use_id : '';
+    if (!id) continue;
+    const ok = block.is_error !== true;
+    out.push({ id, ok });
+  }
+  return out;
+}
+
 /** @param {string} spec @returns {string[] | { type: 'preset', preset: 'claude_code' }} */
 export function parseToolsOption(spec) {
   const s = String(spec || '').trim().toLowerCase();
@@ -125,7 +180,10 @@ export function parsePermissionOptions(spec) {
  * @param {AbortSignal} [opts.abortSignal]
  * @param {(chunk: string) => void} opts.onTextChunk
  * @param {(payload: { tool: string, detail: string }) => void} [opts.onTool]
- * @param {(agentId: string) => void} [opts.onSegmentAgent] when a Task / Agent subagent handoff is detected (best-effort from tool_input)
+ * @param {(agentId: string) => void} [opts.onSegmentAgent] when a Task / Agent subagent handoff is detected (best-effort from tool_input). Legacy single-active-agent signal kept for back-compat; prefer `onSegmentAgentStart`/`onSegmentAgentEnd` for parallel-aware UIs.
+ * @param {(evt: { id: string, agent: string }) => void} [opts.onSegmentAgentStart] fires once per `Task` tool_use block (fires multiple times in the same turn when the model launches parallel subagents).
+ * @param {(evt: { id: string, agent: string, ok: boolean }) => void} [opts.onSegmentAgentEnd] fires when the matching `tool_result` arrives for a previously-started delegation.
+ * @param {Record<string, { description?: string, prompt: string, tools?: string[], model?: string }>} [opts.agentDefinitions] Programmatic subagent registry mapped to `options.agents`. Enables named team members (dash, ledger, …) as `Task(subagent_type="<slug>")` targets.
  * @param {(line: string) => void} [opts.onLog]
  * @param {(sessionId: string) => void} [opts.onInitSession]
  * @param {(evt: { toolName: string, toolInput: unknown }) => void} [opts.onPostToolUse] runs after each tool invocation (even when file audit logging is disabled)
@@ -222,6 +280,20 @@ export async function runAgentSdkQuery(opts) {
   if (opts.resume) options.resume = opts.resume;
   if (opts.pathToClaudeCodeExecutable) options.pathToClaudeCodeExecutable = opts.pathToClaudeCodeExecutable;
   if (opts.model && String(opts.model).trim()) options.model = String(opts.model).trim();
+  if (opts.agentDefinitions && typeof opts.agentDefinitions === 'object' && Object.keys(opts.agentDefinitions).length) {
+    options.agents = opts.agentDefinitions;
+    if (process.env.BRAIN_CHAT_DEBUG_AGENTS === '1' || !opts.resume) {
+      try {
+        const slugs = Object.keys(opts.agentDefinitions).sort();
+        opts.onLog?.(`[chat-sdk] agents registered: ${slugs.join(', ')}`);
+        // Best-effort console visibility so operators can confirm registration
+        // without opting into full debug logging.
+        console.log(`[chat-sdk] agents registered (${slugs.length}): ${slugs.join(', ')}`);
+      } catch (_) {}
+    }
+  } else if (process.env.BRAIN_CHAT_DEBUG_AGENTS === '1') {
+    console.log('[chat-sdk] no agentDefinitions provided to runner');
+  }
 
   let assistantBuf = '';
   let sessionIdOut = null;
@@ -230,6 +302,8 @@ export async function runAgentSdkQuery(opts) {
   const errLines = [];
   /** @type {ReturnType<typeof snapshotSdkBillingFromResultMessage>} */
   let sdkBilling = null;
+  /** Open delegations: `tool_use_id` → agent slug. Cleared as `tool_result` blocks arrive. */
+  const openDelegations = new Map();
 
   const q = query({ prompt: opts.prompt, options });
 
@@ -258,6 +332,25 @@ export async function runAgentSdkQuery(opts) {
       if (msg.type === 'assistant') {
         const label = extractToolLabelFromAssistant(msg.message);
         if (label) opts.onTool?.(label);
+        const starts = extractDelegationStartsFromAssistant(msg.message);
+        for (const s of starts) {
+          if (s.id) openDelegations.set(s.id, s.agent);
+          try {
+            opts.onSegmentAgentStart?.({ id: s.id, agent: s.agent });
+          } catch (_) {}
+        }
+      }
+
+      if (msg.type === 'user') {
+        const results = extractToolResultsFromUser(msg.message);
+        for (const r of results) {
+          const agent = openDelegations.get(r.id);
+          if (!agent) continue;
+          openDelegations.delete(r.id);
+          try {
+            opts.onSegmentAgentEnd?.({ id: r.id, agent, ok: r.ok });
+          } catch (_) {}
+        }
       }
 
       if (msg.type === 'tool_progress') {
@@ -284,6 +377,15 @@ export async function runAgentSdkQuery(opts) {
     try {
       q.close();
     } catch (_) {}
+    // Flush any delegations that never saw a matching tool_result (abort,
+    // fatal error, or a subagent that was silently dropped). The UI should
+    // stop showing them as "working" regardless.
+    for (const [id, agent] of openDelegations) {
+      try {
+        opts.onSegmentAgentEnd?.({ id, agent, ok: false });
+      } catch (_) {}
+    }
+    openDelegations.clear();
   }
 
   const finalText = lastResultText || assistantBuf;

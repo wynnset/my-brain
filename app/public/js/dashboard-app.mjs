@@ -771,7 +771,7 @@ document.addEventListener('alpine:init', function() {
       this._appendWorkPanel(this.normalizeWorkPanelAgentId(this.chatAgent), true);
     },
 
-    _appendWorkPanel(agentId, expanded) {
+    _appendWorkPanel(agentId, expanded, delegationId) {
       var panels = this.chatWorkPanels || [];
       for (var i = 0; i < panels.length; i++) {
         if (!panels[i].done) panels[i].expanded = false;
@@ -779,6 +779,8 @@ document.addEventListener('alpine:init', function() {
       this.chatWorkPanels.push({
         id: 'wp-' + Date.now() + '-' + Math.random().toString(36).slice(2, 9),
         agentId: agentId,
+        /** Server `tool_use_id` for matching segment-end events (parallel delegations). */
+        delegationId: delegationId || null,
         lines: [],
         expanded: expanded !== false,
         done: false,
@@ -822,6 +824,98 @@ document.addEventListener('alpine:init', function() {
         return;
       }
       this.openNewWorkPanelForAgent(aid);
+    },
+
+    /**
+     * Server saw a `Task` tool_use block in an assistant message and emitted a
+     * segment-start for a real team member. Unlike {@link applySegmentAgentFromStream},
+     * this tags the panel with the `tool_use_id` so the matching segment-end
+     * event can target the right panel even when multiple delegations run in
+     * parallel. Idempotent: if a panel with the same delegationId is already
+     * open we leave it alone.
+     *
+     * @param {{ id?: string, agent?: string }} evt
+     */
+    applySegmentAgentStartFromStream(evt) {
+      if (!evt || evt.agent == null) return;
+      var agentRaw = String(evt.agent).trim();
+      if (!agentRaw) return;
+      if (isGenericSdkSubagentId(agentRaw)) return;
+      var aid = this.normalizeWorkPanelAgentId(agentRaw.toLowerCase().replace(/\s+/g, '_'));
+      var known = (this.chatAgents || []).some(function (slug) {
+        return this.normalizeChatAgentId(slug) === aid;
+      }, this);
+      if (!known) return;
+      var delegationId = evt.id != null ? String(evt.id) : '';
+      var panels = this.chatWorkPanels || [];
+      if (delegationId) {
+        for (var i = 0; i < panels.length; i++) {
+          if (panels[i].delegationId === delegationId) {
+            this.chatUiTick = Date.now();
+            return;
+          }
+        }
+      }
+      // Promote a placeholder panel left by an earlier handler in the same
+      // turn instead of opening a second card. Two shapes to promote:
+      //   1. A generic "_delegate" placeholder (legacy `segmentAgent` path).
+      //   2. A same-slug panel opened optimistically by the `tool` event
+      //      handler (guessed from Task prompt body) that is still untagged.
+      // In both cases we adopt the server's `tool_use_id` so the matching
+      // segment-end can close the right card.
+      for (var pi = panels.length - 1; pi >= 0; pi--) {
+        var cand = panels[pi];
+        if (cand.done || cand.delegationId) continue;
+        if (cand.agentId === '_delegate' || cand.agentId === aid) {
+          cand.agentId = aid;
+          cand.delegationId = delegationId || null;
+          cand.startedAt = cand.startedAt || Date.now();
+          cand.expanded = true;
+          this.chatUiTick = Date.now();
+          return;
+        }
+        // Stop at the first not-done panel that isn't a match — we don't
+        // want to promote a Cyrus / parent panel.
+        break;
+      }
+      this._appendWorkPanel(aid, true, delegationId || null);
+      this.chatUiTick = Date.now();
+      this.$nextTick(function () { this.scrollChatToBottom(); }.bind(this));
+    },
+
+    /**
+     * Server saw a `tool_result` arrive for a previously-started delegation.
+     * Mark the matching panel done so the UI stops showing "<agent> is
+     * working" for it. If the delegationId doesn't match any panel (older
+     * server / missed start event), fall back to the most recent open panel
+     * for that agent slug.
+     *
+     * @param {{ id?: string, agent?: string, ok?: boolean }} evt
+     */
+    applySegmentAgentEndFromStream(evt) {
+      if (!evt) return;
+      var delegationId = evt.id != null ? String(evt.id) : '';
+      var agentRaw = evt.agent != null ? String(evt.agent).trim() : '';
+      var aid = agentRaw
+        ? this.normalizeWorkPanelAgentId(agentRaw.toLowerCase().replace(/\s+/g, '_'))
+        : '';
+      var panels = this.chatWorkPanels || [];
+      var target = null;
+      if (delegationId) {
+        for (var i = 0; i < panels.length; i++) {
+          if (panels[i].delegationId === delegationId) { target = panels[i]; break; }
+        }
+      }
+      if (!target && aid) {
+        for (var j = panels.length - 1; j >= 0; j--) {
+          if (!panels[j].done && panels[j].agentId === aid) { target = panels[j]; break; }
+        }
+      }
+      if (!target) return;
+      target.done = true;
+      target.expanded = false;
+      if (!target.endedAt) target.endedAt = Date.now();
+      this.chatUiTick = Date.now();
     },
 
     appendWorkLineToCurrentPanel(text, idSuffix) {
@@ -3012,9 +3106,12 @@ document.addEventListener('alpine:init', function() {
       if (ext) return ext.toUpperCase() + ' file';
       return 'File';
     },
-    fileIsText(name) { return /\.(md|html|txt|json|csv|sql)$/i.test(name); },
+    fileIsText(name) { return /\.(md|html|txt|json|csv|sql|log|xml|yaml|yml|ini|conf|tsv)$/i.test(name); },
     fileIsPdf(name) { return /\.pdf$/i.test(name); },
     fileIsEditable(name) { return /\.(md|html|txt|json)$/i.test(name); },
+    fileIsImage(name) { return /\.(png|jpe?g|gif|webp|svg|avif|bmp|ico)$/i.test(name); },
+    fileIsAudio(name) { return /\.(mp3|wav|ogg|oga|m4a|aac|flac|opus)$/i.test(name); },
+    fileIsVideo(name) { return /\.(mp4|webm|ogv|mov|m4v)$/i.test(name); },
     fileDownloadHref(dir, name) {
       return dir === 'root' ? '/api/cyrus' : '/api/files/' + encodeURIComponent(dir) + '/' + encodeURIComponent(name);
     },
@@ -3115,7 +3212,19 @@ document.addEventListener('alpine:init', function() {
 
     openFileRow(dir, name) {
       if (this.fileIsPdf(name)) {
-        this.openPdfViewer(dir, name);
+        this.openAssetViewer(dir, name, 'pdf');
+        return;
+      }
+      if (this.fileIsImage(name)) {
+        this.openAssetViewer(dir, name, 'image');
+        return;
+      }
+      if (this.fileIsVideo(name)) {
+        this.openAssetViewer(dir, name, 'video');
+        return;
+      }
+      if (this.fileIsAudio(name)) {
+        this.openAssetViewer(dir, name, 'audio');
         return;
       }
       if (this.fileIsText(name)) {
@@ -3125,13 +3234,16 @@ document.addEventListener('alpine:init', function() {
       this.showDownloadOnlyPanel(dir, name);
     },
 
-    openPdfViewer(dir, name) {
+    openPdfViewer(dir, name) { this.openAssetViewer(dir, name, 'pdf'); },
+
+    /** Open the viewer in an asset mode (pdf/image/video/audio) that streams bytes directly from /api/files. */
+    openAssetViewer(dir, name, mode) {
       this.editorOpen = false;
       this.viewerPath = { dir: dir, name: name };
       this.viewerTitle = name;
       this.viewerContent = '';
       this.viewerLoadError = '';
-      this.viewerDisplayMode = 'pdf';
+      this.viewerDisplayMode = mode;
       this.viewerOpen = true;
       var self = this;
       this.$nextTick(function() { self.refreshIcons(); });
@@ -3748,6 +3860,12 @@ document.addEventListener('alpine:init', function() {
                 if (msg.segmentAgent) {
                   self.applySegmentAgentFromStream(msg.segmentAgent);
                 }
+                if (msg.segmentAgentStart) {
+                  self.applySegmentAgentStartFromStream(msg.segmentAgentStart);
+                }
+                if (msg.segmentAgentEnd) {
+                  self.applySegmentAgentEndFromStream(msg.segmentAgentEnd);
+                }
                 if (msg.status === 'started') {
                   self.appendChatWaitingStatusLine(pickChatWorkStartedLine());
                 }
@@ -3763,16 +3881,14 @@ document.addEventListener('alpine:init', function() {
                   self.clearAllWorkPanelWaitingSlots();
                   var td = msg.toolDetail ? String(msg.toolDetail).trim().slice(0, 240) : '';
                   self.appendWorkLineToCurrentPanel(td ? msg.tool + ': ' + td : String(msg.tool), 'tool');
-                  // Open a new "<agent> is working" panel only when delegation targets a
-                  // real team member. Generic SDK presets (general-purpose, explore, …)
-                  // and unknown slugs are intentionally ignored here: the parent agent
-                  // (Cyrus or whoever delegated) stays the visible speaker. The server
-                  // also emits a `segmentAgent` event for confirmed team handoffs — see
-                  // applySegmentAgentFromStream for that path.
-                  if (isChatDelegationToolName(msg.tool)) {
-                    var guessed = self.guessWorkAgentFromTaskDetail(msg.toolDetail || '');
-                    if (guessed) self.openNewWorkPanelForAgent(guessed);
-                  }
+                  // Delegation panels are driven exclusively by the authoritative
+                  // server `segmentAgentStart` / `segmentAgentEnd` events. We
+                  // intentionally do NOT guess the delegate from the Task prompt
+                  // body here — that optimistic path created duplicate cards
+                  // (one from the prompt-text guess, one from the tool_use_id
+                  // event). The parent panel keeps showing the `Task: ...` log
+                  // line above; the delegate's own panel is opened by
+                  // applySegmentAgentStartFromStream when the server confirms.
                 }
                 if (msg.sdkUsageSessionTotals != null) {
                   self.chatSdkUsageSessionTotals = msg.sdkUsageSessionTotals;

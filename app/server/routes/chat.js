@@ -1,6 +1,15 @@
 'use strict';
 
 const { ORCH_BRIEF_FILE, ORCH_BRIEF_LEGACY } = require('../lib/orchestrator-brief.js');
+const {
+  appendOrchestratorOperatingRules,
+  readSubagentOperatingRules,
+} = require('../chat/operating-rules.js');
+const {
+  loadTenantAgentDefinitions,
+  parseGlobalToolAllowEnv,
+} = require('../chat/team-agents.js');
+const chatMemory = require('../chat/chat-memory.js');
 
 /** @param {import("express").Application} app @param {Record<string, unknown>} ctx */
 module.exports = function registerChatRoutes(app, ctx) {
@@ -181,6 +190,64 @@ module.exports = function registerChatRoutes(app, ctx) {
     }
   }
 
+  /**
+   * Best-effort markdown-mirror of a chat session under
+   * `<workspaceDir>/memory/chats/<id>.md`. Never throws — a mirror failure
+   * must not take down the live chat. See `chat-memory.js` for the format
+   * and rationale.
+   *
+   * @param {import('express').Request} req
+   * @param {Record<string, unknown>} sess
+   */
+  function mirrorChatSessionSafely(req, sess) {
+    if (chatMemory.isFeatureDisabled()) return;
+    try {
+      const ws = workspaceDirForRequest(req);
+      chatMemory.writeChatSessionMemoryMirror(ws, sess);
+    } catch (err) {
+      console.warn('[chat-memory] mirror write failed:', err && err.message ? err.message : err);
+    }
+  }
+
+  /**
+   * Canonical write path for chat sessions: persist the JSON atomically, then
+   * update the workspace-visible markdown mirror so the agent can Grep prior
+   * turns on the next request. Callers keep their existing try/catch around
+   * this call — the JSON write is what may fail; the mirror is best-effort.
+   *
+   * @param {import('express').Request} req
+   * @param {string} conversationId
+   * @param {Record<string, unknown>} sess
+   */
+  function persistChatSession(req, conversationId, sess) {
+    const p = chatSessionPath(req, conversationId);
+    if (!p) throw new Error('Invalid conversation id');
+    atomicWriteChatSession(p, sess);
+    mirrorChatSessionSafely(req, sess);
+  }
+
+  /**
+   * Lazy per-tenant backfill: walk the chat-sessions dir once per tenant on
+   * first chat use and write any missing mirrors. Guarded by a marker file
+   * so subsequent requests short-circuit. Safe to call on every POST.
+   *
+   * @param {import('express').Request} req
+   */
+  function ensureChatMemoryBackfilled(req) {
+    if (chatMemory.isFeatureDisabled()) return;
+    try {
+      const ws = workspaceDirForRequest(req);
+      const dir = chatSessionsDirForRequest(req);
+      chatMemory.backfillChatSessionMemoryMirrors({
+        chatSessionsDir: dir,
+        workspaceDir: ws,
+        readOneSession: (id) => readChatSession(req, id),
+      });
+    } catch (err) {
+      console.warn('[chat-memory] backfill failed:', err && err.message ? err.message : err);
+    }
+  }
+
   /** Same top-level dirs as Files in the dashboard (+ workspace-root orchestrator brief). */
   const CHAT_WORKSPACE_TOUCH_LIMIT = 200;
   const FILES_TAB_PREFIXES = new Set(['owners-inbox', 'team-inbox', 'team', 'docs']);
@@ -299,7 +366,7 @@ module.exports = function registerChatRoutes(app, ctx) {
     ]);
     fresh.workspaceTouches = merged;
     try {
-      atomicWriteChatSession(p, fresh);
+      persistChatSession(req, conversationId, fresh);
     } catch (e) {
       console.warn('[chat] workspaceTouches merge failed', e.message);
     }
@@ -556,7 +623,7 @@ module.exports = function registerChatRoutes(app, ctx) {
       }
     }
     try {
-      atomicWriteChatSession(p, fresh);
+      persistChatSession(req, conversationId, fresh);
     } catch (e) {
       console.warn('[chat-plan] could not persist plan fields', e.message);
     }
@@ -605,7 +672,7 @@ module.exports = function registerChatRoutes(app, ctx) {
     fresh.agentSdkSessionId = sessionId;
     fresh.updatedAt = new Date().toISOString();
     try {
-      atomicWriteChatSession(p, fresh);
+      persistChatSession(req, conversationId, fresh);
     } catch (e) {
       console.warn('[chat-sdk] could not persist agentSdkSessionId', e.message);
     }
@@ -1187,8 +1254,7 @@ module.exports = function registerChatRoutes(app, ctx) {
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
     const sess = { id, agent, model: model || getDefaultChatModelId(), title: 'New chat', createdAt: now, updatedAt: now, messages: [] };
-    const p = chatSessionPath(req, id);
-    atomicWriteChatSession(p, sess);
+    persistChatSession(req, id, sess);
     res.json({ id });
   });
   
@@ -1208,7 +1274,7 @@ module.exports = function registerChatRoutes(app, ctx) {
     sess.title = title;
     sess.updatedAt = new Date().toISOString();
     try {
-      atomicWriteChatSession(chatSessionPath(req, id), sess);
+      persistChatSession(req, id, sess);
     } catch (err) {
       return res.status(500).json({ error: err.message || 'Could not save conversation' });
     }
@@ -1272,7 +1338,7 @@ module.exports = function registerChatRoutes(app, ctx) {
       else stripForkBranchPlanAndResume(newSess);
 
       try {
-        atomicWriteChatSession(chatSessionPath(req, newId), newSess);
+        persistChatSession(req, newId, newSess);
       } catch (err) {
         return res.status(500).json({ error: err.message || 'Could not save forked conversation' });
       }
@@ -1322,7 +1388,7 @@ module.exports = function registerChatRoutes(app, ctx) {
     else stripForkBranchPlanAndResume(newSess);
 
     try {
-      atomicWriteChatSession(chatSessionPath(req, newId), newSess);
+      persistChatSession(req, newId, newSess);
     } catch (err) {
       return res.status(500).json({ error: err.message || 'Could not save forked conversation' });
     }
@@ -1355,7 +1421,7 @@ module.exports = function registerChatRoutes(app, ctx) {
 
     sess.updatedAt = new Date().toISOString();
     try {
-      atomicWriteChatSession(chatSessionPath(req, convId), sess);
+      persistChatSession(req, convId, sess);
     } catch (err) {
       return res.status(500).json({ error: err.message || 'Could not update conversation' });
     }
@@ -1363,12 +1429,19 @@ module.exports = function registerChatRoutes(app, ctx) {
   });
   
   app.delete('/api/chat/conversations/:id', (req, res) => {
-    const p = chatSessionPath(req, req.params.id);
+    const convId = String(req.params.id || '');
+    const p = chatSessionPath(req, convId);
     if (!p) return res.status(400).json({ error: 'Invalid id' });
     try {
       if (fs.existsSync(p)) fs.unlinkSync(p);
     } catch (err) {
       return res.status(500).json({ error: err.message });
+    }
+    try {
+      const ws = workspaceDirForRequest(req);
+      chatMemory.deleteChatSessionMemoryMirror(ws, convId);
+    } catch (err) {
+      console.warn('[chat-memory] mirror delete failed:', err && err.message ? err.message : err);
     }
     res.json({ ok: true });
   });
@@ -1380,7 +1453,12 @@ module.exports = function registerChatRoutes(app, ctx) {
     if (!conversationId || !CHAT_ID_RE.test(String(conversationId))) {
       return res.status(400).json({ error: 'Missing or invalid conversationId' });
     }
-  
+
+    // First-chat-per-tenant backfill of `memory/chats/` mirrors. Guarded by a
+    // marker file so this is a one-time cost; subsequent writes come through
+    // the hot path in `persistChatSession`.
+    ensureChatMemoryBackfilled(req);
+
     const sess = readChatSession(req, conversationId);
     if (!sess) return res.status(404).json({ error: 'Conversation not found' });
   
@@ -1408,7 +1486,7 @@ module.exports = function registerChatRoutes(app, ctx) {
       if (fromBody.length) {
         sess.planTodos = chatPlanExecuteTodos;
         try {
-          atomicWriteChatSession(chatSessionPath(req, conversationId), sess);
+          persistChatSession(req, conversationId, sess);
         } catch (e) {
           return res.status(500).json({ error: `Could not save plan: ${e.message}` });
         }
@@ -1450,6 +1528,10 @@ module.exports = function registerChatRoutes(app, ctx) {
     systemPrompt = appendProprietaryAssistantInstructions(systemPrompt);
     systemPrompt = appendWorkspaceFileEvidenceInstructions(systemPrompt);
     systemPrompt = appendDashboardManifestChatGuidance(req, systemPrompt);
+    if (isOrchestratorChatAgent(sessionAgent)) {
+      systemPrompt = appendOrchestratorOperatingRules(systemPrompt);
+      systemPrompt = chatMemory.appendMemoryInstructions(systemPrompt);
+    }
     if (planPhase === 'plan') systemPrompt += CHAT_PLAN_PHASE_SYSTEM_SUFFIX;
     if (planPhase === 'execute') systemPrompt += CHAT_EXECUTE_PLAN_SYSTEM_SUFFIX;
     if (hadPendingPlan && !planPhase) systemPrompt += CHAT_PLAN_REVISION_CHAT_SUFFIX;
@@ -1467,7 +1549,7 @@ module.exports = function registerChatRoutes(app, ctx) {
     }
     sess.updatedAt = now;
     try {
-      atomicWriteChatSession(chatSessionPath(req, conversationId), sess);
+      persistChatSession(req, conversationId, sess);
     } catch (err) {
       sess.messages.pop();
       return res.status(500).json({ error: `Could not save message: ${err.message}` });
@@ -1547,7 +1629,7 @@ module.exports = function registerChatRoutes(app, ctx) {
       fresh.messages.push(msg);
       fresh.updatedAt = msg.createdAt;
       try {
-        atomicWriteChatSession(chatSessionPath(req, conversationId), fresh);
+        persistChatSession(req, conversationId, fresh);
         return fresh;
       } catch (e) {
         console.warn('[chat] could not save assistant message', e.message);
@@ -1592,6 +1674,14 @@ module.exports = function registerChatRoutes(app, ctx) {
         try { proc.kill(); } catch (_) {}
       }
     });
+    // Client-disconnect mid-stream triggers EPIPE on the response socket; the
+    // default Node behavior is to treat the unhandled 'error' as fatal. We
+    // already abort the run via 'close' above, so just log and move on.
+    res.on('error', (err) => {
+      const code = err && err.code;
+      if (code === 'EPIPE' || code === 'ECONNRESET' || code === 'ERR_STREAM_DESTROYED') return;
+      console.warn('[chat] response socket error:', err && err.message ? err.message : err);
+    });
   
     if (BRAIN_CHAT_BACKEND === 'sdk') {
       (async () => {
@@ -1626,6 +1716,52 @@ module.exports = function registerChatRoutes(app, ctx) {
           if (planPhase === 'plan') {
             toolsOpt = ['Read', 'Glob', 'Grep'];
           }
+          // Programmatic subagent registration: only wire up team/<name>.md
+          // handoffs when the user is chatting with Cyrus. Direct chats with a
+          // named team member stay single-agent — no fan-out from Dash to
+          // Ledger (etc.) during a one-on-one. Plan mode is read-only so we
+          // skip it there too (no writes means no useful delegation work).
+          let tenantAgents;
+          if (isOrchestratorChatAgent(sessionAgent) && planPhase !== 'plan') {
+            try {
+              tenantAgents = loadTenantAgentDefinitions({
+                workspaceDir: chatWorkspaceDir,
+                subagentRules: readSubagentOperatingRules(),
+                globalToolAllow: parseGlobalToolAllowEnv(process.env.BRAIN_CHAT_SUBAGENT_TOOLS),
+                onWarn: (m) => console.warn(m),
+              });
+              if (tenantAgents && Object.keys(tenantAgents).length) {
+                console.log(
+                  `[chat] team-agents loaded for ${sessionAgent} from ${chatWorkspaceDir}/team: ${Object.keys(tenantAgents).sort().join(', ')}`
+                );
+                // Inject an explicit roster into Cyrus's system prompt so the
+                // model has the valid `subagent_type` slugs in-prompt, not
+                // only via the Task tool schema. Without this, some model
+                // variants fall back to `general-purpose` and impersonate the
+                // specialist via the prompt body instead of actually
+                // delegating.
+                const rosterLines = Object.entries(tenantAgents)
+                  .sort((a, b) => a[0].localeCompare(b[0]))
+                  .map(([slug, def]) => `- \`${slug}\` — ${def.description || ''}`.trim());
+                const rosterBlock = [
+                  '## Available team members (as `Task(subagent_type=…)` targets)',
+                  '',
+                  'These are the exact subagent_type values registered for this workspace.',
+                  'When you decide to delegate, you MUST pick one of these slugs — do not',
+                  'use `general-purpose` to impersonate a team member via the prompt body.',
+                  '',
+                  ...rosterLines,
+                ].join('\n');
+                systemPrompt = `${systemPrompt}\n\n---\n\n${rosterBlock}\n`;
+              } else {
+                console.warn(
+                  `[chat] team-agents: no definitions found in ${chatWorkspaceDir}/team (Cyrus has nothing to delegate to)`
+                );
+              }
+            } catch (err) {
+              console.warn('[chat-sdk] team-agents load failed:', err.message);
+            }
+          }
           const out = await runner.runAgentSdkQuery({
             prompt: promptText,
             systemPrompt,
@@ -1643,6 +1779,7 @@ module.exports = function registerChatRoutes(app, ctx) {
             auditTools: process.env.BRAIN_CHAT_AUDIT_TOOLS !== '0',
             maxTurns: Number(process.env.BRAIN_CHAT_MAX_TURNS) || 100,
             pathToClaudeCodeExecutable: resolveClaudeCodeExecutablePath() || undefined,
+            agentDefinitions: tenantAgents,
             abortSignal: chatAbort.signal,
             onTextChunk: (t) => {
               if (!t) return;
@@ -1659,6 +1796,32 @@ module.exports = function registerChatRoutes(app, ctx) {
             onSegmentAgent: (agentId) => {
               try {
                 if (agentId) res.write(`data: ${JSON.stringify({ segmentAgent: String(agentId) })}\n\n`);
+              } catch (_) {}
+            },
+            onSegmentAgentStart: ({ id, agent }) => {
+              try {
+                if (agent) {
+                  res.write(
+                    `data: ${JSON.stringify({
+                      segmentAgentStart: { id: String(id || ''), agent: String(agent) },
+                    })}\n\n`
+                  );
+                }
+              } catch (_) {}
+            },
+            onSegmentAgentEnd: ({ id, agent, ok }) => {
+              try {
+                if (agent) {
+                  res.write(
+                    `data: ${JSON.stringify({
+                      segmentAgentEnd: {
+                        id: String(id || ''),
+                        agent: String(agent),
+                        ok: ok !== false,
+                      },
+                    })}\n\n`
+                  );
+                }
               } catch (_) {}
             },
             onInitSession: (sid) => mergeAgentSdkSessionIntoSession(req, conversationId, sid),

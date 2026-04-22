@@ -893,7 +893,14 @@ document.addEventListener('alpine:init', function() {
     initChatWorkPanelsForTurn(bucket) {
       bucket = bucket || this.getChatStreamBucket(this.chatConversationId);
       if (!bucket) return;
+      // Reassign a fresh array and re-sync the root reactive field so the UI
+      // doesn't keep rendering the previous turn's "Done" panels. Without this
+      // re-sync, `this.chatWorkPanels` keeps pointing at the stale array that
+      // `restoreRootFromChatBucket` (called just before this) bound to.
       bucket.workPanels = [];
+      if (this.chatConversationId === bucket.convId) {
+        this.chatWorkPanels = bucket.workPanels;
+      }
       this._appendWorkPanel(bucket, this.normalizeWorkPanelAgentId(this.chatAgent), true);
     },
 

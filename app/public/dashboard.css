@@ -96,7 +96,18 @@ body { touch-action: manipulation; }
   margin: 0;
   width: max(100%, max-content);
 }
-.chat-md-output th, .chat-md-output td { border: 1px solid rgb(226 232 240); padding: 0.35em 0.5em; text-align: left; }
+.chat-md-output th, .chat-md-output td {
+  border: 1px solid rgb(226 232 240);
+  padding: 0.35em 0.5em;
+  text-align: left;
+  /* Override the parent .chat-md-output `word-break: break-word`, which lets the
+     browser chop short header words like "Available" or numbers like "$16,500"
+     mid-character to squeeze a column narrower. Use the standard pair instead so
+     each column is at least as wide as its longest word, and only truly long
+     unbreakable strings (URLs, hashes, etc.) are allowed to break. */
+  word-break: normal;
+  overflow-wrap: break-word;
+}
 .dark .chat-md-output th, .dark .chat-md-output td { border-color: rgb(51 65 85); }
 .chat-md-output th { background: rgb(248 250 252); font-weight: 600; }
 .dark .chat-md-output th { background: rgb(30 41 59); }

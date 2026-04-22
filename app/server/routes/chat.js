@@ -42,6 +42,8 @@ module.exports = function registerChatRoutes(app, ctx) {
 
   // ─── Chat sessions (JSON files under tenant dataDir/chat-sessions) ─────────────
   const CHAT_LIST_LIMIT = 200;
+  /** Hard cap on how many conversations a tenant may pin. Keeps the "stack at top" UX compact. */
+  const CHAT_MAX_PINS = 5;
   /** SSE keepalive while the model runs; UI copy rotates on its own — this only needs to beat proxy timeouts. */
   const CHAT_HEARTBEAT_MS = Number(process.env.BRAIN_CHAT_HEARTBEAT_MS) || 5000;
   const CHAT_MAX_TRANSCRIPT_CHARS = Number(process.env.BRAIN_CHAT_MAX_TRANSCRIPT_CHARS) || 100000;
@@ -1364,6 +1366,7 @@ module.exports = function registerChatRoutes(app, ctx) {
       const sess = readChatSession(req, id);
       if (!sess) continue;
       const sum = chatRunRegistry.summary(id);
+      const pinnedAt = sess.pinnedAt && typeof sess.pinnedAt === 'string' ? sess.pinnedAt : null;
       items.push({
         id: sess.id,
         agent: sess.agent,
@@ -1372,10 +1375,17 @@ module.exports = function registerChatRoutes(app, ctx) {
         updatedAt: sess.updatedAt || sess.createdAt,
         active: USE_CHAT_RUN_REGISTRY ? sum.active : false,
         lastEventSeq: USE_CHAT_RUN_REGISTRY ? sum.lastSeq : 0,
+        pinned: Boolean(pinnedAt),
+        pinnedAt,
       });
     }
-    items.sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
-    res.json({ conversations: items.slice(0, CHAT_LIST_LIMIT) });
+    // Pinned first (most-recently-pinned on top), then everything else by recency.
+    items.sort((a, b) => {
+      if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+      if (a.pinned && b.pinned) return String(b.pinnedAt || '').localeCompare(String(a.pinnedAt || ''));
+      return String(b.updatedAt).localeCompare(String(a.updatedAt));
+    });
+    res.json({ conversations: items.slice(0, CHAT_LIST_LIMIT), maxPins: CHAT_MAX_PINS });
   });
   
   app.get('/api/chat/models', (req, res) => {
@@ -1469,6 +1479,54 @@ module.exports = function registerChatRoutes(app, ctx) {
       return res.status(500).json({ error: err.message || 'Could not save conversation' });
     }
     res.json({ ok: true, title: sess.title });
+  });
+
+  /**
+   * Toggle "pinned" on a conversation so the dashboard can show it in the
+   * stacked quick-switch strip above the active chat. Body: `{ pinned: boolean }`.
+   * Enforces a hard cap of `CHAT_MAX_PINS` pins per tenant so the UI strip
+   * stays compact.
+   */
+  app.post('/api/chat/conversations/:id/pin', (req, res) => {
+    const id = req.params.id;
+    if (!CHAT_ID_RE.test(String(id || ''))) return res.status(400).json({ error: 'Invalid id' });
+    const sess = readChatSession(req, id);
+    if (!sess) return res.status(404).json({ error: 'Conversation not found' });
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const pinned = body.pinned === true || body.pinned === 'true';
+    const alreadyPinned = Boolean(sess.pinnedAt);
+
+    if (pinned && !alreadyPinned) {
+      let pinCount = 0;
+      try {
+        const files = fs.readdirSync(chatSessionsDirForRequest(req)).filter((f) => f.endsWith('.json'));
+        for (const f of files) {
+          const otherId = f.replace(/\.json$/, '');
+          if (!CHAT_ID_RE.test(otherId)) continue;
+          if (otherId === id) continue;
+          const other = readChatSession(req, otherId);
+          if (other && other.pinnedAt) pinCount++;
+        }
+      } catch (_) {}
+      if (pinCount >= CHAT_MAX_PINS) {
+        return res.status(400).json({
+          error: `You can pin up to ${CHAT_MAX_PINS} chats. Unpin another chat first.`,
+          maxPins: CHAT_MAX_PINS,
+        });
+      }
+    }
+
+    if (pinned) {
+      sess.pinnedAt = new Date().toISOString();
+    } else {
+      delete sess.pinnedAt;
+    }
+    try {
+      persistChatSession(req, id, sess);
+    } catch (err) {
+      return res.status(500).json({ error: err.message || 'Could not update pin state' });
+    }
+    res.json({ ok: true, pinned: Boolean(sess.pinnedAt), pinnedAt: sess.pinnedAt || null });
   });
 
   /**

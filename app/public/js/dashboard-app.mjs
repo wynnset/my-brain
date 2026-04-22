@@ -162,6 +162,12 @@ document.addEventListener('alpine:init', function() {
     /** From server: cumulative SDK billing for the active conversation (Anthropic / Agent SDK). */
     chatSdkUsageSessionTotals: null,
     chatConversations: [],
+    /** Server-enforced cap mirrored on the client so the UI can show a helpful hint. */
+    chatMaxPins: 5,
+    /** Per-id flag to disable the pin button while the POST is in flight. */
+    chatPinPending: {},
+    /** Drives the top-center pin-limit banner (z-[120], visible above any modal). */
+    chatPinLimitHintVisible: false,
     chatSessionTitle: '',
     /** Inline rename: click title → edit; saved via PATCH. */
     chatTitleEditing: false,
@@ -557,7 +563,14 @@ document.addEventListener('alpine:init', function() {
       this.chatOpen = true;
       this._lockBodyForMobileChat(true);
       this.focusChatPrompt();
-      this.$nextTick(function() { this.refreshIcons(); }.bind(this));
+      // Pinned-chat strip reads from chatConversations; refresh silently so
+      // the user sees the up-to-date pins as soon as the panel opens, and
+      // repaint lucide icons once pinned rows land in the DOM.
+      var self = this;
+      this.loadConversationList()
+        .catch(function () {})
+        .then(function () { self.$nextTick(function () { self.refreshIcons(); }); });
+      this.$nextTick(function() { self.refreshIcons(); });
     },
 
     closeChat() {
@@ -1252,11 +1265,115 @@ document.addEventListener('alpine:init', function() {
         if (!r.ok) return;
         var d = await r.json();
         this.chatConversations = d.conversations || [];
+        if (Number.isFinite(d.maxPins) && d.maxPins > 0) this.chatMaxPins = d.maxPins;
         var self = this;
         (this.chatConversations || []).forEach(function (c) {
           if (c && c.active && c.id) self.ensureBackgroundStreamAttach(String(c.id));
         });
+        // Pinned strip + history modal use dynamic :data-lucide icon names;
+        // lucide doesn't repaint until we ask it to.
+        this.$nextTick(function () { self.refreshIcons(); });
       } catch (_) {}
+    },
+
+    /** Pinned conversations ordered as the server returned them (pinnedAt desc, newest-pin first). */
+    pinnedChatConversations() {
+      var list = this.chatConversations || [];
+      var out = [];
+      for (var i = 0; i < list.length; i++) {
+        if (list[i] && list[i].pinned) out.push(list[i]);
+      }
+      return out;
+    },
+
+    /** True iff the tenant is already at the pin cap and `id` is not already one of them. */
+    pinLimitReachedFor(id) {
+      var pinned = this.pinnedChatConversations();
+      if (pinned.length < (this.chatMaxPins || 5)) return false;
+      for (var i = 0; i < pinned.length; i++) {
+        if (pinned[i].id === id) return false;
+      }
+      return true;
+    },
+
+    /**
+     * Briefly show the pin-cap message via a dedicated top-center banner at
+     * z-[120] so it floats above the Conversations modal (z-[70]) and any
+     * other overlay, instead of being painted under them like the shared
+     * upload-toast stack at z-[60].
+     */
+    showPinLimitHint() {
+      this.chatPinLimitHintVisible = true;
+      var self = this;
+      if (this._pinHintTimer) clearTimeout(this._pinHintTimer);
+      this._pinHintTimer = setTimeout(function () {
+        self.chatPinLimitHintVisible = false;
+        self._pinHintTimer = null;
+      }, 4000);
+    },
+
+    dismissPinLimitHint() {
+      this.chatPinLimitHintVisible = false;
+      if (this._pinHintTimer) {
+        clearTimeout(this._pinHintTimer);
+        this._pinHintTimer = null;
+      }
+    },
+
+    /**
+     * Flip pin state on a conversation. Optimistically updates the local copy
+     * so the stacked strip reorders immediately, then reconciles on the
+     * response. Called from both the history modal and the strip itself.
+     */
+    async togglePinConversation(id, ev) {
+      if (ev && ev.stopPropagation) ev.stopPropagation();
+      if (!id) return;
+      var list = this.chatConversations || [];
+      var row = null;
+      for (var i = 0; i < list.length; i++) {
+        if (list[i] && list[i].id === id) { row = list[i]; break; }
+      }
+      var nextPinned = !(row && row.pinned);
+      if (nextPinned && this.pinLimitReachedFor(id)) {
+        this.showPinLimitHint();
+        return;
+      }
+      this.chatPinPending = Object.assign({}, this.chatPinPending, (function () { var o = {}; o[id] = true; return o; })());
+      try {
+        var r = await fetchWithAuth('/api/chat/conversations/' + encodeURIComponent(id) + '/pin', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pinned: nextPinned }),
+        });
+        if (!r.ok) {
+          var msg = 'Could not update pin';
+          var serverMaxPins = null;
+          try {
+            var ej = await r.json();
+            if (ej && ej.error) msg = ej.error;
+            if (ej && Number.isFinite(ej.maxPins) && ej.maxPins > 0) serverMaxPins = ej.maxPins;
+          } catch (_) {}
+          if (r.status === 400 && serverMaxPins) {
+            this.chatMaxPins = serverMaxPins;
+            this.showPinLimitHint();
+          } else {
+            this.uploadToast = msg;
+            this.uploadToastClass = 'bg-red-700';
+            var self2 = this;
+            setTimeout(function () { self2.uploadToast = ''; }, 4000);
+          }
+          return;
+        }
+        await this.loadConversationList();
+        var self = this;
+        this.$nextTick(function () { self.refreshIcons(); });
+      } catch (e) {
+        console.warn('[chat] togglePin', e && e.message ? e.message : e);
+      } finally {
+        var copy = Object.assign({}, this.chatPinPending);
+        delete copy[id];
+        this.chatPinPending = copy;
+      }
     },
 
     /** @param {string} convId */

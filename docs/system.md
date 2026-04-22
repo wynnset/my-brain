@@ -108,7 +108,7 @@ Browser  →  public/dashboard.html + public/js/*.mjs  (hash routes: #/, #/caree
          SQLite under DB_DIR (single-tenant) or users/<uuid>/data/ (multi-user)
 ```
 
-**Main JSON endpoints:** `/api/health`, `/api/auth-status`, `/api/login`, `/api/logout`, `/api/dashboard`, `/api/dashboard-manifest`, `/api/dashboard-page/:slug`, `/api/dashboard-section/...`, `/api/dashboard-section-todos/...`, `/api/dashboard-section-view/...`, `/api/career`, `/api/finance`, `/api/business`, `/api/action-domain/:slug`, `/api/action-items/:id`, `/api/files`, `/api/upload`, `/api/chat`, `/api/chat/conversations`, `/api/chat/conversations/:id/stream`, `/api/chat/conversations/:id/abort`, `/api/db`, orchestrator brief routes (`/api/cyrus`, …).
+**Main JSON endpoints:** `/api/health`, `/api/auth-status`, `/api/login`, `/api/logout`, `/api/dashboard`, `/api/dashboard-manifest`, `/api/dashboard-page/:slug`, `/api/dashboard-section/...`, `/api/dashboard-section-todos/...`, `/api/dashboard-section-view/...`, `/api/career`, `/api/finance`, `/api/business`, `/api/action-domain/:slug`, `/api/action-items/:id`, `/api/files`, `/api/upload`, `/api/chat`, `/api/chat/limits`, `/api/chat/usage-summary`, `/api/chat/conversations`, `/api/chat/conversations/:id/stream`, `/api/chat/conversations/:id/abort`, `/api/db`, orchestrator brief routes (`/api/cyrus`, …).
 
 ### Dashboard manifest (`workspace/dashboard.json`)
 
@@ -216,6 +216,49 @@ Plan mode (checklist / execute) requires **`BRAIN_CHAT_BACKEND=sdk`**.
 - **Machine API:** optional per-user `api_token` in `registry`; send `Authorization: Bearer <token>` for `POST /api/db` and `POST /api/upload` without a browser cookie.
 
 Single-tenant mode: leave **`BRAIN_MULTI_USER` unset**, put the four `*.db` files under `DB_DIR`, set **`DASHBOARD_PASSWORD`** (or rely on open local use).
+
+### Per-user chat credit limits (multi-user only)
+
+Every tenant has a **daily** and **monthly** USD cap on chat spend, enforced by
+the server before `POST /api/chat` accepts a new message. Counters live in
+`registry.db` (columns on `users` + `user_usage` table) so neither the dashboard
+user nor the agents running on their behalf can edit them — the per-tenant
+`data/` directory never sees this table.
+
+- **Defaults:** `$10` daily / `$10` monthly, applied via column defaults when
+  `registry.db` is initialised / migrated (`app/server/tenancy/registry-db.js`).
+- **Daily reset:** UTC midnight. `day_key` rolls forward on the first request of
+  the new day; the counter zeroes itself.
+- **Monthly reset:** anchored to the user's account creation day-of-month
+  (`users.created_at`). When a month does not contain that day (Feb 30/31, etc.)
+  the cycle starts on that month's last day instead, so Jan 31 → Feb 28/29 → Mar 31.
+- **Accounting:** after each assistant turn with billing data, the chat route
+  calls `registryDb.addUsage(db, userId, totalCostUsd)`. The SDK backend reports
+  `totalCostUsd`; the CLI backend does not, so CLI turns currently do not move
+  the counters (see "Useful env (chat)").
+- **Enforcement:** `POST /api/chat` returns **`402 Payment Required`** with a
+  JSON body `{ creditLimitExceeded: true, exceededKind: 'daily'|'monthly',
+  resetsAt, dailyLimitUsd, monthlyLimitUsd, daySpendUsd, monthSpendUsd, … }`
+  when a cap is hit. The dashboard shows a prominent red banner above the chat
+  composer with the reset time and disables the Send button until the reset.
+- **Read the snapshot:** `GET /api/chat/limits` returns the same payload for
+  the authenticated tenant (plus `enabled: false` in single-tenant mode). The
+  payload also carries a `monthHistory` array (newest cycle first, up to
+  `BRAIN_CHAT_MONTH_HISTORY_LIMIT`, default `12`) of closed monthly cycles:
+  `{ periodStart, periodEnd, spendUsd, closedAt }`.
+- **Previous months:** closed monthly cycles are archived into
+  `user_usage_history (user_id, period_start, period_end, spend_usd,
+  closed_at)` inside the same transaction that zeroes the live counter in
+  `ensureUsageRowAligned`. `period_end` is exclusive (equals the next cycle's
+  start), so rendering "Apr 22 → May 22" requires no extra math. Daily
+  rollovers are **not** archived (only the current day spend is kept, on
+  `user_usage`).
+- **Admin tooling:**
+  - `node scripts/brain-add-user.cjs … [--daily-limit USD] [--monthly-limit USD]` sets limits at creation time.
+  - `node scripts/brain-set-limits.cjs --login USER --daily-limit 25 --monthly-limit 250` updates an existing user.
+  - `node scripts/brain-set-limits.cjs --list` prints every user's caps, current spend, and their 3 most recent closed months.
+  - `node scripts/brain-set-limits.cjs --history USER_OR_UUID [--months N]` dumps every archived monthly cycle for one user.
+  - A limit of `0` disables that cap.
 
 ---
 

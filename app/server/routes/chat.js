@@ -29,6 +29,7 @@ module.exports = function registerChatRoutes(app, ctx) {
     tenantDataDirForRequest,
     workspaceDirForRequest,
     getRegistryReadonly,
+    withRegistryReadWrite,
     appendAssistantStreamChunk,
     orchestrator,
     DB_DIR,
@@ -1350,6 +1351,95 @@ module.exports = function registerChatRoutes(app, ctx) {
       res.status(500).json({ error: err.message || String(err) });
     }
   });
+
+  // ─── Per-user credit limits (multi-user mode) ────────────────────────────
+  //
+  // Tracking for these limits lives in `registry.db` — not in any per-tenant
+  // DB — so neither the dashboard user nor the agents running on their behalf
+  // can edit their own counters. The chat POST handler calls
+  // `loadChatLimitState` before accepting a new message and calls
+  // `recordChatSpend` after each turn's billing lands.
+
+  /** How many prior monthly cycles to surface on `/api/chat/limits`. */
+  const CHAT_MONTH_HISTORY_LIMIT = Math.max(
+    1,
+    Math.min(120, Number(process.env.BRAIN_CHAT_MONTH_HISTORY_LIMIT) || 12),
+  );
+
+  /**
+   * Load the current snapshot + exceeded state for the authenticated tenant.
+   * Returns `null` when the feature does not apply (single-tenant mode, or
+   * the registry file is missing). When `opts.includeHistory` is true, the
+   * snapshot's `monthHistory` array carries up to
+   * `CHAT_MONTH_HISTORY_LIMIT` prior monthly cycles (newest first).
+   * @param {import('express').Request} req
+   * @param {{ includeHistory?: boolean }} [opts]
+   */
+  function loadChatLimitState(req, opts = {}) {
+    if (!multiUserMode()) return null;
+    if (!req.tenant || !req.tenant.userId) return null;
+    if (typeof withRegistryReadWrite !== 'function') return null;
+    const snapshotOpts = opts.includeHistory
+      ? { monthHistoryLimit: CHAT_MONTH_HISTORY_LIMIT }
+      : {};
+    return withRegistryReadWrite((db) => {
+      const snapshot = registryDb.getUsageSnapshot(db, req.tenant.userId, new Date(), snapshotOpts);
+      if (!snapshot) return null;
+      const state = registryDb.limitState(snapshot);
+      return { snapshot, state };
+    });
+  }
+
+  /**
+   * Record `usd` against the authenticated tenant's counters. Caller passes
+   * the billing delta reported for a single assistant turn. No-ops outside
+   * multi-user mode or when the amount is not a positive finite number.
+   */
+  function recordChatSpend(req, usd) {
+    const amount = Number(usd);
+    if (!Number.isFinite(amount) || amount <= 0) return;
+    if (!multiUserMode()) return;
+    if (!req.tenant || !req.tenant.userId) return;
+    if (typeof withRegistryReadWrite !== 'function') return;
+    try {
+      withRegistryReadWrite((db) => registryDb.addUsage(db, req.tenant.userId, amount));
+    } catch (err) {
+      console.warn('[chat-limits] record spend failed:', err && err.message ? err.message : err);
+    }
+  }
+
+  /** Public JSON shape used by the dashboard banner + exceeded responses. */
+  function limitsPayload(snapshot, state) {
+    if (!snapshot) return { enabled: false };
+    const over = state && state.exceeded;
+    const payload = {
+      enabled: true,
+      exceeded: Boolean(over),
+      exceededKind: over ? state.kind : null,
+      resetsAt: over ? state.resetsAt : null,
+      dailyLimitUsd: snapshot.dailyLimitUsd,
+      monthlyLimitUsd: snapshot.monthlyLimitUsd,
+      daySpendUsd: snapshot.daySpendUsd,
+      monthSpendUsd: snapshot.monthSpendUsd,
+      dayKey: snapshot.dayKey,
+      monthPeriodStart: snapshot.monthPeriodStart,
+      dayResetsAt: snapshot.dayResetsAt,
+      monthResetsAt: snapshot.monthResetsAt,
+      accountCreatedAt: snapshot.createdAt,
+    };
+    if (Array.isArray(snapshot.monthHistory)) payload.monthHistory = snapshot.monthHistory;
+    return payload;
+  }
+
+  app.get('/api/chat/limits', (req, res) => {
+    try {
+      const loaded = loadChatLimitState(req, { includeHistory: true });
+      if (!loaded) return res.json({ enabled: false });
+      return res.json(limitsPayload(loaded.snapshot, loaded.state));
+    } catch (err) {
+      res.status(500).json({ error: err.message || String(err) });
+    }
+  });
   
   app.get('/api/chat/conversations', (req, res) => {
     ensureChatSessionsDir(req);
@@ -1708,6 +1798,20 @@ module.exports = function registerChatRoutes(app, ctx) {
     // the hot path in `persistChatSession`.
     ensureChatMemoryBackfilled(req);
 
+    // Credit limits (multi-user mode): reject before mutating state so a blown
+    // limit does not leave an orphaned user message in the session.
+    const limitLoaded = loadChatLimitState(req);
+    if (limitLoaded && limitLoaded.state.exceeded) {
+      const payload = limitsPayload(limitLoaded.snapshot, limitLoaded.state);
+      const kindLabel = payload.exceededKind === 'monthly' ? 'monthly' : 'daily';
+      const limitUsd = payload.exceededKind === 'monthly' ? payload.monthlyLimitUsd : payload.dailyLimitUsd;
+      payload.error =
+        `You've hit your ${kindLabel} credit limit of $${Number(limitUsd).toFixed(2)}. ` +
+        `New chats are paused until ${payload.resetsAt}.`;
+      payload.creditLimitExceeded = true;
+      return res.status(402).json(payload);
+    }
+
     const sess = readChatSession(req, conversationId);
     if (!sess) return res.status(404).json({ error: 'Conversation not found' });
   
@@ -1866,6 +1970,9 @@ module.exports = function registerChatRoutes(app, ctx) {
               if (billing.resultSubtype) msg.sdkBilling.resultSubtype = billing.resultSubtype;
             }
             mergeSdkBillingIntoSessionTotals(fresh, billing);
+            if (billing.totalCostUsd != null && Number.isFinite(billing.totalCostUsd) && billing.totalCostUsd > 0) {
+              recordChatSpend(req, billing.totalCostUsd);
+            }
           }
           fresh.messages.push(msg);
           fresh.updatedAt = msg.createdAt;
@@ -2285,6 +2392,9 @@ module.exports = function registerChatRoutes(app, ctx) {
           if (billing.resultSubtype) msg.sdkBilling.resultSubtype = billing.resultSubtype;
         }
         mergeSdkBillingIntoSessionTotals(fresh, billing);
+        if (billing.totalCostUsd != null && Number.isFinite(billing.totalCostUsd) && billing.totalCostUsd > 0) {
+          recordChatSpend(req, billing.totalCostUsd);
+        }
       }
       fresh.messages.push(msg);
       fresh.updatedAt = msg.createdAt;

@@ -7,8 +7,11 @@
  *     (prompts for email, password, and optional display name when --login / --password omitted)
  *
  *   node scripts/brain-add-user.cjs --login email@x.com --password 'secret' [--name "Display Name"] [--full-team] [--seed-dbs DIR]
+ *     [--daily-limit USD] [--monthly-limit USD]
  *
  *   Every new tenant gets starter team files: vesta, dara, sylvan, arc (from tenant-defaults/team, with fallback to docker-seed/team).
+ *   Default chat-credit limits: $10 daily / $10 monthly (override via --daily-limit / --monthly-limit, or later via
+ *   scripts/brain-set-limits.cjs).
  *
  *   --claim-legacy ONLY after the server migrated a flat volume (it writes .legacy-tenant-uuid).
  *   New tenants get brain.db only (from brain.sql under --seed-dbs / BRAIN_SEED_DBS / ./data, merged with docker-seed/).
@@ -47,6 +50,8 @@ function parseArgs(argv) {
     else if (a === '--claim-legacy') o.claimLegacy = true;
     else if (a === '--api-token') o.apiToken = argv[++i];
     else if (a === '--name') o.name = argv[++i];
+    else if (a === '--daily-limit') o.dailyLimitUsd = argv[++i];
+    else if (a === '--monthly-limit') o.monthlyLimitUsd = argv[++i];
     else if (a.startsWith('--')) throw new Error(`Unknown flag ${a}`);
     else o._.push(a);
   }
@@ -163,9 +168,29 @@ function ensureRegistry() {
   const db = new Database(reg);
   try {
     db.exec(fs.readFileSync(sqlPath, 'utf8'));
+    // ALTER TABLE is not idempotent in SQLite — mirror the JS migration that
+    // the running server applies on boot so this script can provision users
+    // against a registry.db that predates the chat-credit-limit feature.
+    const userCols = new Set(db.prepare(`PRAGMA table_info(users)`).all().map((c) => c.name));
+    if (!userCols.has('daily_limit_usd')) {
+      db.exec(`ALTER TABLE users ADD COLUMN daily_limit_usd REAL NOT NULL DEFAULT 10`);
+    }
+    if (!userCols.has('monthly_limit_usd')) {
+      db.exec(`ALTER TABLE users ADD COLUMN monthly_limit_usd REAL NOT NULL DEFAULT 10`);
+    }
   } finally {
     db.close();
   }
+}
+
+/** Parse a $-limit flag; fall back to null (keep column default) when absent. */
+function parseLimitArg(raw, label) {
+  if (raw == null || raw === '') return null;
+  const n = Number(String(raw).trim().replace(/^\$/, ''));
+  if (!Number.isFinite(n) || n < 0) {
+    throw new Error(`Invalid --${label} value "${raw}" (expected a non-negative USD amount)`);
+  }
+  return n;
 }
 
 function tenantDefaultsDir() {
@@ -407,13 +432,42 @@ After a server-side flat-volume migration only:
     seedWorkspace(workspaceDir, { fullTeam: Boolean(args.fullTeam), displayName });
   }
 
+  const dailyLimitUsd = parseLimitArg(args.dailyLimitUsd, 'daily-limit');
+  const monthlyLimitUsd = parseLimitArg(args.monthlyLimitUsd, 'monthly-limit');
+
   const hash = await bcrypt.hash(args.password, 12);
   const reg = new Database(registryPath());
   try {
     const apiToken = args.apiToken ? String(args.apiToken).trim() : null;
+    const cols = ['id', 'login', 'password_hash', 'api_token', 'display_name'];
+    const vals = [userId, args.login.trim(), hash, apiToken, displayName];
+    if (dailyLimitUsd != null) { cols.push('daily_limit_usd'); vals.push(dailyLimitUsd); }
+    if (monthlyLimitUsd != null) { cols.push('monthly_limit_usd'); vals.push(monthlyLimitUsd); }
     reg.prepare(
-      `INSERT INTO users (id, login, password_hash, api_token, display_name) VALUES (?, ?, ?, ?, ?)`,
-    ).run(userId, args.login.trim(), hash, apiToken, displayName);
+      `INSERT INTO users (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`,
+    ).run(...vals);
+
+    // Seed the usage row so the first chat request does not race to create it.
+    // Cycle starts today (UTC) — the monthly reset anchor is the account
+    // creation day-of-month, which is "today" for a brand-new user.
+    const now = new Date();
+    const dayKey = (() => {
+      const y = now.getUTCFullYear();
+      const m = String(now.getUTCMonth() + 1).padStart(2, '0');
+      const d = String(now.getUTCDate()).padStart(2, '0');
+      return `${y}-${m}-${d}`;
+    })();
+    reg.prepare(
+      `INSERT OR IGNORE INTO user_usage (user_id, day_key, day_spend_usd, month_period_start, month_spend_usd)
+       VALUES (?, ?, 0, ?, 0)`,
+    ).run(userId, dayKey, dayKey);
+
+    const limitsRow = reg
+      .prepare('SELECT daily_limit_usd, monthly_limit_usd FROM users WHERE id = ?')
+      .get(userId);
+    console.log(
+      `Limits: daily $${Number(limitsRow.daily_limit_usd).toFixed(2)}, monthly $${Number(limitsRow.monthly_limit_usd).toFixed(2)}`,
+    );
   } finally {
     reg.close();
   }

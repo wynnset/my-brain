@@ -211,6 +211,25 @@ function getRegistryReadonly() {
   return registryReadonlyDb;
 }
 
+/**
+ * Run `fn(db)` against a short-lived read-write handle to registry.db. Used by
+ * server-side paths (credit limits, admin updates) that mutate tenant counters
+ * we never want to expose through the dashboard DB API.
+ * Returns whatever `fn` returns, or `null` if multi-user mode is off / the file
+ * does not exist yet.
+ */
+function withRegistryReadWrite(fn) {
+  if (!session.multiUserMode()) return null;
+  const p = tenancy.registryDbPath();
+  if (!fs.existsSync(p)) return null;
+  const db = registryDb.openRegistryReadWrite(p);
+  try {
+    return fn(db);
+  } finally {
+    try { db.close(); } catch (_) {}
+  }
+}
+
 // ─── Stream-error safety net ─────────────────────────────────────────────────
 // The Claude Agent SDK spawns the `claude` CLI as a child process with stdio
 // pipes. If that child (or a stdio MCP server we spawn, or an SSE client that
@@ -280,6 +299,7 @@ app.use(createTryAttachTenantFromApiToken({ getRegistryReadonly, tenancy }));
     templatesEnabledForRequest,
     withTenantDatabases,
     getRegistryReadonly,
+    withRegistryReadWrite,
     q,
     q1,
     orchestrator,

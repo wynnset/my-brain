@@ -33,6 +33,7 @@ COPY tenant-defaults/         ./tenant-defaults/
 COPY scripts/init-volume.sh ./init-volume.sh
 COPY scripts/brain-add-user.cjs ./scripts/brain-add-user.cjs
 COPY scripts/brain-delete-user.cjs ./scripts/brain-delete-user.cjs
+COPY scripts/brain-set-limits.cjs ./scripts/brain-set-limits.cjs
 COPY scripts/db             /usr/local/bin/db
 RUN chmod +x init-volume.sh /usr/local/bin/db
 

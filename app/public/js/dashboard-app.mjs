@@ -1376,6 +1376,20 @@ document.addEventListener('alpine:init', function() {
       return out;
     },
 
+    /**
+     * True iff the currently open chat is pinned. Drives the chat-header pin
+     * toggle so users can (un)pin without opening the history modal.
+     */
+    currentChatPinned() {
+      var id = this.chatConversationId;
+      if (!id) return false;
+      var list = this.chatConversations || [];
+      for (var i = 0; i < list.length; i++) {
+        if (list[i] && list[i].id === id) return !!list[i].pinned;
+      }
+      return false;
+    },
+
     /** True iff the tenant is already at the pin cap and `id` is not already one of them. */
     pinLimitReachedFor(id) {
       var pinned = this.pinnedChatConversations();

@@ -12,6 +12,7 @@ const {
   parseGlobalToolAllowEnv,
 } = require('../chat/team-agents.js');
 const chatMemory = require('../chat/chat-memory.js');
+const { createChatRunRegistry, RunAlreadyActiveError } = require('../chat/chat-run-registry.js');
 
 /** @param {import("express").Application} app @param {Record<string, unknown>} ctx */
 module.exports = function registerChatRoutes(app, ctx) {
@@ -41,12 +42,27 @@ module.exports = function registerChatRoutes(app, ctx) {
 
   // ─── Chat sessions (JSON files under tenant dataDir/chat-sessions) ─────────────
   const CHAT_LIST_LIMIT = 200;
+  /** Hard cap on how many conversations a tenant may pin. Keeps the "stack at top" UX compact. */
+  const CHAT_MAX_PINS = 5;
   /** SSE keepalive while the model runs; UI copy rotates on its own — this only needs to beat proxy timeouts. */
   const CHAT_HEARTBEAT_MS = Number(process.env.BRAIN_CHAT_HEARTBEAT_MS) || 5000;
   const CHAT_MAX_TRANSCRIPT_CHARS = Number(process.env.BRAIN_CHAT_MAX_TRANSCRIPT_CHARS) || 100000;
   const CHAT_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   /** `cli` (default): spawn Claude Code. `sdk`: Claude Agent SDK in-process. */
   const BRAIN_CHAT_BACKEND = String(process.env.BRAIN_CHAT_BACKEND || 'cli').toLowerCase();
+
+  /** When truthy (default), chat runs use the in-process registry (multi-tab / reattach). Set BRAIN_CHAT_REGISTRY=0 to restore legacy single-stream POST behavior. */
+  const USE_CHAT_RUN_REGISTRY = String(process.env.BRAIN_CHAT_REGISTRY || '1').trim() !== '0';
+
+  const chatRunRegistry = createChatRunRegistry({ heartbeatMs: CHAT_HEARTBEAT_MS });
+
+  /** Opaque tenant scope for chat run registry (must match between POST /api/chat and GET stream). */
+  function tenantKeyForChatRun(req) {
+    if (multiUserMode() && req.tenant && req.tenant.userId != null) {
+      return `u:${String(req.tenant.userId)}`;
+    }
+    return `d:${path.resolve(tenantDataDirForRequest(req))}`;
+  }
 
   /**
    * Dashboard model picker: ids must match what Claude Code / Agent SDK accept (alias or full id).
@@ -1349,16 +1365,27 @@ module.exports = function registerChatRoutes(app, ctx) {
       if (!CHAT_ID_RE.test(id)) continue;
       const sess = readChatSession(req, id);
       if (!sess) continue;
+      const sum = chatRunRegistry.summary(id);
+      const pinnedAt = sess.pinnedAt && typeof sess.pinnedAt === 'string' ? sess.pinnedAt : null;
       items.push({
         id: sess.id,
         agent: sess.agent,
         model: recordedModelForSession(sess),
         title: sess.title || 'Chat',
         updatedAt: sess.updatedAt || sess.createdAt,
+        active: USE_CHAT_RUN_REGISTRY ? sum.active : false,
+        lastEventSeq: USE_CHAT_RUN_REGISTRY ? sum.lastSeq : 0,
+        pinned: Boolean(pinnedAt),
+        pinnedAt,
       });
     }
-    items.sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
-    res.json({ conversations: items.slice(0, CHAT_LIST_LIMIT) });
+    // Pinned first (most-recently-pinned on top), then everything else by recency.
+    items.sort((a, b) => {
+      if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+      if (a.pinned && b.pinned) return String(b.pinnedAt || '').localeCompare(String(a.pinnedAt || ''));
+      return String(b.updatedAt).localeCompare(String(a.updatedAt));
+    });
+    res.json({ conversations: items.slice(0, CHAT_LIST_LIMIT), maxPins: CHAT_MAX_PINS });
   });
   
   app.get('/api/chat/models', (req, res) => {
@@ -1387,7 +1414,54 @@ module.exports = function registerChatRoutes(app, ctx) {
   app.get('/api/chat/conversations/:id', (req, res) => {
     const sess = readChatSession(req, req.params.id);
     if (!sess) return res.status(404).json({ error: 'Conversation not found' });
+    if (USE_CHAT_RUN_REGISTRY) {
+      const sum = chatRunRegistry.summary(req.params.id);
+      sess.active = sum.active;
+      sess.lastEventSeq = sum.lastSeq;
+    }
     res.json(sess);
+  });
+
+  app.get('/api/chat/conversations/:id/stream', (req, res) => {
+    if (!USE_CHAT_RUN_REGISTRY) {
+      return res.status(404).json({ error: 'Chat stream registry is disabled' });
+    }
+    const convId = String(req.params.id || '');
+    if (!CHAT_ID_RE.test(convId)) return res.status(400).json({ error: 'Invalid id' });
+    const p = chatSessionPath(req, convId);
+    if (!p || !fs.existsSync(p)) return res.status(404).json({ error: 'Conversation not found' });
+
+    const fromSeqRaw = req.query && req.query.fromSeq != null ? String(req.query.fromSeq) : '0';
+    const fromSeq = Math.max(0, Math.floor(Number(fromSeqRaw) || 0));
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+
+    const tenantKeyForRun = tenantKeyForChatRun(req);
+    const detach = chatRunRegistry.attach(convId, res, {
+      fromSeq,
+      tenantKey: tenantKeyForRun,
+      abortRunWhenResponseCloses: false,
+    });
+    res.on('close', detach);
+    res.on('error', (err) => {
+      const code = err && err.code;
+      if (code === 'EPIPE' || code === 'ECONNRESET' || code === 'ERR_STREAM_DESTROYED') return;
+      console.warn('[chat] stream response socket error:', err && err.message ? err.message : err);
+    });
+  });
+
+  app.post('/api/chat/conversations/:id/abort', (req, res) => {
+    if (!USE_CHAT_RUN_REGISTRY) {
+      return res.json({ ok: true, aborted: false });
+    }
+    const convId = String(req.params.id || '');
+    if (!CHAT_ID_RE.test(convId)) return res.status(400).json({ error: 'Invalid id' });
+    const p = chatSessionPath(req, convId);
+    if (!p || !fs.existsSync(p)) return res.status(404).json({ error: 'Conversation not found' });
+    chatRunRegistry.abort(convId);
+    res.json({ ok: true });
   });
 
   app.patch('/api/chat/conversations/:id', (req, res) => {
@@ -1405,6 +1479,54 @@ module.exports = function registerChatRoutes(app, ctx) {
       return res.status(500).json({ error: err.message || 'Could not save conversation' });
     }
     res.json({ ok: true, title: sess.title });
+  });
+
+  /**
+   * Toggle "pinned" on a conversation so the dashboard can show it in the
+   * stacked quick-switch strip above the active chat. Body: `{ pinned: boolean }`.
+   * Enforces a hard cap of `CHAT_MAX_PINS` pins per tenant so the UI strip
+   * stays compact.
+   */
+  app.post('/api/chat/conversations/:id/pin', (req, res) => {
+    const id = req.params.id;
+    if (!CHAT_ID_RE.test(String(id || ''))) return res.status(400).json({ error: 'Invalid id' });
+    const sess = readChatSession(req, id);
+    if (!sess) return res.status(404).json({ error: 'Conversation not found' });
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const pinned = body.pinned === true || body.pinned === 'true';
+    const alreadyPinned = Boolean(sess.pinnedAt);
+
+    if (pinned && !alreadyPinned) {
+      let pinCount = 0;
+      try {
+        const files = fs.readdirSync(chatSessionsDirForRequest(req)).filter((f) => f.endsWith('.json'));
+        for (const f of files) {
+          const otherId = f.replace(/\.json$/, '');
+          if (!CHAT_ID_RE.test(otherId)) continue;
+          if (otherId === id) continue;
+          const other = readChatSession(req, otherId);
+          if (other && other.pinnedAt) pinCount++;
+        }
+      } catch (_) {}
+      if (pinCount >= CHAT_MAX_PINS) {
+        return res.status(400).json({
+          error: `You can pin up to ${CHAT_MAX_PINS} chats. Unpin another chat first.`,
+          maxPins: CHAT_MAX_PINS,
+        });
+      }
+    }
+
+    if (pinned) {
+      sess.pinnedAt = new Date().toISOString();
+    } else {
+      delete sess.pinnedAt;
+    }
+    try {
+      persistChatSession(req, id, sess);
+    } catch (err) {
+      return res.status(500).json({ error: err.message || 'Could not update pin state' });
+    }
+    res.json({ ok: true, pinned: Boolean(sess.pinnedAt), pinnedAt: sess.pinnedAt || null });
   });
 
   /**
@@ -1558,6 +1680,7 @@ module.exports = function registerChatRoutes(app, ctx) {
     const convId = String(req.params.id || '');
     const p = chatSessionPath(req, convId);
     if (!p) return res.status(400).json({ error: 'Invalid id' });
+    if (USE_CHAT_RUN_REGISTRY) chatRunRegistry.abort(convId);
     try {
       if (fs.existsSync(p)) fs.unlinkSync(p);
     } catch (err) {
@@ -1665,7 +1788,7 @@ module.exports = function registerChatRoutes(app, ctx) {
     if (planPhase === 'plan') systemPrompt += CHAT_PLAN_PHASE_SYSTEM_SUFFIX;
     if (planPhase === 'execute') systemPrompt += CHAT_EXECUTE_PLAN_SYSTEM_SUFFIX;
     if (hadPendingPlan && !planPhase) systemPrompt += CHAT_PLAN_REVISION_CHAT_SUFFIX;
-  
+
     const now = new Date().toISOString();
     const userMsg = {
       id: crypto.randomUUID(),
@@ -1684,16 +1807,423 @@ module.exports = function registerChatRoutes(app, ctx) {
       sess.messages.pop();
       return res.status(500).json({ error: `Could not save message: ${err.message}` });
     }
-  
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-  
+
     console.log(
       `[chat] backend=${BRAIN_CHAT_BACKEND} agent=${sessionAgent} model=${sess.model} conversation=${conversationId}` +
         (planPhase ? ` planPhase=${planPhase}` : '')
     );
-  
+
+    if (USE_CHAT_RUN_REGISTRY) {
+      const tenantKeyForRun = tenantKeyForChatRun(req);
+
+      /**
+       * @param {(obj: Record<string, unknown>) => void} emit
+       * @param {AbortSignal} chatAbortSignal
+       */
+      async function executeModelRun(emit, chatAbortSignal) {
+        const freshSess0 = readChatSession(req, conversationId) || sess;
+        emit({ status: 'started', ...(planPhase ? { phase: planPhase } : {}) });
+
+        let assistantBufRun = '';
+        let assistantSavedRun = false;
+
+        function appendAssistantToSessionRun(content, errFlag, billing, assistantModelId) {
+          if (assistantSavedRun) return null;
+          assistantSavedRun = true;
+          const fresh = readChatSession(req, conversationId);
+          if (!fresh) return null;
+          const fromArg =
+            assistantModelId != null && String(assistantModelId).trim() && isAllowedChatModelId(String(assistantModelId).trim().toLowerCase())
+              ? String(assistantModelId).trim().toLowerCase()
+              : '';
+          const fromSession =
+            fresh.model != null && String(fresh.model).trim() && isAllowedChatModelId(String(fresh.model).trim().toLowerCase())
+              ? String(fresh.model).trim().toLowerCase()
+              : '';
+          const turnModel = fromSession || fromArg || inferRecordedModelFromMessages(fresh.messages) || getDefaultChatModelId();
+          fresh.model = turnModel;
+          const msg = {
+            id: crypto.randomUUID(),
+            role: 'assistant',
+            content: content || '',
+            createdAt: new Date().toISOString(),
+            model: turnModel,
+          };
+          if (errFlag) msg.error = true;
+          if (billing) {
+            const hasUsd = billing.totalCostUsd != null && Number.isFinite(billing.totalCostUsd);
+            const hasUsage = billing.usage && typeof billing.usage === 'object' && Object.keys(billing.usage).length > 0;
+            const hasModelUsage =
+              billing.modelUsage && typeof billing.modelUsage === 'object' && Object.keys(billing.modelUsage).length > 0;
+            if (hasUsd || hasUsage || hasModelUsage) {
+              msg.sdkBilling = {
+                userMessageId: billing.userMessageId,
+                totalCostUsd: hasUsd ? billing.totalCostUsd : null,
+                usage: hasUsage ? billing.usage : null,
+                modelUsage: hasModelUsage ? billing.modelUsage : null,
+              };
+              if (typeof billing.numTurns === 'number') msg.sdkBilling.numTurns = billing.numTurns;
+              if (billing.resultSubtype) msg.sdkBilling.resultSubtype = billing.resultSubtype;
+            }
+            mergeSdkBillingIntoSessionTotals(fresh, billing);
+          }
+          fresh.messages.push(msg);
+          fresh.updatedAt = msg.createdAt;
+          try {
+            persistChatSession(req, conversationId, fresh);
+            return fresh;
+          } catch (e) {
+            console.warn('[chat] could not save assistant message', e.message);
+            return null;
+          }
+        }
+
+        if (BRAIN_CHAT_BACKEND === 'sdk') {
+          let pendingWorkspaceTouches = [];
+          try {
+            const runner = await import(pathToFileURL(path.join(__dirname, '..', '..', 'chat-sdk-runner.mjs')).href);
+            const freshSess = readChatSession(req, conversationId) || freshSess0;
+            const useResume = Boolean(freshSess.agentSdkSessionId && process.env.BRAIN_CHAT_RESUME !== '0');
+            let promptText = useResume
+              ? lastUserContent(freshSess.messages)
+              : formatTranscriptFromMessages(freshSess.messages, CHAT_MAX_TRANSCRIPT_CHARS);
+            if (useResume && !String(promptText || '').trim()) {
+              promptText = formatTranscriptFromMessages(freshSess.messages, CHAT_MAX_TRANSCRIPT_CHARS);
+            }
+            if (planPhase === 'execute' && chatPlanExecuteTodos && chatPlanExecuteTodos.length) {
+              const block =
+                '[Approved plan — execute in order]\n```json\n' +
+                JSON.stringify(chatPlanExecuteTodos, null, 2) +
+                '\n```';
+              promptText = `${block}\n\n${promptText}`;
+            }
+            const allowedRaw = (process.env.BRAIN_CHAT_ALLOWED_TOOLS || '').trim();
+            const allowedTools = allowedRaw ? allowedRaw.split(',').map((t) => t.trim()).filter(Boolean) : undefined;
+            const chatEnv = envForClaudeChat({
+              tenantDataDir: multiUserMode() ? tenantDataDirForRequest(req) : null,
+              model: freshSess.model || sess.model,
+            });
+            const perm = runner.parsePermissionOptions(process.env.BRAIN_CHAT_PERMISSION_MODE);
+            const chatDataDir = tenantDataDirForRequest(req);
+            const chatWorkspaceDir = workspaceDirForRequest(req);
+            try {
+              normalizeWorkspaceConfigDbPaths(chatWorkspaceDir, chatDataDir);
+            } catch (err) {
+              console.warn('[chat] config.json normalize:', err.message);
+            }
+            let toolsOpt = runner.parseToolsOption(process.env.BRAIN_CHAT_TOOLS);
+            if (planPhase === 'plan') {
+              toolsOpt = ['Read', 'Glob', 'Grep'];
+            }
+            let tenantAgents;
+            if (isOrchestratorChatAgent(sessionAgent) && planPhase !== 'plan') {
+              try {
+                tenantAgents = loadTenantAgentDefinitions({
+                  workspaceDir: chatWorkspaceDir,
+                  subagentRules: readSubagentOperatingRules(),
+                  proprietaryBlock: isPlatformOwner ? '' : readPlatformConfidentialityRules(),
+                  globalToolAllow: parseGlobalToolAllowEnv(process.env.BRAIN_CHAT_SUBAGENT_TOOLS),
+                  onWarn: (m) => console.warn(m),
+                });
+                if (tenantAgents && Object.keys(tenantAgents).length) {
+                  console.log(
+                    `[chat] team-agents loaded for ${sessionAgent} from ${chatWorkspaceDir}/team: ${Object.keys(tenantAgents).sort().join(', ')}`
+                  );
+                  const rosterLines = Object.entries(tenantAgents)
+                    .sort((a, b) => a[0].localeCompare(b[0]))
+                    .map(([slug, def]) => `- \`${slug}\` — ${def.description || ''}`.trim());
+                  const rosterBlock = [
+                    '## Available team members (as `Task(subagent_type=…)` targets)',
+                    '',
+                    'These are the exact subagent_type values registered for this workspace.',
+                    'When you decide to delegate, you MUST pick one of these slugs — do not',
+                    'use `general-purpose` to impersonate a team member via the prompt body.',
+                    '',
+                    ...rosterLines,
+                  ].join('\n');
+                  systemPrompt = `${systemPrompt}\n\n---\n\n${rosterBlock}\n`;
+                } else {
+                  console.warn(
+                    `[chat] team-agents: no definitions found in ${chatWorkspaceDir}/team (Cyrus has nothing to delegate to)`
+                  );
+                }
+              } catch (err) {
+                console.warn('[chat-sdk] team-agents load failed:', err.message);
+              }
+            }
+            const out = await runner.runAgentSdkQuery({
+              prompt: promptText,
+              systemPrompt,
+              resume: useResume ? freshSess.agentSdkSessionId : undefined,
+              cwd: chatWorkspaceDir,
+              env: chatEnv,
+              model: freshSess.model || sess.model,
+              tools: toolsOpt,
+              allowedTools,
+              permissionMode: perm.permissionMode,
+              allowDangerouslySkipPermissions: perm.allowDangerouslySkipPermissions,
+              enableMcpBrainDb: process.env.BRAIN_CHAT_MCP_DB === '1',
+              dbDir: chatDataDir,
+              auditLogPath: path.join(chatDataDir, 'chat-tool-audit.log'),
+              auditTools: process.env.BRAIN_CHAT_AUDIT_TOOLS !== '0',
+              maxTurns: Number(process.env.BRAIN_CHAT_MAX_TURNS) || 100,
+              pathToClaudeCodeExecutable: resolveClaudeCodeExecutablePath() || undefined,
+              agentDefinitions: tenantAgents,
+              abortSignal: chatAbortSignal,
+              onTextChunk: (t) => {
+                if (!t) return;
+                assistantBufRun = appendAssistantStreamChunk(assistantBufRun, t);
+                emit({ text: t });
+              },
+              onTool: ({ tool, detail }) => {
+                emit({ tool, toolDetail: detail || '' });
+              },
+              onSegmentAgent: (agentId) => {
+                if (agentId) emit({ segmentAgent: String(agentId) });
+              },
+              onSegmentAgentStart: ({ id, agent }) => {
+                if (agent) {
+                  emit({
+                    segmentAgentStart: { id: String(id || ''), agent: String(agent) },
+                  });
+                }
+              },
+              onSegmentAgentEnd: ({ id, agent, ok }) => {
+                if (agent) {
+                  emit({
+                    segmentAgentEnd: {
+                      id: String(id || ''),
+                      agent: String(agent),
+                      ok: ok !== false,
+                    },
+                  });
+                }
+              },
+              onInitSession: (sid) => mergeAgentSdkSessionIntoSession(req, conversationId, sid),
+              onPostToolUse: ({ toolName, toolInput }) => {
+                appendSdkPostToolTouchesToPending(chatWorkspaceDir, pendingWorkspaceTouches, toolName, toolInput);
+              },
+            });
+            mergePendingWorkspaceTouchesIntoSession(req, conversationId, pendingWorkspaceTouches);
+            if (!assistantSavedRun) {
+              let content = (out.finalText || assistantBufRun || '').trim();
+              if (!content && out.errors && out.errors.length) content = out.errors.join('\n');
+              if (!content && out.hadError) content = '[Assistant finished with errors]';
+              const b = out.sdkBilling;
+              const billing =
+                b &&
+                (b.totalCostUsd != null ||
+                  (b.usage && Object.keys(b.usage).length > 0) ||
+                  (b.modelUsage && Object.keys(b.modelUsage).length > 0))
+                  ? { ...b, userMessageId: userMsg.id }
+                  : null;
+              const saved = appendAssistantToSessionRun(content || '', Boolean(out.hadError), billing, freshSess.model || sess.model);
+              if (saved && billing) {
+                const last = saved.messages[saved.messages.length - 1];
+                emit({
+                  sdkBilling: last && last.sdkBilling ? last.sdkBilling : billing,
+                  sdkUsageSessionTotals: saved.sdkUsageSessionTotals || null,
+                });
+              }
+              if (!out.hadError) {
+                if (planPhase === 'plan') {
+                  let planTodos = parseBrainPlanTodosFromAssistantText(content || '');
+                  const planMarkdown = readBrainChatPlanMarkdown(chatWorkspaceDir);
+                  if (!planTodos.length && planMarkdown) planTodos = todosFromMarkdownFallback(planMarkdown);
+                  const planInboxFile = writeChatPlanMarkdownToOwnersInbox(chatWorkspaceDir, conversationId, {
+                    planTodos,
+                    planMarkdown,
+                    assistantContent: content || '',
+                    sessionTitle: freshSess.title || sess.title || 'Chat',
+                  });
+                  persistChatPlanToSession(req, conversationId, {
+                    planTodos,
+                    planMarkdown,
+                    lastPhase: 'plan',
+                    planInboxFile,
+                  });
+                  if (planInboxFile && planInboxFile.touchKind) {
+                    mergePendingWorkspaceTouchesIntoSession(req, conversationId, [
+                      { path: `owners-inbox/${String(planInboxFile.name)}`, kind: planInboxFile.touchKind },
+                    ]);
+                  }
+                  const mdOut =
+                    planMarkdown.length > 12000 ? `${planMarkdown.slice(0, 12000)}\n…` : planMarkdown;
+                  emit({
+                    phase: 'plan',
+                    planTodos,
+                    planMarkdown: mdOut,
+                    planInboxFile,
+                  });
+                }
+                if (planPhase === 'execute' && chatPlanExecuteTodos && chatPlanExecuteTodos.length) {
+                  persistChatPlanToSession(req, conversationId, {
+                    planTodos: chatPlanExecuteTodos,
+                    lastPhase: 'execute',
+                  });
+                  emit({
+                    phase: 'execute',
+                    planTodos: chatPlanExecuteTodos,
+                  });
+                }
+                if (!planPhase && /```brain_plan/i.test(content || '')) {
+                  const planTodosChat = parseBrainPlanTodosFromAssistantText(content || '', hadPendingPlan);
+                  if (planTodosChat.length) {
+                    const mdChat = readBrainChatPlanMarkdown(chatWorkspaceDir);
+                    const planInboxFileChat = writeChatPlanMarkdownToOwnersInbox(chatWorkspaceDir, conversationId, {
+                      planTodos: planTodosChat,
+                      planMarkdown: mdChat,
+                      assistantContent: content || '',
+                      sessionTitle: freshSess.title || sess.title || 'Chat',
+                    });
+                    persistChatPlanToSession(req, conversationId, {
+                      planTodos: planTodosChat,
+                      planMarkdown: mdChat,
+                      lastPhase: 'plan',
+                      planInboxFile: planInboxFileChat,
+                    });
+                    if (planInboxFileChat && planInboxFileChat.touchKind) {
+                      mergePendingWorkspaceTouchesIntoSession(req, conversationId, [
+                        { path: `owners-inbox/${String(planInboxFileChat.name)}`, kind: planInboxFileChat.touchKind },
+                      ]);
+                    }
+                    const mdOut =
+                      mdChat.length > 12000 ? `${mdChat.slice(0, 12000)}\n…` : mdChat;
+                    emit({
+                      phase: 'plan',
+                      planTodos: planTodosChat,
+                      planMarkdown: mdOut,
+                      planInboxFile: planInboxFileChat,
+                    });
+                  }
+                }
+              }
+            }
+            if (out.sessionId) mergeAgentSdkSessionIntoSession(req, conversationId, out.sessionId);
+          } catch (err) {
+            mergePendingWorkspaceTouchesIntoSession(req, conversationId, pendingWorkspaceTouches);
+            const errText = err && err.message ? err.message : String(err);
+            console.error('[chat-sdk]', err);
+            emit({ error: errText });
+            appendAssistantToSessionRun(`[Error] ${errText}`, true, null, sess.model);
+            throw err;
+          }
+          return;
+        }
+
+        const freshForCli = readChatSession(req, conversationId) || freshSess0;
+        const transcript = formatTranscriptFromMessages(freshForCli.messages, CHAT_MAX_TRANSCRIPT_CHARS);
+        const fullPrompt = `${systemPrompt}\n\n---\n\n${transcript}`;
+
+        try {
+          normalizeWorkspaceConfigDbPaths(workspaceDirForRequest(req), tenantDataDirForRequest(req));
+        } catch (err) {
+          console.warn('[chat] config.json normalize:', err.message);
+        }
+
+        const procRun = spawn(CLAUDE_BIN, ['-p', '--dangerously-skip-permissions'], {
+          env: envForClaudeChat({
+            tenantDataDir: multiUserMode() ? tenantDataDirForRequest(req) : null,
+            model: freshForCli.model || sess.model,
+          }),
+          cwd: workspaceDirForRequest(req),
+          stdio: ['pipe', 'pipe', 'pipe'],
+        });
+        chatRunRegistry.setProc(conversationId, procRun);
+
+        await new Promise((resolve) => {
+          procRun.on('error', (err) => {
+            const tried = CLAUDE_BIN === 'claude' ? '`claude` on PATH' : CLAUDE_BIN;
+            const errText =
+              `Failed to start the assistant runtime (${err.message}). Tried: ${tried}. ` +
+              'The server operator must install the assistant CLI on PATH or set the executable path and chat backend per repository documentation.';
+            emit({ error: errText });
+            appendAssistantToSessionRun(`[Error] ${errText}`, true, null, freshForCli.model || sess.model);
+            resolve();
+          });
+
+          procRun.stdout.on('data', (chunk) => {
+            const t = chunk.toString();
+            assistantBufRun = appendAssistantStreamChunk(assistantBufRun, t);
+            emit({ text: t });
+          });
+
+          procRun.stderr.on('data', (chunk) => {
+            emit({ error: chunk.toString() });
+          });
+
+          procRun.on('close', (code) => {
+            if (!assistantSavedRun) {
+              let content = assistantBufRun;
+              if (!String(content).trim() && code !== 0 && code !== null) {
+                content = `[Process exited with code ${code}]`;
+              }
+              const errFlag = code !== 0 && code !== null && !String(assistantBufRun).trim();
+              appendAssistantToSessionRun(content, errFlag, null, freshForCli.model || sess.model);
+            }
+            resolve();
+          });
+        });
+
+        try {
+          procRun.stdin.write(fullPrompt);
+          procRun.stdin.end();
+        } catch (e) {
+          console.warn('[chat] stdin write failed', e.message);
+        }
+      }
+
+      try {
+        chatRunRegistry.start({
+          convId: conversationId,
+          tenantKey: tenantKeyForRun,
+          startedAtMs: Date.now(),
+          runFn: (emit, signal) => executeModelRun(emit, signal),
+        });
+      } catch (e) {
+        if (e instanceof RunAlreadyActiveError) {
+          try {
+            const fr = readChatSession(req, conversationId);
+            if (fr && Array.isArray(fr.messages) && fr.messages.length) {
+              const last = fr.messages[fr.messages.length - 1];
+              if (last && last.role === 'user' && last.id === userMsg.id) {
+                fr.messages.pop();
+                const hasUser = fr.messages.some((m) => m && m.role === 'user');
+                if (!hasUser) fr.title = 'New chat';
+                fr.updatedAt = new Date().toISOString();
+                persistChatSession(req, conversationId, fr);
+              }
+            }
+          } catch (rbErr) {
+            console.warn('[chat] rollback user message after 409 failed:', rbErr.message);
+          }
+          return res.status(409).json({ error: 'A response is still being generated for this chat.' });
+        }
+        throw e;
+      }
+
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+
+      const detach = chatRunRegistry.attach(conversationId, res, {
+        fromSeq: 0,
+        tenantKey: tenantKeyForRun,
+        abortRunWhenResponseCloses: false,
+      });
+      res.on('close', detach);
+      res.on('error', (err) => {
+        const code = err && err.code;
+        if (code === 'EPIPE' || code === 'ECONNRESET' || code === 'ERR_STREAM_DESTROYED') return;
+        console.warn('[chat] response socket error:', err && err.message ? err.message : err);
+      });
+      return;
+    }
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+
     const startedAt = Date.now();
     let heartbeatTimer = null;
     let streamEnded = false;

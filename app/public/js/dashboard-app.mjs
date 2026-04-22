@@ -162,6 +162,12 @@ document.addEventListener('alpine:init', function() {
     /** From server: cumulative SDK billing for the active conversation (Anthropic / Agent SDK). */
     chatSdkUsageSessionTotals: null,
     chatConversations: [],
+    /** Server-enforced cap mirrored on the client so the UI can show a helpful hint. */
+    chatMaxPins: 5,
+    /** Per-id flag to disable the pin button while the POST is in flight. */
+    chatPinPending: {},
+    /** Drives the top-center pin-limit banner (z-[120], visible above any modal). */
+    chatPinLimitHintVisible: false,
     chatSessionTitle: '',
     /** Inline rename: click title → edit; saved via PATCH. */
     chatTitleEditing: false,
@@ -243,6 +249,11 @@ document.addEventListener('alpine:init', function() {
       } catch (_) { return false; }
     })(),
     _chatPointerCoarseMqListener: null,
+    /**
+     * Per-conversationId live stream state so multiple chats can run and be viewed without cross-talk.
+     * When `chatConversationId` matches a bucket, root fields (`chatMessages`, `chatStreaming`, …) point at the same array/object refs.
+     */
+    chatStreams: {},
     loginRequired: false,
     /** Multi-user: `{ login, displayName }` from `/api/auth-status` when signed in. */
     sessionAccount: null,
@@ -552,7 +563,14 @@ document.addEventListener('alpine:init', function() {
       this.chatOpen = true;
       this._lockBodyForMobileChat(true);
       this.focusChatPrompt();
-      this.$nextTick(function() { this.refreshIcons(); }.bind(this));
+      // Pinned-chat strip reads from chatConversations; refresh silently so
+      // the user sees the up-to-date pins as soon as the panel opens, and
+      // repaint lucide icons once pinned rows land in the DOM.
+      var self = this;
+      this.loadConversationList()
+        .catch(function () {})
+        .then(function () { self.$nextTick(function () { self.refreshIcons(); }); });
+      this.$nextTick(function() { self.refreshIcons(); });
     },
 
     closeChat() {
@@ -781,17 +799,21 @@ document.addEventListener('alpine:init', function() {
       return String(n).charAt(0).toUpperCase();
     },
 
-    initChatWorkPanelsForTurn() {
-      this.chatWorkPanels = [];
-      this._appendWorkPanel(this.normalizeWorkPanelAgentId(this.chatAgent), true);
+    /** @param {any} [bucket] per-conversation stream bucket; defaults to active conversation */
+    initChatWorkPanelsForTurn(bucket) {
+      bucket = bucket || this.getChatStreamBucket(this.chatConversationId);
+      if (!bucket) return;
+      bucket.workPanels = [];
+      this._appendWorkPanel(bucket, this.normalizeWorkPanelAgentId(this.chatAgent), true);
     },
 
-    _appendWorkPanel(agentId, expanded, delegationId) {
-      var panels = this.chatWorkPanels || [];
+    _appendWorkPanel(bucket, agentId, expanded, delegationId) {
+      if (!bucket) return;
+      var panels = bucket.workPanels || [];
       for (var i = 0; i < panels.length; i++) {
         if (!panels[i].done) panels[i].expanded = false;
       }
-      this.chatWorkPanels.push({
+      bucket.workPanels.push({
         id: 'wp-' + Date.now() + '-' + Math.random().toString(36).slice(2, 9),
         agentId: agentId,
         /** Server `tool_use_id` for matching segment-end events (parallel delegations). */
@@ -804,10 +826,13 @@ document.addEventListener('alpine:init', function() {
       });
     },
 
-    openNewWorkPanelForAgent(rawId) {
+    openNewWorkPanelForAgent(rawId, bucket) {
+      bucket = bucket || this.getChatStreamBucket(this.chatConversationId);
+      if (!bucket) return;
       var aid = rawId === '_delegate' ? '_delegate' : this.normalizeChatAgentId(rawId);
-      this._appendWorkPanel(aid, true);
-      this.chatUiTick = Date.now();
+      this._appendWorkPanel(bucket, aid, true);
+      bucket.uiTick = Date.now();
+      if (this.chatConversationId === bucket.convId) this.chatUiTick = bucket.uiTick;
       this.$nextTick(function() { this.scrollChatToBottom(); }.bind(this));
     },
 
@@ -818,7 +843,9 @@ document.addEventListener('alpine:init', function() {
      * re-check here defensively and also require the slug to be a known team
      * member so "General-purpose" / stray ids never surface as speakers.
      */
-    applySegmentAgentFromStream(agentId) {
+    applySegmentAgentFromStream(agentId, bucket) {
+      bucket = bucket || this.getChatStreamBucket(this.chatConversationId);
+      if (!bucket) return;
       if (agentId == null || !String(agentId).trim()) return;
       if (isGenericSdkSubagentId(agentId)) return;
       var aid = this.normalizeWorkPanelAgentId(String(agentId).trim().toLowerCase().replace(/\s+/g, '_'));
@@ -826,19 +853,21 @@ document.addEventListener('alpine:init', function() {
         return this.normalizeChatAgentId(slug) === aid;
       }, this);
       if (!known) return;
-      var panels = this.chatWorkPanels;
+      var panels = bucket.workPanels;
       var last = panels.length ? panels[panels.length - 1] : null;
       if (last && !last.done && last.agentId === aid) {
-        this.chatUiTick = Date.now();
+        bucket.uiTick = Date.now();
+        if (this.chatConversationId === bucket.convId) this.chatUiTick = bucket.uiTick;
         return;
       }
       if (last && last.agentId === '_delegate') {
         last.agentId = aid;
         last.startedAt = Date.now();
-        this.chatUiTick = Date.now();
+        bucket.uiTick = Date.now();
+        if (this.chatConversationId === bucket.convId) this.chatUiTick = bucket.uiTick;
         return;
       }
-      this.openNewWorkPanelForAgent(aid);
+      this.openNewWorkPanelForAgent(aid, bucket);
     },
 
     /**
@@ -851,7 +880,9 @@ document.addEventListener('alpine:init', function() {
      *
      * @param {{ id?: string, agent?: string }} evt
      */
-    applySegmentAgentStartFromStream(evt) {
+    applySegmentAgentStartFromStream(evt, bucket) {
+      bucket = bucket || this.getChatStreamBucket(this.chatConversationId);
+      if (!bucket) return;
       if (!evt || evt.agent == null) return;
       var agentRaw = String(evt.agent).trim();
       if (!agentRaw) return;
@@ -862,11 +893,12 @@ document.addEventListener('alpine:init', function() {
       }, this);
       if (!known) return;
       var delegationId = evt.id != null ? String(evt.id) : '';
-      var panels = this.chatWorkPanels || [];
+      var panels = bucket.workPanels || [];
       if (delegationId) {
         for (var i = 0; i < panels.length; i++) {
           if (panels[i].delegationId === delegationId) {
-            this.chatUiTick = Date.now();
+            bucket.uiTick = Date.now();
+            if (this.chatConversationId === bucket.convId) this.chatUiTick = bucket.uiTick;
             return;
           }
         }
@@ -886,15 +918,17 @@ document.addEventListener('alpine:init', function() {
           cand.delegationId = delegationId || null;
           cand.startedAt = cand.startedAt || Date.now();
           cand.expanded = true;
-          this.chatUiTick = Date.now();
+          bucket.uiTick = Date.now();
+          if (this.chatConversationId === bucket.convId) this.chatUiTick = bucket.uiTick;
           return;
         }
         // Stop at the first not-done panel that isn't a match — we don't
         // want to promote a Cyrus / parent panel.
         break;
       }
-      this._appendWorkPanel(aid, true, delegationId || null);
-      this.chatUiTick = Date.now();
+      this._appendWorkPanel(bucket, aid, true, delegationId || null);
+      bucket.uiTick = Date.now();
+      if (this.chatConversationId === bucket.convId) this.chatUiTick = bucket.uiTick;
       this.$nextTick(function () { this.scrollChatToBottom(); }.bind(this));
     },
 
@@ -907,14 +941,16 @@ document.addEventListener('alpine:init', function() {
      *
      * @param {{ id?: string, agent?: string, ok?: boolean }} evt
      */
-    applySegmentAgentEndFromStream(evt) {
+    applySegmentAgentEndFromStream(evt, bucket) {
+      bucket = bucket || this.getChatStreamBucket(this.chatConversationId);
+      if (!bucket) return;
       if (!evt) return;
       var delegationId = evt.id != null ? String(evt.id) : '';
       var agentRaw = evt.agent != null ? String(evt.agent).trim() : '';
       var aid = agentRaw
         ? this.normalizeWorkPanelAgentId(agentRaw.toLowerCase().replace(/\s+/g, '_'))
         : '';
-      var panels = this.chatWorkPanels || [];
+      var panels = bucket.workPanels || [];
       var target = null;
       if (delegationId) {
         for (var i = 0; i < panels.length; i++) {
@@ -930,12 +966,15 @@ document.addEventListener('alpine:init', function() {
       target.done = true;
       target.expanded = false;
       if (!target.endedAt) target.endedAt = Date.now();
-      this.chatUiTick = Date.now();
+      bucket.uiTick = Date.now();
+      if (this.chatConversationId === bucket.convId) this.chatUiTick = bucket.uiTick;
     },
 
-    appendWorkLineToCurrentPanel(text, idSuffix) {
-      var panels = this.chatWorkPanels;
-      if (!panels.length) this.initChatWorkPanelsForTurn();
+    appendWorkLineToCurrentPanel(text, idSuffix, bucket) {
+      bucket = bucket || this.getChatStreamBucket(this.chatConversationId);
+      if (!bucket) return;
+      var panels = bucket.workPanels;
+      if (!panels.length) this.initChatWorkPanelsForTurn(bucket);
       var p = panels[panels.length - 1];
       if (p.done) return;
       p.lines.push({
@@ -947,15 +986,17 @@ document.addEventListener('alpine:init', function() {
     },
 
     /** One live log line for connect/waiting; copy refreshes at least every 5s (see formatChatWaitingStatusLine). */
-    appendChatWaitingStatusLine(startedText) {
-      var panels = this.chatWorkPanels;
-      if (!panels.length) this.initChatWorkPanelsForTurn();
+    appendChatWaitingStatusLine(startedText, bucket) {
+      bucket = bucket || this.getChatStreamBucket(this.chatConversationId);
+      if (!bucket) return;
+      var panels = bucket.workPanels;
+      if (!panels.length) this.initChatWorkPanelsForTurn(bucket);
       var p = panels[panels.length - 1];
       if (p.done) return;
       for (var j = 0; j < p.lines.length; j++) {
         if (p.lines[j].waitingSlot) return;
       }
-      var sec = this.chatWorkingStartedAt ? Math.floor((Date.now() - this.chatWorkingStartedAt) / 1000) : 0;
+      var sec = bucket.workingStartedAt ? Math.floor((Date.now() - bucket.workingStartedAt) / 1000) : 0;
       p.lines.push({
         id: 'wl-' + Date.now() + '-wait-' + Math.random().toString(36).slice(2, 6),
         text: formatChatWaitingStatusLine(sec, startedText),
@@ -968,18 +1009,18 @@ document.addEventListener('alpine:init', function() {
 
     /** True while streaming past the long-wait threshold — bumps with chatUiTick every second. */
     chatStreamFeelsLong() {
-      var _tick = this.chatUiTick;
+      var b = this.getChatStreamBucket(this.chatConversationId);
+      var _tick = b ? b.uiTick : this.chatUiTick;
       void _tick;
-      if (!this.chatStreaming || this.chatWorkingStartedAt == null) return false;
-      return (
-        Math.floor((Date.now() - this.chatWorkingStartedAt) / 1000) > CHAT_LONG_WAIT_THRESHOLD_SEC
-      );
+      if (!b || !b.streaming || b.workingStartedAt == null) return false;
+      return Math.floor((Date.now() - b.workingStartedAt) / 1000) > CHAT_LONG_WAIT_THRESHOLD_SEC;
     },
 
-    refreshChatWaitingStatusLineIfStreaming() {
-      if (!this.chatStreaming || this.chatWorkingStartedAt == null) return;
-      var sec = Math.floor((Date.now() - this.chatWorkingStartedAt) / 1000);
-      var panels = this.chatWorkPanels || [];
+    refreshChatWaitingStatusLineIfStreaming(bucket) {
+      bucket = bucket || this.getChatStreamBucket(this.chatConversationId);
+      if (!bucket || !bucket.streaming || bucket.workingStartedAt == null) return;
+      var sec = Math.floor((Date.now() - bucket.workingStartedAt) / 1000);
+      var panels = bucket.workPanels || [];
       if (!panels.length) return;
       var p = panels[panels.length - 1];
       if (!p || p.done || !p.lines || !p.lines.length) return;
@@ -994,12 +1035,15 @@ document.addEventListener('alpine:init', function() {
       var next = formatChatWaitingStatusLine(sec, line._startedText);
       if (line.text === next) return;
       line.text = next;
-      this.chatUiTick = Date.now();
+      bucket.uiTick = Date.now();
+      if (this.chatConversationId === bucket.convId) this.chatUiTick = bucket.uiTick;
     },
 
     /** Drop playful “waiting” lines once assistant text, tools, or stderr appear (any panel). */
-    clearAllWorkPanelWaitingSlots() {
-      var panels = this.chatWorkPanels || [];
+    clearAllWorkPanelWaitingSlots(bucket) {
+      bucket = bucket || this.getChatStreamBucket(this.chatConversationId);
+      if (!bucket) return;
+      var panels = bucket.workPanels || [];
       var changed = false;
       for (var pi = 0; pi < panels.length; pi++) {
         var p = panels[pi];
@@ -1013,7 +1057,8 @@ document.addEventListener('alpine:init', function() {
         }
       }
       if (changed) {
-        this.chatUiTick = Date.now();
+        bucket.uiTick = Date.now();
+        if (this.chatConversationId === bucket.convId) this.chatUiTick = bucket.uiTick;
         this.scrollChatToBottom();
       }
     },
@@ -1078,9 +1123,11 @@ document.addEventListener('alpine:init', function() {
       return null;
     },
 
-    finalizeChatWorkPanels() {
+    finalizeChatWorkPanels(bucket) {
+      bucket = bucket || this.getChatStreamBucket(this.chatConversationId);
+      if (!bucket) return;
       var now = Date.now();
-      (this.chatWorkPanels || []).forEach(function(p) {
+      (bucket.workPanels || []).forEach(function(p) {
         p.done = true;
         if (!p.endedAt) p.endedAt = now;
         p.expanded = false;
@@ -1102,10 +1149,12 @@ document.addEventListener('alpine:init', function() {
       return this.fileDownloadHref(this.viewerPath.dir, this.viewerPath.name);
     },
 
-    _clearChatElapsedTimer() {
-      if (this._chatElapsedTimer) {
-        clearInterval(this._chatElapsedTimer);
-        this._chatElapsedTimer = null;
+    _clearChatElapsedTimer(bucket) {
+      var t = bucket ? bucket.elapsedTimer : this._chatElapsedTimer;
+      if (t) {
+        clearInterval(t);
+        if (bucket) bucket.elapsedTimer = null;
+        else this._chatElapsedTimer = null;
       }
     },
 
@@ -1193,13 +1242,20 @@ document.addEventListener('alpine:init', function() {
     },
 
     maybeNotifyChatComplete() {
+      this.maybeNotifyChatCompleteForBucket(this.getChatStreamBucket(this.chatConversationId));
+    },
+
+    /** @param {any} bucket */
+    maybeNotifyChatCompleteForBucket(bucket) {
       try {
         if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
         if (!document.hidden) return;
-        var assistants = this.chatMessages.filter(function(m) { return m.role === 'assistant'; });
+        if (!bucket || !bucket.messages) return;
+        var assistants = bucket.messages.filter(function(m) { return m.role === 'assistant'; });
         var last = assistants[assistants.length - 1];
         var preview = (last && last.content) ? String(last.content).replace(/\s+/g, ' ').trim().slice(0, 120) : 'Reply ready';
-        new Notification(this.chatAgentDisplayName(this.chatAgent) + ' — Cyrus', { body: preview });
+        var slug = bucket.chatAgent != null ? this.normalizeChatAgentId(bucket.chatAgent) : this.chatAgent;
+        new Notification(this.chatAgentDisplayName(slug) + ' — Cyrus', { body: preview });
       } catch (_) {}
     },
 
@@ -1209,17 +1265,576 @@ document.addEventListener('alpine:init', function() {
         if (!r.ok) return;
         var d = await r.json();
         this.chatConversations = d.conversations || [];
+        if (Number.isFinite(d.maxPins) && d.maxPins > 0) this.chatMaxPins = d.maxPins;
+        var self = this;
+        (this.chatConversations || []).forEach(function (c) {
+          if (c && c.active && c.id) self.ensureBackgroundStreamAttach(String(c.id));
+        });
+        // Pinned strip + history modal use dynamic :data-lucide icon names;
+        // lucide doesn't repaint until we ask it to.
+        this.$nextTick(function () { self.refreshIcons(); });
       } catch (_) {}
+    },
+
+    /** Pinned conversations ordered as the server returned them (pinnedAt desc, newest-pin first). */
+    pinnedChatConversations() {
+      var list = this.chatConversations || [];
+      var out = [];
+      for (var i = 0; i < list.length; i++) {
+        if (list[i] && list[i].pinned) out.push(list[i]);
+      }
+      return out;
+    },
+
+    /** True iff the tenant is already at the pin cap and `id` is not already one of them. */
+    pinLimitReachedFor(id) {
+      var pinned = this.pinnedChatConversations();
+      if (pinned.length < (this.chatMaxPins || 5)) return false;
+      for (var i = 0; i < pinned.length; i++) {
+        if (pinned[i].id === id) return false;
+      }
+      return true;
+    },
+
+    /**
+     * Briefly show the pin-cap message via a dedicated top-center banner at
+     * z-[120] so it floats above the Conversations modal (z-[70]) and any
+     * other overlay, instead of being painted under them like the shared
+     * upload-toast stack at z-[60].
+     */
+    showPinLimitHint() {
+      this.chatPinLimitHintVisible = true;
+      var self = this;
+      if (this._pinHintTimer) clearTimeout(this._pinHintTimer);
+      this._pinHintTimer = setTimeout(function () {
+        self.chatPinLimitHintVisible = false;
+        self._pinHintTimer = null;
+      }, 4000);
+    },
+
+    dismissPinLimitHint() {
+      this.chatPinLimitHintVisible = false;
+      if (this._pinHintTimer) {
+        clearTimeout(this._pinHintTimer);
+        this._pinHintTimer = null;
+      }
+    },
+
+    /**
+     * Flip pin state on a conversation. Optimistically updates the local copy
+     * so the stacked strip reorders immediately, then reconciles on the
+     * response. Called from both the history modal and the strip itself.
+     */
+    async togglePinConversation(id, ev) {
+      if (ev && ev.stopPropagation) ev.stopPropagation();
+      if (!id) return;
+      var list = this.chatConversations || [];
+      var row = null;
+      for (var i = 0; i < list.length; i++) {
+        if (list[i] && list[i].id === id) { row = list[i]; break; }
+      }
+      var nextPinned = !(row && row.pinned);
+      if (nextPinned && this.pinLimitReachedFor(id)) {
+        this.showPinLimitHint();
+        return;
+      }
+      this.chatPinPending = Object.assign({}, this.chatPinPending, (function () { var o = {}; o[id] = true; return o; })());
+      try {
+        var r = await fetchWithAuth('/api/chat/conversations/' + encodeURIComponent(id) + '/pin', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pinned: nextPinned }),
+        });
+        if (!r.ok) {
+          var msg = 'Could not update pin';
+          var serverMaxPins = null;
+          try {
+            var ej = await r.json();
+            if (ej && ej.error) msg = ej.error;
+            if (ej && Number.isFinite(ej.maxPins) && ej.maxPins > 0) serverMaxPins = ej.maxPins;
+          } catch (_) {}
+          if (r.status === 400 && serverMaxPins) {
+            this.chatMaxPins = serverMaxPins;
+            this.showPinLimitHint();
+          } else {
+            this.uploadToast = msg;
+            this.uploadToastClass = 'bg-red-700';
+            var self2 = this;
+            setTimeout(function () { self2.uploadToast = ''; }, 4000);
+          }
+          return;
+        }
+        await this.loadConversationList();
+        var self = this;
+        this.$nextTick(function () { self.refreshIcons(); });
+      } catch (e) {
+        console.warn('[chat] togglePin', e && e.message ? e.message : e);
+      } finally {
+        var copy = Object.assign({}, this.chatPinPending);
+        delete copy[id];
+        this.chatPinPending = copy;
+      }
+    },
+
+    /** @param {string} convId */
+    getChatStreamBucket(convId) {
+      if (!convId) return null;
+      return this.chatStreams[convId] || null;
+    },
+
+    /** @param {string} convId */
+    ensureChatStreamBucket(convId) {
+      if (!convId) return null;
+      if (this.chatStreams[convId]) return this.chatStreams[convId];
+      var b = {
+        convId: convId,
+        messages: [],
+        streaming: false,
+        streamDraft: '',
+        abortController: null,
+        workPanels: [],
+        workingStartedAt: null,
+        uiTick: 0,
+        elapsedTimer: null,
+        outboundQueue: [],
+        outboundInFlight: false,
+        planTodos: [],
+        planMarkdown: '',
+        planAwaitingExecute: false,
+        planInboxFile: null,
+        sdkUsageSessionTotals: null,
+        workspaceTouches: [],
+        retryPrompt: '',
+        showNewRepliesButton: false,
+        pinnedDesktop: true,
+        pinnedMobile: true,
+        lastEventSeq: 0,
+        streamReaderPromise: null,
+        chatAgent: '',
+      };
+      this.chatStreams[convId] = b;
+      return b;
+    },
+
+    /** Copy root chat UI state into a bucket (before switching away from this conversation). */
+    snapshotRootChatIntoBucket(convId) {
+      if (!convId) return;
+      var b = this.ensureChatStreamBucket(convId);
+      b.messages = this.chatMessages;
+      b.streaming = this.chatStreaming;
+      b.streamDraft = this.chatStreamDraft;
+      b.abortController = this.chatAbortController;
+      b.workPanels = this.chatWorkPanels;
+      b.workingStartedAt = this.chatWorkingStartedAt;
+      b.uiTick = this.chatUiTick;
+      b.elapsedTimer = this._chatElapsedTimer;
+      b.outboundQueue = this.chatOutboundQueue;
+      b.outboundInFlight = this.chatOutboundInFlight;
+      b.planTodos = this.chatPlanTodos;
+      b.planMarkdown = this.chatPlanMarkdown;
+      b.planAwaitingExecute = this.chatPlanAwaitingExecute;
+      b.planInboxFile = this.chatPlanInboxFile;
+      b.sdkUsageSessionTotals = this.chatSdkUsageSessionTotals;
+      b.workspaceTouches = this.chatWorkspaceTouches;
+      b.retryPrompt = this.chatRetryPrompt;
+      b.showNewRepliesButton = this.chatShowNewRepliesButton;
+      b.pinnedDesktop = this._chatPinnedDesktop;
+      b.pinnedMobile = this._chatPinnedMobile;
+    },
+
+    /** Point root fields at the given bucket (same object refs as the bucket). */
+    restoreRootFromChatBucket(convId) {
+      var b = convId ? this.getChatStreamBucket(convId) : null;
+      if (!b) {
+        this.chatMessages = [];
+        this.chatStreaming = false;
+        this.chatStreamDraft = '';
+        this.chatAbortController = null;
+        this.chatWorkPanels = [];
+        this.chatWorkingStartedAt = null;
+        this.chatUiTick = 0;
+        this._chatElapsedTimer = null;
+        this.chatOutboundQueue = [];
+        this.chatOutboundInFlight = false;
+        this.chatPlanTodos = [];
+        this.chatPlanMarkdown = '';
+        this.chatPlanAwaitingExecute = false;
+        this.chatPlanInboxFile = null;
+        this.chatSdkUsageSessionTotals = null;
+        this.chatWorkspaceTouches = [];
+        this.chatRetryPrompt = '';
+        this.chatShowNewRepliesButton = false;
+        this._chatPinnedDesktop = true;
+        this._chatPinnedMobile = true;
+        return;
+      }
+      this.chatMessages = b.messages;
+      this.chatStreaming = b.streaming;
+      this.chatStreamDraft = b.streamDraft;
+      this.chatAbortController = b.abortController;
+      this.chatWorkPanels = b.workPanels;
+      this.chatWorkingStartedAt = b.workingStartedAt;
+      this.chatUiTick = b.uiTick;
+      this._chatElapsedTimer = b.elapsedTimer;
+      this.chatOutboundQueue = b.outboundQueue;
+      this.chatOutboundInFlight = b.outboundInFlight;
+      this.chatPlanTodos = b.planTodos;
+      this.chatPlanMarkdown = b.planMarkdown;
+      this.chatPlanAwaitingExecute = b.planAwaitingExecute;
+      this.chatPlanInboxFile = b.planInboxFile;
+      this.chatSdkUsageSessionTotals = b.sdkUsageSessionTotals;
+      this.chatWorkspaceTouches = b.workspaceTouches;
+      this.chatRetryPrompt = b.retryPrompt;
+      this.chatShowNewRepliesButton = b.showNewRepliesButton;
+      this._chatPinnedDesktop = b.pinnedDesktop;
+      this._chatPinnedMobile = b.pinnedMobile;
+    },
+
+    /**
+     * Switch active conversation: persist previous bucket, load new session into root (or draft).
+     * Does not abort in-flight streams on other conversations.
+     * @param {string | null} newConvId
+     * @param {object | null} sess optional pre-fetched session (same shape as GET /api/chat/conversations/:id)
+     */
+    async swapActiveChatConversation(newConvId, sess) {
+      var prev = this.chatConversationId;
+      if (prev) this.snapshotRootChatIntoBucket(prev);
+
+      this.chatConversationId = newConvId;
+      if (!newConvId) {
+        this.restoreRootFromChatBucket(null);
+        return;
+      }
+
+      if (!sess) {
+        var r = await fetchWithAuth('/api/chat/conversations/' + encodeURIComponent(newConvId));
+        if (!r.ok) return;
+        sess = await r.json();
+      }
+
+      this.chatTitleEditing = false;
+      this.chatTitleDraft = '';
+      this.chatAgent = this.normalizeChatAgentId(sess.agent);
+      if (sess.model) this.chatModel = this.ensureChatModelFromCatalog(sess.model);
+      this.chatSessionTitle = sess.title || 'Chat';
+      try { localStorage.setItem('brain_last_chat_id', newConvId); } catch (_) {}
+
+      var b = this.ensureChatStreamBucket(newConvId);
+      if (!b.streaming) {
+        b.messages = sess.messages || [];
+        b.sdkUsageSessionTotals = sess.sdkUsageSessionTotals || null;
+        this.hydrateChatPlanFromSessionIntoBucket(b, sess);
+        this.hydrateChatWorkspaceTouchesIntoBucket(b, sess);
+      } else if (!b.messages || !b.messages.length) {
+        b.messages = sess.messages || [];
+        b.sdkUsageSessionTotals = sess.sdkUsageSessionTotals || null;
+        this.hydrateChatPlanFromSessionIntoBucket(b, sess);
+        this.hydrateChatWorkspaceTouchesIntoBucket(b, sess);
+      }
+      this.restoreRootFromChatBucket(newConvId);
+      b.chatAgent = sess.agent != null ? String(sess.agent) : this.chatAgent;
+      if (sess.active) {
+        this.ensureBackgroundStreamAttach(newConvId);
+      }
+    },
+
+    hydrateChatPlanFromSessionIntoBucket(bucket, sess) {
+      if (!bucket || !sess) return;
+      var pending = sess.planExecutePending === true;
+      bucket.planAwaitingExecute = pending;
+      if (!pending) {
+        bucket.planTodos = [];
+        bucket.planMarkdown = '';
+        bucket.planInboxFile = null;
+        return;
+      }
+      bucket.planTodos = Array.isArray(sess.planTodos)
+        ? sess.planTodos.map(function (t) {
+            return {
+              id: t.id != null ? String(t.id) : '',
+              title: t.title != null ? String(t.title) : '',
+              status: t.status || 'pending',
+            };
+          })
+        : [];
+      bucket.planMarkdown = sess.planMarkdown ? String(sess.planMarkdown) : '';
+      bucket.planInboxFile =
+        sess.planInboxFile && sess.planInboxFile.dir && sess.planInboxFile.name
+          ? { dir: String(sess.planInboxFile.dir), name: String(sess.planInboxFile.name) }
+          : null;
+    },
+
+    hydrateChatWorkspaceTouchesIntoBucket(bucket, sess) {
+      if (!bucket) return;
+      var raw = sess && Array.isArray(sess.workspaceTouches) ? sess.workspaceTouches : [];
+      bucket.workspaceTouches = raw
+        .map(function (t) {
+          return {
+            path: t.path != null ? String(t.path) : '',
+            kind: t.kind === 'edited' ? 'edited' : 'added',
+            at: t.at != null ? String(t.at) : '',
+          };
+        })
+        .filter(function (t) {
+          return t.path;
+        });
+    },
+
+    /** @param {string} convId */
+    ensureBackgroundStreamAttach(convId) {
+      if (!convId) return;
+      var b = this.ensureChatStreamBucket(convId);
+      if (b.streamReaderPromise) return;
+      if (b.streaming) return;
+      var self = this;
+      b.streamReaderPromise = this.readChatSseStream(convId, {
+        fromSeq: b.lastEventSeq || 0,
+      }).finally(function() {
+        var cur = self.getChatStreamBucket(convId);
+        if (cur) cur.streamReaderPromise = null;
+      });
+    },
+
+    /** @param {string} convId */
+    detachChatStreamReader(convId) {
+      var b = this.getChatStreamBucket(convId);
+      if (!b || !b.abortController) return;
+      try {
+        b.abortController.abort();
+      } catch (_) {}
+      if (this.chatConversationId === convId) {
+        this.chatAbortController = null;
+      }
+      b.abortController = null;
+    },
+
+    /**
+     * Read SSE for one conversation: either `reader` from POST /api/chat body, or GET .../stream.
+     * @param {string} convId
+     * @param {{ reader?: ReadableStreamDefaultReader<Uint8Array>, fromSeq?: number, externalSignal?: AbortSignal }} opts
+     */
+    async readChatSseStream(convId, opts) {
+      var self = this;
+      opts = opts || {};
+      var bucket = this.ensureChatStreamBucket(convId);
+      var streamOk = false;
+      var reader = opts.reader || null;
+      var releaseAbort = false;
+      if (!reader) {
+        this.detachChatStreamReader(convId);
+        bucket.abortController = new AbortController();
+        releaseAbort = true;
+        if (this.chatConversationId === convId) this.chatAbortController = bucket.abortController;
+        var fromSeq = opts.fromSeq != null ? Number(opts.fromSeq) || 0 : 0;
+        var sig = opts.externalSignal || bucket.abortController.signal;
+        bucket.streaming = true;
+        if (this.chatConversationId === convId) this.chatStreaming = true;
+        var url =
+          '/api/chat/conversations/' + encodeURIComponent(convId) + '/stream?fromSeq=' + encodeURIComponent(String(fromSeq));
+        var res = await fetchWithAuth(url, { method: 'GET', signal: sig });
+        if (!res.ok || !res.body) {
+          bucket.streaming = false;
+          if (this.chatConversationId === convId) this.chatStreaming = false;
+          if (releaseAbort && bucket.abortController) {
+            bucket.abortController = null;
+            if (this.chatConversationId === convId) this.chatAbortController = null;
+          }
+          return;
+        }
+        reader = res.body.getReader();
+      }
+      var decoder = new TextDecoder();
+      var buf = '';
+      try {
+        while (true) {
+          var result = await reader.read();
+          if (result.done) break;
+          buf += decoder.decode(result.value, { stream: true });
+          var lines = buf.split('\n');
+          buf = lines.pop();
+          for (var i = 0; i < lines.length; i++) {
+            var line = lines[i];
+            if (!line.startsWith('data: ')) continue;
+            var payload = line.slice(6).trim();
+            if (payload === '[DONE]') {
+              streamOk = true;
+              break;
+            }
+            try {
+              var msg = JSON.parse(payload);
+              if (msg.seq != null && typeof msg.seq === 'number') bucket.lastEventSeq = msg.seq;
+              if (msg.noActiveRun) {
+                streamOk = true;
+                break;
+              }
+              if (msg.bufferTruncated) {
+                try {
+                  console.warn('[chat] stream buffer truncated', msg.message || '');
+                } catch (_) {}
+              }
+              if (msg.done) {
+                streamOk = true;
+                break;
+              }
+              if (msg.segmentAgent) {
+                self.applySegmentAgentFromStream(msg.segmentAgent, bucket);
+              }
+              if (msg.segmentAgentStart) {
+                self.applySegmentAgentStartFromStream(msg.segmentAgentStart, bucket);
+              }
+              if (msg.segmentAgentEnd) {
+                self.applySegmentAgentEndFromStream(msg.segmentAgentEnd, bucket);
+              }
+              if (msg.status === 'started') {
+                self.appendChatWaitingStatusLine(pickChatWorkStartedLine(), bucket);
+              }
+              if (msg.text) {
+                self.clearAllWorkPanelWaitingSlots(bucket);
+                bucket.streamDraft = appendAssistantStreamChunk(bucket.streamDraft || '', msg.text);
+                if (self.chatConversationId === convId) self.chatStreamDraft = bucket.streamDraft;
+              }
+              if (msg.error) {
+                self.clearAllWorkPanelWaitingSlots(bucket);
+                self.appendWorkLineToCurrentPanel('[stderr] ' + String(msg.error).trim().slice(0, 500), 'e', bucket);
+              }
+              if (msg.tool) {
+                self.clearAllWorkPanelWaitingSlots(bucket);
+                var td = msg.toolDetail ? String(msg.toolDetail).trim().slice(0, 240) : '';
+                self.appendWorkLineToCurrentPanel(td ? msg.tool + ': ' + td : String(msg.tool), 'tool', bucket);
+              }
+              if (msg.sdkUsageSessionTotals != null) {
+                bucket.sdkUsageSessionTotals = msg.sdkUsageSessionTotals;
+                if (self.chatConversationId === convId) self.chatSdkUsageSessionTotals = bucket.sdkUsageSessionTotals;
+              }
+              if (msg.phase === 'plan') {
+                if (Array.isArray(msg.planTodos)) {
+                  bucket.planTodos = msg.planTodos.map(function (t) {
+                    return {
+                      id: t.id != null ? String(t.id) : '',
+                      title: t.title != null ? String(t.title) : '',
+                      status: t.status || 'pending',
+                    };
+                  });
+                  if (self.chatConversationId === convId) self.chatPlanTodos = bucket.planTodos;
+                }
+                if (msg.planMarkdown != null) {
+                  bucket.planMarkdown = String(msg.planMarkdown);
+                  if (self.chatConversationId === convId) self.chatPlanMarkdown = bucket.planMarkdown;
+                }
+                bucket.planAwaitingExecute = !!(bucket.planTodos && bucket.planTodos.length);
+                if (self.chatConversationId === convId) self.chatPlanAwaitingExecute = bucket.planAwaitingExecute;
+                if (msg.planInboxFile && msg.planInboxFile.dir && msg.planInboxFile.name) {
+                  bucket.planInboxFile = {
+                    dir: String(msg.planInboxFile.dir),
+                    name: String(msg.planInboxFile.name),
+                  };
+                  if (self.chatConversationId === convId) {
+                    self.chatPlanInboxFile = bucket.planInboxFile;
+                    self.navigateToOwnersInboxPlan(self.chatPlanInboxFile);
+                  }
+                } else {
+                  bucket.planInboxFile = null;
+                  if (self.chatConversationId === convId) self.chatPlanInboxFile = null;
+                }
+              }
+              if (msg.phase === 'execute') {
+                bucket.planAwaitingExecute = false;
+                if (self.chatConversationId === convId) self.chatPlanAwaitingExecute = false;
+              }
+              if (msg.phase === 'plan' || msg.phase === 'execute') {
+                self.$nextTick(function() {
+                  self.refreshIcons();
+                });
+              }
+            } catch (_) {}
+          }
+          self.scrollChatToBottom();
+          if (streamOk) break;
+        }
+        bucket.streamDraft = '';
+        if (self.chatConversationId === convId) self.chatStreamDraft = '';
+        await self.refreshChatSessionForConv(convId);
+        await self.loadConversationList();
+        if (streamOk) {
+          self.maybeNotifyChatCompleteForBucket(bucket);
+          try {
+            delete self.cache.usage;
+          } catch (_) {}
+          if (self.page === 'home') await self.refreshHomeUsageFooter();
+        }
+      } catch (err) {
+        bucket.streamDraft = '';
+        if (self.chatConversationId === convId) self.chatStreamDraft = '';
+        await self.refreshChatSessionForConv(convId);
+        await self.loadConversationList();
+        if (!(err && err.name === 'AbortError')) {
+          try {
+            delete self.cache.usage;
+          } catch (_) {}
+          if (self.page === 'home') await self.refreshHomeUsageFooter();
+        }
+      } finally {
+        if (releaseAbort && bucket.abortController) {
+          bucket.abortController = null;
+          if (self.chatConversationId === convId) self.chatAbortController = null;
+        }
+        bucket.streaming = false;
+        if (self.chatConversationId === convId) self.chatStreaming = false;
+        self._clearChatElapsedTimer(bucket);
+        bucket.workingStartedAt = null;
+        if (self.chatConversationId === convId) self.chatWorkingStartedAt = null;
+        self.finalizeChatWorkPanels(bucket);
+        self.scrollChatToBottom();
+        self.$nextTick(function() {
+          self.refreshIcons();
+        });
+      }
+    },
+
+    /** Reload one conversation from GET (updates bucket + root if active). */
+    async refreshChatSessionForConv(convId) {
+      if (!convId) return;
+      var r = await fetchWithAuth('/api/chat/conversations/' + encodeURIComponent(convId));
+      if (!r.ok) return;
+      var sess = await r.json();
+      var b = this.getChatStreamBucket(convId);
+      if (b) {
+        b.messages = sess.messages || [];
+        b.sdkUsageSessionTotals = sess.sdkUsageSessionTotals || null;
+        this.hydrateChatPlanFromSessionIntoBucket(b, sess);
+        this.hydrateChatWorkspaceTouchesIntoBucket(b, sess);
+        b.chatAgent = sess.agent != null ? String(sess.agent) : b.chatAgent;
+      }
+      if (this.chatConversationId === convId) {
+        this.chatMessages = sess.messages || [];
+        this.chatSdkUsageSessionTotals = sess.sdkUsageSessionTotals || null;
+        this.chatSessionTitle = sess.title || 'Chat';
+        if (sess.model) this.chatModel = this.ensureChatModelFromCatalog(sess.model);
+        this.hydrateChatPlanFromSession(sess);
+        this.hydrateChatWorkspaceTouches(sess);
+      }
+      if (sess.active) this.ensureBackgroundStreamAttach(convId);
+    },
+
+    currentChatOutboundBusy() {
+      var b = this.getChatStreamBucket(this.chatConversationId);
+      if (b) return !!(b.streaming || b.outboundInFlight);
+      return !!(this.chatStreaming || this.chatOutboundInFlight);
     },
 
     /** Local-only chat shell: no server session until the user sends a message. */
     enterDraftChatState() {
+      if (this.chatConversationId) this.snapshotRootChatIntoBucket(this.chatConversationId);
+      this.chatConversationId = null;
+      this.restoreRootFromChatBucket(null);
       this.chatTitleEditing = false;
       this.chatTitleDraft = '';
-      this.chatConversationId = null;
-      this.chatMessages = [];
-      this.chatSdkUsageSessionTotals = null;
       this.chatSessionTitle = 'New chat';
+      this.chatStreaming = false;
+      this.chatStreamDraft = '';
+      this.chatAbortController = null;
+      this.chatWorkingStartedAt = null;
+      this._clearChatElapsedTimer();
       this.chatOutboundQueue = [];
       this.chatOutboundInFlight = false;
       this.chatWorkPanels = [];
@@ -1300,14 +1915,35 @@ document.addEventListener('alpine:init', function() {
         throw new Error(errMsg);
       }
       var d = await r.json();
+      if (this.chatConversationId) this.snapshotRootChatIntoBucket(this.chatConversationId);
+      var nb = this.ensureChatStreamBucket(d.id);
+      nb.messages = [];
+      nb.sdkUsageSessionTotals = null;
+      nb.workPanels = [];
+      nb.streaming = false;
+      nb.streamDraft = '';
+      nb.abortController = null;
+      nb.workingStartedAt = null;
+      nb.elapsedTimer = null;
+      nb.outboundQueue = [];
+      nb.outboundInFlight = false;
+      nb.planTodos = [];
+      nb.planMarkdown = '';
+      nb.planAwaitingExecute = false;
+      nb.planInboxFile = null;
+      nb.workspaceTouches = [];
+      nb.retryPrompt = '';
+      nb.showNewRepliesButton = false;
+      nb.pinnedDesktop = true;
+      nb.pinnedMobile = true;
+      nb.lastEventSeq = 0;
+      nb.chatAgent = agent;
       this.chatTitleEditing = false;
       this.chatTitleDraft = '';
       this.chatConversationId = d.id;
-      this.chatMessages = [];
-      this.chatSdkUsageSessionTotals = null;
+      this.restoreRootFromChatBucket(d.id);
       this.chatSessionTitle = 'New chat';
       this.resetChatPlanUiForNewShell();
-      this.chatWorkspaceTouches = [];
       try { localStorage.setItem('brain_last_chat_id', d.id); } catch (_) {}
       await this.loadConversationList();
     },
@@ -1320,19 +1956,16 @@ document.addEventListener('alpine:init', function() {
         var r = await fetchWithAuth('/api/chat/conversations/' + encodeURIComponent(last));
         if (r.ok) {
           var sess = await r.json();
-          this.chatTitleEditing = false;
-          this.chatTitleDraft = '';
-          this.chatConversationId = sess.id;
-          this.chatAgent = this.normalizeChatAgentId(sess.agent);
-          if (sess.model) this.chatModel = this.ensureChatModelFromCatalog(sess.model);
-          this.chatMessages = sess.messages || [];
-          this.chatSdkUsageSessionTotals = sess.sdkUsageSessionTotals || null;
-          this.chatSessionTitle = sess.title || 'Chat';
+          await this.swapActiveChatConversation(String(sess.id), sess);
+          var bb = this.getChatStreamBucket(String(sess.id));
+          if (bb) {
+            bb.outboundQueue = [];
+            bb.outboundInFlight = false;
+          }
+          this.chatOutboundQueue = bb ? bb.outboundQueue : [];
+          this.chatOutboundInFlight = false;
           this.hydrateChatPlanFromSession(sess);
           this.hydrateChatWorkspaceTouches(sess);
-          this.chatOutboundQueue = [];
-          this.chatOutboundInFlight = false;
-          this.chatWorkPanels = [];
           return;
         }
         try { localStorage.removeItem('brain_last_chat_id'); } catch (_) {}
@@ -1357,24 +1990,11 @@ document.addEventListener('alpine:init', function() {
       var r = await fetchWithAuth('/api/chat/conversations/' + encodeURIComponent(id));
       if (!r.ok) return;
       var sess = await r.json();
-      this.chatTitleEditing = false;
-      this.chatTitleDraft = '';
-      this.chatConversationId = sess.id;
-      this.chatAgent = this.normalizeChatAgentId(sess.agent);
-      if (sess.model) this.chatModel = this.ensureChatModelFromCatalog(sess.model);
-      this.chatMessages = sess.messages || [];
-      this.chatSdkUsageSessionTotals = sess.sdkUsageSessionTotals || null;
-      this.chatSessionTitle = sess.title || 'Chat';
+      await this.swapActiveChatConversation(String(sess.id), sess);
       this.hydrateChatPlanFromSession(sess);
       this.hydrateChatWorkspaceTouches(sess);
-      try { localStorage.setItem('brain_last_chat_id', id); } catch (_) {}
       this.chatHistoryOpen = false;
-      this.chatOutboundQueue = [];
-      this.chatOutboundInFlight = false;
-      this.chatWorkPanels = [];
       this.chatShowNewRepliesButton = false;
-      this._chatPinnedDesktop = true;
-      this._chatPinnedMobile = true;
       await this.loadConversationList();
       this.$nextTick(function() { this.scrollChatToBottom({ force: true }); this.refreshIcons(); }.bind(this));
     },
@@ -1384,12 +2004,20 @@ document.addEventListener('alpine:init', function() {
       var r = await fetchWithAuth('/api/chat/conversations/' + encodeURIComponent(this.chatConversationId));
       if (!r.ok) return;
       var sess = await r.json();
+      var b = this.getChatStreamBucket(this.chatConversationId);
+      if (b) {
+        b.messages = sess.messages || [];
+        b.sdkUsageSessionTotals = sess.sdkUsageSessionTotals || null;
+        this.hydrateChatPlanFromSessionIntoBucket(b, sess);
+        this.hydrateChatWorkspaceTouchesIntoBucket(b, sess);
+      }
       this.chatMessages = sess.messages || [];
       this.chatSdkUsageSessionTotals = sess.sdkUsageSessionTotals || null;
       this.chatSessionTitle = sess.title || 'Chat';
       if (sess.model) this.chatModel = this.ensureChatModelFromCatalog(sess.model);
       this.hydrateChatPlanFromSession(sess);
       this.hydrateChatWorkspaceTouches(sess);
+      if (sess.active) this.ensureBackgroundStreamAttach(this.chatConversationId);
     },
 
     startChatTitleEdit() {
@@ -1456,13 +2084,14 @@ document.addEventListener('alpine:init', function() {
     },
 
     chatForkUiDisabled() {
-      return !this.chatConversationId || this.chatStreaming || this.chatOutboundInFlight;
+      return !this.chatConversationId || this.currentChatOutboundBusy();
     },
 
     chatUserMessageEditDisabled(m) {
       if (!m || m.role !== 'user') return true;
-      if (!this.chatConversationId || this.chatStreaming || this.chatOutboundInFlight) return true;
-      if (this.chatOutboundQueue && this.chatOutboundQueue.length) return true;
+      if (!this.chatConversationId || this.currentChatOutboundBusy()) return true;
+      var b = this.getChatStreamBucket(this.chatConversationId);
+      if (b && b.outboundQueue && b.outboundQueue.length) return true;
       var id = String(m.id || '');
       if (id.indexOf('local-') === 0 || id.indexOf('err-') === 0) return true;
       return false;
@@ -1532,6 +2161,8 @@ document.addEventListener('alpine:init', function() {
           }
           await this.refreshActiveConversation();
           this.closeChatUserMessageEditor();
+          var bEd = this.ensureChatStreamBucket(this.chatConversationId);
+          bEd.outboundInFlight = true;
           this.chatOutboundInFlight = true;
           await this.runChatTurn(draft, [], opts);
         } else if (mode === 'fork') {
@@ -1559,6 +2190,8 @@ document.addEventListener('alpine:init', function() {
           }
           await this.openConversation(d.id);
           this.closeChatUserMessageEditor();
+          var bFork = this.ensureChatStreamBucket(this.chatConversationId);
+          bFork.outboundInFlight = true;
           this.chatOutboundInFlight = true;
           await this.runChatTurn(draft, [], opts);
         }
@@ -1656,10 +2289,15 @@ document.addEventListener('alpine:init', function() {
       this.chatModelPickerOpen = false;
       try {
         if (this.chatConversationId && this.chatMessages.length === 0) {
+          var delId = this.chatConversationId;
+          this.detachChatStreamReader(String(delId));
           try {
-            await fetchWithAuth('/api/chat/conversations/' + encodeURIComponent(this.chatConversationId), {
+            await fetchWithAuth('/api/chat/conversations/' + encodeURIComponent(delId), {
               method: 'DELETE',
             });
+          } catch (_) {}
+          try {
+            delete this.chatStreams[String(delId)];
           } catch (_) {}
         }
         this.enterDraftChatState();
@@ -1674,8 +2312,12 @@ document.addEventListener('alpine:init', function() {
       if (this.chatMessages.length > 0) return;
       var old = this.chatConversationId;
       if (old) {
+        this.detachChatStreamReader(String(old));
         try {
           await fetchWithAuth('/api/chat/conversations/' + encodeURIComponent(old), { method: 'DELETE' });
+        } catch (_) {}
+        try {
+          delete this.chatStreams[String(old)];
         } catch (_) {}
       }
       this.enterDraftChatState();
@@ -1691,6 +2333,10 @@ document.addEventListener('alpine:init', function() {
       try {
         var r = await fetchWithAuth('/api/chat/conversations/' + encodeURIComponent(id), { method: 'DELETE' });
         if (!r.ok) return;
+        this.detachChatStreamReader(String(id));
+        try {
+          delete this.chatStreams[String(id)];
+        } catch (_) {}
         if (this.chatConversationId === id) this.enterDraftChatState();
         await this.loadConversationList();
       } catch (_) {}
@@ -3817,13 +4463,30 @@ document.addEventListener('alpine:init', function() {
       if (!this.chatPrompt.trim() && !files.length) return;
       var prompt = this.chatPrompt.trim() || '(See attached file(s).)';
       var planPhase = this.chatPlanAwaitingExecute ? 'execute' : this.chatPlanMode ? 'plan' : null;
-      if (this.chatOutboundInFlight) {
-        this.chatOutboundQueue.push({
+      try {
+        await this.ensureChatConversation();
+      } catch (e) {
+        alert('Could not start chat: ' + (e && e.message ? e.message : String(e)));
+        return;
+      }
+      var convId = this.chatConversationId;
+      if (!convId) {
+        alert('Could not start chat: no conversation id.');
+        return;
+      }
+      var b = this.getChatStreamBucket(convId) || this.ensureChatStreamBucket(convId);
+      if (!b) {
+        alert('Could not start chat: internal state error.');
+        return;
+      }
+      if (b.streaming || b.outboundInFlight) {
+        b.outboundQueue.push({
           id: 'q-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8),
           prompt: prompt,
           files: files,
           planPhase: planPhase,
         });
+        if (this.chatConversationId === b.convId) this.chatOutboundQueue = b.outboundQueue;
         this.chatPrompt = '';
         this.chatFiles = [];
         var self = this;
@@ -3834,7 +4497,8 @@ document.addEventListener('alpine:init', function() {
         });
         return;
       }
-      this.chatOutboundInFlight = true;
+      b.outboundInFlight = true;
+      if (this.chatConversationId === convId) this.chatOutboundInFlight = true;
       await this.runChatTurn(prompt, files, { planPhase: planPhase });
     },
 
@@ -3845,13 +4509,15 @@ document.addEventListener('alpine:init', function() {
         return;
       }
       var p = this.chatPrompt.trim() || 'Execute the approved plan.';
-      if (this.chatOutboundInFlight) {
-        this.chatOutboundQueue.push({
+      var b = this.ensureChatStreamBucket(this.chatConversationId);
+      if (b.streaming || b.outboundInFlight) {
+        b.outboundQueue.push({
           id: 'q-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8),
           prompt: p,
           files: [],
           planPhase: 'execute',
         });
+        this.chatOutboundQueue = b.outboundQueue;
         this.chatPrompt = '';
         var self = this;
         this.$nextTick(function() {
@@ -3861,6 +4527,7 @@ document.addEventListener('alpine:init', function() {
         });
         return;
       }
+      b.outboundInFlight = true;
       this.chatOutboundInFlight = true;
       await this.runChatTurn(p, [], { planPhase: 'execute' });
     },
@@ -3872,9 +4539,12 @@ document.addEventListener('alpine:init', function() {
     async runChatTurn(prompt, files, opts) {
       var self = this;
       opts = opts || {};
-      if (!this.chatOutboundInFlight) this.chatOutboundInFlight = true;
       var skipQueueDrain = false;
       files = files || [];
+      var convId = this.chatConversationId;
+      var bucket = convId ? this.ensureChatStreamBucket(convId) : null;
+      if (bucket && !bucket.outboundInFlight) bucket.outboundInFlight = true;
+      if (!this.chatOutboundInFlight) this.chatOutboundInFlight = true;
       try {
         if (files.length > 0) {
           try {
@@ -3898,47 +4568,84 @@ document.addEventListener('alpine:init', function() {
           skipQueueDrain = true;
           return;
         }
+        convId = this.chatConversationId;
+        bucket = this.ensureChatStreamBucket(convId);
+        if (this.chatConversationId === convId) this.restoreRootFromChatBucket(convId);
+
         var optimisticId = 'local-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
-        this.initChatWorkPanelsForTurn();
-        this.chatStreamDraft = '';
-        this.chatWorkingStartedAt = Date.now();
-        this.chatUiTick = Date.now();
-        this._clearChatElapsedTimer();
-        this._chatElapsedTimer = setInterval(function() {
-          self.chatUiTick = Date.now();
-          self.refreshChatWaitingStatusLineIfStreaming();
+        this.initChatWorkPanelsForTurn(bucket);
+        bucket.streamDraft = '';
+        if (this.chatConversationId === convId) this.chatStreamDraft = '';
+        bucket.workingStartedAt = Date.now();
+        bucket.uiTick = Date.now();
+        if (this.chatConversationId === convId) {
+          this.chatWorkingStartedAt = bucket.workingStartedAt;
+          this.chatUiTick = bucket.uiTick;
+        }
+        this._clearChatElapsedTimer(bucket);
+        bucket.elapsedTimer = setInterval(function() {
+          bucket.uiTick = Date.now();
+          if (self.chatConversationId === convId) self.chatUiTick = bucket.uiTick;
+          self.refreshChatWaitingStatusLineIfStreaming(bucket);
         }, 1000);
-        this.chatMessages.push({ id: optimisticId, role: 'user', content: prompt });
+        if (this.chatConversationId === convId) this._chatElapsedTimer = bucket.elapsedTimer;
+
+        bucket.messages.push({ id: optimisticId, role: 'user', content: prompt });
+        if (this.chatConversationId === convId) this.chatMessages = bucket.messages;
+
         this.chatPrompt = '';
-        this.chatStreaming = true;
+        this.chatFiles = [];
+        bucket.streaming = true;
+        if (this.chatConversationId === convId) this.chatStreaming = true;
+
         this.scrollChatToBottom({ force: true });
         this.$nextTick(function() {
           self.refreshIcons();
           self.syncChatComposerHeights();
         });
-        this.chatAbortController = new AbortController();
-        this.chatRetryPrompt = prompt;
-        var streamOk = false;
+
+        bucket.abortController = new AbortController();
+        if (this.chatConversationId === convId) this.chatAbortController = bucket.abortController;
+        bucket.retryPrompt = prompt;
+        if (this.chatConversationId === convId) this.chatRetryPrompt = prompt;
+
         var acceptedByServer = false;
         try {
           var body = {
             agent: this.normalizeChatAgentId(this.chatAgent),
             prompt: prompt,
-            conversationId: this.chatConversationId,
+            conversationId: convId,
             model: this.ensureChatModelFromCatalog(this.chatModel),
           };
           if (opts.planPhase) body.planPhase = opts.planPhase;
-          if (opts.planPhase === 'execute' && this.chatPlanTodos && this.chatPlanTodos.length) {
-            body.planTodos = this.chatPlanTodos;
+          if (opts.planPhase === 'execute' && bucket.planTodos && bucket.planTodos.length) {
+            body.planTodos = bucket.planTodos;
           }
           var res = await fetchWithAuth('/api/chat', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body),
-            signal: this.chatAbortController.signal,
+            signal: bucket.abortController.signal,
           });
+          if (res.status === 409) {
+            bucket.outboundQueue.push({
+              id: 'q-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8),
+              prompt: prompt,
+              files: [],
+              planPhase: opts.planPhase || null,
+            });
+            if (this.chatConversationId === convId) this.chatOutboundQueue = bucket.outboundQueue;
+            bucket.messages = bucket.messages.filter(function(m) { return m.id !== optimisticId; });
+            if (this.chatConversationId === convId) this.chatMessages = bucket.messages;
+            this.chatPrompt = prompt;
+            this.$nextTick(function() {
+              self.syncChatComposerHeights();
+            });
+            return;
+          }
           if (!res.ok) {
-            this.chatMessages = this.chatMessages.filter(function(m) { return m.id !== optimisticId; });
+            bucket.messages = bucket.messages.filter(function(m) { return m.id !== optimisticId; });
+            if (this.chatConversationId === convId) this.chatMessages = bucket.messages;
             this.chatPrompt = prompt;
             this.$nextTick(function() {
               self.syncChatComposerHeights();
@@ -3948,160 +4655,67 @@ document.addEventListener('alpine:init', function() {
               var ej = await res.json();
               if (ej && ej.error) errMsg = ej.error;
             } catch (_) {}
-            this.chatMessages.push({
+            bucket.messages.push({
               id: 'err-' + Date.now(),
               role: 'assistant',
               content: '[Error: ' + errMsg + ']',
               error: true,
             });
+            if (this.chatConversationId === convId) this.chatMessages = bucket.messages;
             return;
           }
           acceptedByServer = true;
-          var reader = res.body.getReader();
-          var decoder = new TextDecoder();
-          var buf = '';
-          while (true) {
-            var result = await reader.read();
-            if (result.done) break;
-            buf += decoder.decode(result.value, { stream: true });
-            var lines = buf.split('\n');
-            buf = lines.pop();
-            for (var i = 0; i < lines.length; i++) {
-              var line = lines[i];
-              if (!line.startsWith('data: ')) continue;
-              var payload = line.slice(6).trim();
-              if (payload === '[DONE]') { streamOk = true; break; }
-              try {
-                var msg = JSON.parse(payload);
-                if (msg.segmentAgent) {
-                  self.applySegmentAgentFromStream(msg.segmentAgent);
-                }
-                if (msg.segmentAgentStart) {
-                  self.applySegmentAgentStartFromStream(msg.segmentAgentStart);
-                }
-                if (msg.segmentAgentEnd) {
-                  self.applySegmentAgentEndFromStream(msg.segmentAgentEnd);
-                }
-                if (msg.status === 'started') {
-                  self.appendChatWaitingStatusLine(pickChatWorkStartedLine());
-                }
-                if (msg.text) {
-                  self.clearAllWorkPanelWaitingSlots();
-                  self.chatStreamDraft = appendAssistantStreamChunk(self.chatStreamDraft, msg.text);
-                }
-                if (msg.error) {
-                  self.clearAllWorkPanelWaitingSlots();
-                  self.appendWorkLineToCurrentPanel('[stderr] ' + String(msg.error).trim().slice(0, 500), 'e');
-                }
-                if (msg.tool) {
-                  self.clearAllWorkPanelWaitingSlots();
-                  var td = msg.toolDetail ? String(msg.toolDetail).trim().slice(0, 240) : '';
-                  self.appendWorkLineToCurrentPanel(td ? msg.tool + ': ' + td : String(msg.tool), 'tool');
-                  // Delegation panels are driven exclusively by the authoritative
-                  // server `segmentAgentStart` / `segmentAgentEnd` events. We
-                  // intentionally do NOT guess the delegate from the Task prompt
-                  // body here — that optimistic path created duplicate cards
-                  // (one from the prompt-text guess, one from the tool_use_id
-                  // event). The parent panel keeps showing the `Task: ...` log
-                  // line above; the delegate's own panel is opened by
-                  // applySegmentAgentStartFromStream when the server confirms.
-                }
-                if (msg.sdkUsageSessionTotals != null) {
-                  self.chatSdkUsageSessionTotals = msg.sdkUsageSessionTotals;
-                }
-                if (msg.phase === 'plan') {
-                  if (Array.isArray(msg.planTodos)) {
-                    self.chatPlanTodos = msg.planTodos.map(function (t) {
-                      return {
-                        id: t.id != null ? String(t.id) : '',
-                        title: t.title != null ? String(t.title) : '',
-                        status: t.status || 'pending',
-                      };
-                    });
-                  }
-                  if (msg.planMarkdown != null) self.chatPlanMarkdown = String(msg.planMarkdown);
-                  self.chatPlanAwaitingExecute = !!(self.chatPlanTodos && self.chatPlanTodos.length);
-                  if (msg.planInboxFile && msg.planInboxFile.dir && msg.planInboxFile.name) {
-                    self.chatPlanInboxFile = {
-                      dir: String(msg.planInboxFile.dir),
-                      name: String(msg.planInboxFile.name),
-                    };
-                    self.navigateToOwnersInboxPlan(self.chatPlanInboxFile);
-                  } else {
-                    self.chatPlanInboxFile = null;
-                  }
-                }
-                if (msg.phase === 'execute') {
-                  self.chatPlanAwaitingExecute = false;
-                }
-                if (msg.phase === 'plan' || msg.phase === 'execute') {
-                  self.$nextTick(function() {
-                    self.refreshIcons();
-                  });
-                }
-              } catch (_) {}
-            }
-            self.scrollChatToBottom();
-            if (streamOk) break;
+          if (!res.body || !res.body.getReader) {
+            throw new Error('No response body');
           }
-          self.chatStreamDraft = '';
-          await self.refreshActiveConversation();
-          await self.loadConversationList();
-          if (streamOk) {
-            self.maybeNotifyChatComplete();
-            try {
-              delete self.cache.usage;
-            } catch (_) {}
-            if (self.page === 'home') await self.refreshHomeUsageFooter();
-          }
+          await self.readChatSseStream(convId, { reader: res.body.getReader() });
         } catch (err) {
-          self.chatStreamDraft = '';
-          if (err.name === 'AbortError') {
-            await self.refreshActiveConversation();
-            await self.loadConversationList();
-          } else if (!acceptedByServer) {
-            self.chatMessages = self.chatMessages.filter(function(m) { return m.id !== optimisticId; });
+          if (!acceptedByServer) {
+            if (bucket && bucket.messages) {
+              bucket.messages = bucket.messages.filter(function(m) { return m.id !== optimisticId; });
+              if (self.chatConversationId === convId) self.chatMessages = bucket.messages;
+            }
             self.chatPrompt = prompt;
             self.$nextTick(function() {
               self.syncChatComposerHeights();
             });
-            self.chatMessages.push({
-              id: 'err-' + Date.now(),
-              role: 'assistant',
-              content: '[Error: ' + err.message + ']',
-              error: true,
-            });
-          } else {
-            await self.refreshActiveConversation();
-            await self.loadConversationList();
-            try {
-              delete self.cache.usage;
-            } catch (_) {}
-            if (self.page === 'home') await self.refreshHomeUsageFooter();
-            var last = self.chatMessages[self.chatMessages.length - 1];
-            if (!last || last.role !== 'assistant' || !String(last.content || '').trim()) {
-              self.chatMessages.push({
+            if (bucket) {
+              bucket.messages.push({
                 id: 'err-' + Date.now(),
                 role: 'assistant',
                 content: '[Error: ' + err.message + ']',
                 error: true,
               });
+              if (self.chatConversationId === convId) self.chatMessages = bucket.messages;
             }
           }
         }
       } finally {
-        self._clearChatElapsedTimer();
-        self.chatStreaming = false;
-        self.chatStreamDraft = '';
-        self.chatAbortController = null;
-        self.chatWorkingStartedAt = null;
-        self.finalizeChatWorkPanels();
+        if (bucket) {
+          self._clearChatElapsedTimer(bucket);
+          bucket.streaming = false;
+          bucket.streamDraft = '';
+          bucket.abortController = null;
+          bucket.workingStartedAt = null;
+          self.finalizeChatWorkPanels(bucket);
+        }
+        if (self.chatConversationId === convId) {
+          self.chatStreaming = false;
+          self.chatStreamDraft = '';
+          self.chatAbortController = null;
+          self.chatWorkingStartedAt = null;
+          self._chatElapsedTimer = null;
+        }
         self.scrollChatToBottom();
-        self.$nextTick(function() { self.refreshIcons(); });
+        self.$nextTick(function() {
+          self.refreshIcons();
+        });
         if (skipQueueDrain) {
+          if (bucket) bucket.outboundInFlight = false;
           self.chatOutboundInFlight = false;
-        } else if (self.chatOutboundQueue.length) {
-          var next = self.chatOutboundQueue.shift();
+        } else if (bucket && bucket.outboundQueue.length) {
+          var next = bucket.outboundQueue.shift();
+          if (self.chatConversationId === convId) self.chatOutboundQueue = bucket.outboundQueue;
           self.$nextTick(function() {
             self
               .runChatTurn(next.prompt, next.files || [], { planPhase: next.planPhase || null })
@@ -4110,13 +4724,24 @@ document.addEventListener('alpine:init', function() {
               });
           });
         } else {
+          if (bucket) bucket.outboundInFlight = false;
           self.chatOutboundInFlight = false;
         }
       }
     },
 
-    abortChat() {
-      if (this.chatAbortController) this.chatAbortController.abort();
+    async abortChat() {
+      var id = this.chatConversationId;
+      if (this.chatAbortController) {
+        try {
+          this.chatAbortController.abort();
+        } catch (_) {}
+      }
+      if (id) {
+        try {
+          await fetchWithAuth('/api/chat/conversations/' + encodeURIComponent(id) + '/abort', { method: 'POST' });
+        } catch (_) {}
+      }
     },
 
     handleChatDrop(e) {

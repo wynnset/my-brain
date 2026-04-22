@@ -168,6 +168,17 @@ document.addEventListener('alpine:init', function() {
     chatPinPending: {},
     /** Drives the top-center pin-limit banner (z-[120], visible above any modal). */
     chatPinLimitHintVisible: false,
+    /**
+     * Mirrors `/api/chat/limits` for the signed-in tenant. Populated on first
+     * chat-panel open and refreshed after every 402 response from POST /api/chat.
+     * `exceeded` drives the prominent "out of credits" banner + disables the
+     * composer submit button. `null` means the feature is inactive (single-tenant
+     * mode) or the payload has not loaded yet.
+     * @type {null | { enabled: boolean, exceeded: boolean, exceededKind: 'daily'|'monthly'|null, resetsAt: string|null, dailyLimitUsd: number, monthlyLimitUsd: number, daySpendUsd: number, monthSpendUsd: number, dayResetsAt: string, monthResetsAt: string, accountCreatedAt: string }}
+     */
+    chatCreditLimit: null,
+    /** Optional human-readable error from the most recent 402 response. */
+    chatCreditLimitMessage: '',
     chatSessionTitle: '',
     /** Inline rename: click title → edit; saved via PATCH. */
     chatTitleEditing: false,
@@ -178,6 +189,8 @@ document.addEventListener('alpine:init', function() {
     chatOutboundInFlight: false,
     /** Pending turns while a reply is in progress: { id, prompt, files: File[] } */
     chatOutboundQueue: [],
+    /** When true, the "N message(s) queued" banner expands to preview queued prompts. */
+    chatQueuePreviewOpen: false,
     chatStreamDraft: '',
     /**
      * Per-agent work segments for the current turn (merged activity + “is working” UI).
@@ -570,7 +583,84 @@ document.addEventListener('alpine:init', function() {
       this.loadConversationList()
         .catch(function () {})
         .then(function () { self.$nextTick(function () { self.refreshIcons(); }); });
+      this.refreshChatCreditLimit().catch(function () {});
       this.$nextTick(function() { self.refreshIcons(); });
+    },
+
+    /**
+     * Fetch the current per-user credit-limit snapshot from the server. Silent
+     * on failure — the banner stays hidden rather than confusing the user with
+     * transient network errors.
+     */
+    async refreshChatCreditLimit() {
+      try {
+        var r = await fetchWithAuth('/api/chat/limits');
+        if (!r.ok) return;
+        var payload = await r.json();
+        this.ingestChatCreditLimitPayload(payload);
+      } catch (_) {}
+    },
+
+    /**
+     * Store a `/api/chat/limits` or 402 response payload on the app state.
+     * Clears the exceeded message once the snapshot is no longer over-limit.
+     */
+    ingestChatCreditLimitPayload(payload) {
+      if (!payload || typeof payload !== 'object') {
+        this.chatCreditLimit = null;
+        this.chatCreditLimitMessage = '';
+        return;
+      }
+      if (payload.enabled === false) {
+        this.chatCreditLimit = null;
+        this.chatCreditLimitMessage = '';
+        return;
+      }
+      this.chatCreditLimit = payload;
+      if (!payload.exceeded) this.chatCreditLimitMessage = '';
+      else if (payload.error) this.chatCreditLimitMessage = String(payload.error);
+    },
+
+    /** True when the composer should show the out-of-credits state. */
+    chatIsOverCreditLimit() {
+      return Boolean(this.chatCreditLimit && this.chatCreditLimit.exceeded);
+    },
+
+    /** Headline for the credit-exceeded banner. */
+    chatCreditLimitHeadline() {
+      var c = this.chatCreditLimit;
+      if (!c || !c.exceeded) return '';
+      var kind = c.exceededKind === 'monthly' ? 'monthly' : 'daily';
+      var limit = kind === 'monthly' ? c.monthlyLimitUsd : c.dailyLimitUsd;
+      var limitTxt = Number.isFinite(Number(limit)) ? '$' + Number(limit).toFixed(2) : '';
+      return "You've reached your " + kind + ' credit limit' + (limitTxt ? ' (' + limitTxt + ')' : '') + '.';
+    },
+
+    /** Secondary line: when credits reset (uses the visitor's locale). */
+    chatCreditLimitResetLine() {
+      var c = this.chatCreditLimit;
+      if (!c || !c.exceeded || !c.resetsAt) return '';
+      var when;
+      try {
+        var d = new Date(c.resetsAt);
+        when = d.toLocaleString(undefined, {
+          weekday: 'short', year: 'numeric', month: 'short', day: 'numeric',
+          hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
+        });
+      } catch (_) {
+        when = c.resetsAt;
+      }
+      var kind = c.exceededKind === 'monthly' ? 'Monthly' : 'Daily';
+      return kind + ' credits reset ' + when + '.';
+    },
+
+    /** One-line summary of the current spend vs. limits for the banner footer. */
+    chatCreditLimitUsageLine() {
+      var c = this.chatCreditLimit;
+      if (!c) return '';
+      function fmt(n) { return Number.isFinite(Number(n)) ? '$' + Number(n).toFixed(2) : '—'; }
+      return 'Today: ' + fmt(c.daySpendUsd) + ' / ' + fmt(c.dailyLimitUsd)
+        + '   •   This month: ' + fmt(c.monthSpendUsd) + ' / ' + fmt(c.monthlyLimitUsd);
     },
 
     closeChat() {
@@ -4458,9 +4548,62 @@ document.addEventListener('alpine:init', function() {
       this.submitChat();
     },
 
+    toggleChatQueuePreview() {
+      if (!this.chatOutboundQueue.length) {
+        this.chatQueuePreviewOpen = false;
+        return;
+      }
+      this.chatQueuePreviewOpen = !this.chatQueuePreviewOpen;
+      var self = this;
+      this.$nextTick(function() { self.refreshIcons(); });
+    },
+
+    queuedChatMessagePreview(item) {
+      if (!item) return '';
+      var raw = typeof item.prompt === 'string' ? item.prompt : '';
+      var t = raw.replace(/\s+/g, ' ').trim();
+      if (!t) {
+        if (item.files && item.files.length) return '(' + item.files.length + ' attached file(s))';
+        return '(empty)';
+      }
+      return t;
+    },
+
+    queuedChatMessageFileCount(item) {
+      if (!item || !item.files) return 0;
+      return item.files.length || 0;
+    },
+
+    queuedChatMessagePhaseLabel(item) {
+      if (!item || !item.planPhase) return '';
+      if (item.planPhase === 'plan') return 'Plan';
+      if (item.planPhase === 'execute') return 'Execute';
+      return item.planPhase;
+    },
+
+    removeQueuedChatMessage(id) {
+      if (!id) return;
+      var b = this.getChatStreamBucket(this.chatConversationId);
+      if (!b || !b.outboundQueue) return;
+      var idx = -1;
+      for (var i = 0; i < b.outboundQueue.length; i++) {
+        if (b.outboundQueue[i] && b.outboundQueue[i].id === id) { idx = i; break; }
+      }
+      if (idx < 0) return;
+      b.outboundQueue.splice(idx, 1);
+      if (this.chatConversationId === b.convId) this.chatOutboundQueue = b.outboundQueue;
+      if (!b.outboundQueue.length) this.chatQueuePreviewOpen = false;
+    },
+
     async submitChat() {
       var files = this.chatFiles && this.chatFiles.length ? this.chatFiles.slice() : [];
       if (!this.chatPrompt.trim() && !files.length) return;
+      if (this.chatIsOverCreditLimit()) {
+        // Banner is already visible; refresh the snapshot in case credits
+        // just reset on the server so the user can retry without reloading.
+        this.refreshChatCreditLimit().catch(function () {});
+        return;
+      }
       var prompt = this.chatPrompt.trim() || '(See attached file(s).)';
       var planPhase = this.chatPlanAwaitingExecute ? 'execute' : this.chatPlanMode ? 'plan' : null;
       try {
@@ -4643,6 +4786,23 @@ document.addEventListener('alpine:init', function() {
             });
             return;
           }
+          if (res.status === 402) {
+            // Per-user credit limit reached. Drop the optimistic user bubble,
+            // restore the prompt so they don't lose their draft, and surface
+            // the exceeded payload so the banner + disabled composer render.
+            var payload402 = null;
+            try { payload402 = await res.json(); } catch (_) {}
+            if (payload402 && payload402.creditLimitExceeded) {
+              this.ingestChatCreditLimitPayload(payload402);
+            }
+            bucket.messages = bucket.messages.filter(function(m) { return m.id !== optimisticId; });
+            if (this.chatConversationId === convId) this.chatMessages = bucket.messages;
+            this.chatPrompt = prompt;
+            this.$nextTick(function() {
+              self.syncChatComposerHeights();
+            });
+            return;
+          }
           if (!res.ok) {
             bucket.messages = bucket.messages.filter(function(m) { return m.id !== optimisticId; });
             if (this.chatConversationId === convId) this.chatMessages = bucket.messages;
@@ -4707,6 +4867,7 @@ document.addEventListener('alpine:init', function() {
           self._chatElapsedTimer = null;
         }
         self.scrollChatToBottom();
+        self.refreshChatCreditLimit().catch(function () {});
         self.$nextTick(function() {
           self.refreshIcons();
         });

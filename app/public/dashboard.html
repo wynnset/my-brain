@@ -1462,11 +1462,50 @@ tailwind.config = {
         <div x-show="!chatStreaming && chatMessages.length && chatMessages[chatMessages.length - 1].error" class="px-3 pt-1 shrink-0" x-cloak>
           <button type="button" @click="retryLastChat()" class="text-xs font-medium text-blue-600 dark:text-blue-400 hover:underline">Retry send</button>
         </div>
-        <div x-show="chatOutboundQueue.length" x-cloak class="px-3 pt-1.5 shrink-0 text-xs text-slate-500 dark:text-slate-400 border-t border-slate-100 dark:border-slate-700/80 bg-white dark:bg-slate-800" role="status">
-          <span class="font-medium text-slate-600 dark:text-slate-300" x-text="chatOutboundQueue.length + (chatOutboundQueue.length === 1 ? ' message queued' : ' messages queued')"></span>
-          <span class="text-slate-400 dark:text-slate-500"> — sends automatically after the current reply.</span>
+        <div x-show="chatOutboundQueue.length" x-cloak class="shrink-0 border-t border-slate-100 dark:border-slate-700/80 bg-white dark:bg-slate-800">
+          <button type="button"
+            @click="toggleChatQueuePreview()"
+            :aria-expanded="chatQueuePreviewOpen"
+            aria-controls="chat-queue-preview-desktop"
+            class="w-full flex items-center gap-1.5 px-3 pt-1.5 pb-1 text-left text-xs text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-indigo-400/60 transition-colors"
+            role="status">
+            <span class="font-medium text-slate-600 dark:text-slate-300" x-text="chatOutboundQueue.length + (chatOutboundQueue.length === 1 ? ' message queued' : ' messages queued')"></span>
+            <span class="text-slate-400 dark:text-slate-500"> — sends automatically after the current reply.</span>
+            <i data-lucide="chevron-down" class="ml-auto h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform duration-150" :class="chatQueuePreviewOpen ? 'rotate-180' : ''" aria-hidden="true"></i>
+          </button>
+          <div id="chat-queue-preview-desktop" x-show="chatQueuePreviewOpen" x-cloak class="px-3 pb-2 max-h-48 overflow-y-auto space-y-1.5">
+            <template x-for="(q, qIdx) in chatOutboundQueue" :key="q.id">
+              <div class="flex items-start gap-2 rounded-md border border-slate-200/70 dark:border-slate-600/60 bg-slate-50/80 dark:bg-slate-900/40 px-2 py-1.5">
+                <span class="shrink-0 mt-0.5 inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-slate-200 dark:bg-slate-600 px-1 text-[10px] font-semibold text-slate-700 dark:text-slate-200" x-text="qIdx + 1"></span>
+                <div class="min-w-0 flex-1">
+                  <p class="text-[11.5px] text-slate-700 dark:text-slate-200 whitespace-pre-wrap break-words line-clamp-3" x-text="queuedChatMessagePreview(q)"></p>
+                  <div class="mt-0.5 flex items-center gap-1.5 text-[10px] text-slate-500 dark:text-slate-400" x-show="queuedChatMessageFileCount(q) || queuedChatMessagePhaseLabel(q)">
+                    <span x-show="queuedChatMessagePhaseLabel(q)" x-cloak class="inline-flex items-center rounded-sm bg-indigo-100 dark:bg-indigo-950/60 px-1 py-0.5 font-medium text-indigo-700 dark:text-indigo-200" x-text="queuedChatMessagePhaseLabel(q)"></span>
+                    <span x-show="queuedChatMessageFileCount(q)" x-cloak x-text="queuedChatMessageFileCount(q) + (queuedChatMessageFileCount(q) === 1 ? ' file' : ' files')"></span>
+                  </div>
+                </div>
+                <button type="button" @click="removeQueuedChatMessage(q.id)" title="Remove from queue" aria-label="Remove from queue"
+                  class="icon-btn shrink-0 h-6 w-6 rounded-md text-slate-400 hover:text-red-600 hover:bg-red-50 dark:hover:text-red-400 dark:hover:bg-red-950/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-400/50 transition-colors">
+                  <i data-lucide="x" class="h-3.5 w-3.5" aria-hidden="true"></i>
+                </button>
+              </div>
+            </template>
+          </div>
         </div>
         <div x-show="chatOutboundInFlight" x-cloak class="chat-composer-progress-track shrink-0" aria-hidden="true"><div class="chat-composer-progress-bar"></div></div>
+        <div x-show="chatIsOverCreditLimit()" x-cloak role="alert" aria-live="assertive"
+          class="shrink-0 border-t border-rose-300/70 dark:border-rose-500/40 bg-rose-50 dark:bg-rose-950/60 text-rose-900 dark:text-rose-100 px-4 py-3">
+          <div class="flex items-start gap-3">
+            <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-rose-100 dark:bg-rose-500/20 text-rose-700 dark:text-rose-200" aria-hidden="true">
+              <i data-lucide="alert-triangle" class="h-4 w-4"></i>
+            </span>
+            <div class="min-w-0 flex-1 text-sm leading-snug">
+              <p class="font-semibold" x-text="chatCreditLimitHeadline()"></p>
+              <p class="mt-0.5 text-rose-800/90 dark:text-rose-100/90" x-text="chatCreditLimitResetLine()"></p>
+              <p class="mt-1 text-[11px] font-mono text-rose-700/90 dark:text-rose-200/80" x-text="chatCreditLimitUsageLine()"></p>
+            </div>
+          </div>
+        </div>
         <div
           class="p-3 pb-3 border-t border-slate-200 dark:border-slate-700 shrink-0 bg-white dark:bg-slate-800 space-y-2"
           @dragover.prevent="chatDragActive = true"
@@ -1527,7 +1566,10 @@ tailwind.config = {
               <i data-lucide="paperclip" class="h-4 w-4"></i>
               <span x-show="chatFiles.length" x-cloak class="absolute -top-1 -right-1 flex h-[1.125rem] min-w-[1.125rem] items-center justify-center rounded-full bg-indigo-600 px-0.5 text-[10px] font-bold leading-none text-white" x-text="chatFiles.length"></span>
             </button>
-            <button type="button" x-show="!chatStreaming" x-cloak @click="submitChat()" :disabled="!chatPrompt.trim() && !chatFiles.length" title="Send" aria-label="Send message"
+            <button type="button" x-show="!chatStreaming" x-cloak @click="submitChat()"
+              :disabled="(!chatPrompt.trim() && !chatFiles.length) || chatIsOverCreditLimit()"
+              :title="chatIsOverCreditLimit() ? 'Out of credits — new chats are paused until the next reset.' : 'Send'"
+              :aria-label="chatIsOverCreditLimit() ? 'Out of credits, send disabled' : 'Send message'"
               class="icon-btn flex h-10 min-h-[2.5rem] max-h-[2.5rem] w-10 shrink-0 items-center justify-center rounded-lg border border-slate-700 bg-slate-800 text-white transition-colors hover:bg-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-2 focus-visible:ring-offset-white disabled:pointer-events-none disabled:opacity-40 dark:border-slate-500 dark:bg-slate-200 dark:text-slate-900 dark:hover:bg-white dark:focus-visible:ring-offset-slate-800">
               <i data-lucide="send-horizontal" class="h-4 w-4"></i>
             </button>
@@ -1760,11 +1802,50 @@ tailwind.config = {
       <div x-show="!chatStreaming && chatMessages.length && chatMessages[chatMessages.length - 1].error" class="px-3 pt-2" x-cloak>
         <button type="button" @click="retryLastChat()" class="text-xs font-medium text-blue-600 dark:text-blue-400">Retry send</button>
       </div>
-      <div x-show="chatOutboundQueue.length" x-cloak class="px-3 pt-2 shrink-0 text-xs text-slate-500 dark:text-slate-400 border-t border-slate-100 dark:border-slate-700/80 bg-white dark:bg-slate-800" role="status">
-        <span class="font-medium text-slate-600 dark:text-slate-300" x-text="chatOutboundQueue.length + (chatOutboundQueue.length === 1 ? ' message queued' : ' messages queued')"></span>
-        <span class="text-slate-400 dark:text-slate-500"> — sends after the current reply.</span>
+      <div x-show="chatOutboundQueue.length" x-cloak class="shrink-0 border-t border-slate-100 dark:border-slate-700/80 bg-white dark:bg-slate-800">
+        <button type="button"
+          @click="toggleChatQueuePreview()"
+          :aria-expanded="chatQueuePreviewOpen"
+          aria-controls="chat-queue-preview-mobile"
+          class="w-full flex items-center gap-1.5 px-3 pt-2 pb-1.5 text-left text-xs text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-indigo-400/60 transition-colors"
+          role="status">
+          <span class="font-medium text-slate-600 dark:text-slate-300" x-text="chatOutboundQueue.length + (chatOutboundQueue.length === 1 ? ' message queued' : ' messages queued')"></span>
+          <span class="text-slate-400 dark:text-slate-500"> — sends after the current reply.</span>
+          <i data-lucide="chevron-down" class="ml-auto h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform duration-150" :class="chatQueuePreviewOpen ? 'rotate-180' : ''" aria-hidden="true"></i>
+        </button>
+        <div id="chat-queue-preview-mobile" x-show="chatQueuePreviewOpen" x-cloak class="px-3 pb-2 max-h-48 overflow-y-auto space-y-1.5">
+          <template x-for="(q, qIdx) in chatOutboundQueue" :key="q.id">
+            <div class="flex items-start gap-2 rounded-md border border-slate-200/70 dark:border-slate-600/60 bg-slate-50/80 dark:bg-slate-900/40 px-2 py-1.5">
+              <span class="shrink-0 mt-0.5 inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-slate-200 dark:bg-slate-600 px-1 text-[10px] font-semibold text-slate-700 dark:text-slate-200" x-text="qIdx + 1"></span>
+              <div class="min-w-0 flex-1">
+                <p class="text-[11.5px] text-slate-700 dark:text-slate-200 whitespace-pre-wrap break-words line-clamp-3" x-text="queuedChatMessagePreview(q)"></p>
+                <div class="mt-0.5 flex items-center gap-1.5 text-[10px] text-slate-500 dark:text-slate-400" x-show="queuedChatMessageFileCount(q) || queuedChatMessagePhaseLabel(q)">
+                  <span x-show="queuedChatMessagePhaseLabel(q)" x-cloak class="inline-flex items-center rounded-sm bg-indigo-100 dark:bg-indigo-950/60 px-1 py-0.5 font-medium text-indigo-700 dark:text-indigo-200" x-text="queuedChatMessagePhaseLabel(q)"></span>
+                  <span x-show="queuedChatMessageFileCount(q)" x-cloak x-text="queuedChatMessageFileCount(q) + (queuedChatMessageFileCount(q) === 1 ? ' file' : ' files')"></span>
+                </div>
+              </div>
+              <button type="button" @click="removeQueuedChatMessage(q.id)" title="Remove from queue" aria-label="Remove from queue"
+                class="icon-btn shrink-0 h-6 w-6 rounded-md text-slate-400 hover:text-red-600 hover:bg-red-50 dark:hover:text-red-400 dark:hover:bg-red-950/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-400/50 transition-colors">
+                <i data-lucide="x" class="h-3.5 w-3.5" aria-hidden="true"></i>
+              </button>
+            </div>
+          </template>
+        </div>
       </div>
       <div x-show="chatOutboundInFlight" x-cloak class="chat-composer-progress-track shrink-0" aria-hidden="true"><div class="chat-composer-progress-bar"></div></div>
+      <div x-show="chatIsOverCreditLimit()" x-cloak role="alert" aria-live="assertive"
+        class="shrink-0 border-t border-rose-300/70 dark:border-rose-500/40 bg-rose-50 dark:bg-rose-950/60 text-rose-900 dark:text-rose-100 px-4 py-3">
+        <div class="flex items-start gap-3">
+          <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-rose-100 dark:bg-rose-500/20 text-rose-700 dark:text-rose-200" aria-hidden="true">
+            <i data-lucide="alert-triangle" class="h-4 w-4"></i>
+          </span>
+          <div class="min-w-0 flex-1 text-sm leading-snug">
+            <p class="font-semibold" x-text="chatCreditLimitHeadline()"></p>
+            <p class="mt-0.5 text-rose-800/90 dark:text-rose-100/90" x-text="chatCreditLimitResetLine()"></p>
+            <p class="mt-1 text-[11px] font-mono text-rose-700/90 dark:text-rose-200/80" x-text="chatCreditLimitUsageLine()"></p>
+          </div>
+        </div>
+      </div>
       <div
         class="p-3 space-y-2"
         @dragover.prevent="chatDragActive = true"
@@ -1825,7 +1906,10 @@ tailwind.config = {
             <i data-lucide="paperclip" class="h-4 w-4"></i>
             <span x-show="chatFiles.length" x-cloak class="absolute -top-1 -right-1 flex h-[1.125rem] min-w-[1.125rem] items-center justify-center rounded-full bg-indigo-600 px-0.5 text-[10px] font-bold leading-none text-white" x-text="chatFiles.length"></span>
           </button>
-          <button type="button" x-show="!chatStreaming" x-cloak @click="submitChat()" :disabled="!chatPrompt.trim() && !chatFiles.length" title="Send" aria-label="Send message"
+          <button type="button" x-show="!chatStreaming" x-cloak @click="submitChat()"
+            :disabled="(!chatPrompt.trim() && !chatFiles.length) || chatIsOverCreditLimit()"
+            :title="chatIsOverCreditLimit() ? 'Out of credits — new chats are paused until the next reset.' : 'Send'"
+            :aria-label="chatIsOverCreditLimit() ? 'Out of credits, send disabled' : 'Send message'"
             class="icon-btn flex h-10 min-h-[2.5rem] max-h-[2.5rem] w-10 shrink-0 items-center justify-center rounded-lg border border-slate-700 bg-slate-800 text-white transition-colors hover:bg-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-2 focus-visible:ring-offset-white disabled:pointer-events-none disabled:opacity-40 dark:border-slate-500 dark:bg-slate-200 dark:text-slate-900 dark:hover:bg-white dark:focus-visible:ring-offset-slate-800">
             <i data-lucide="send-horizontal" class="h-4 w-4"></i>
           </button>

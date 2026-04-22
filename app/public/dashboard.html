@@ -1463,7 +1463,7 @@ tailwind.config = {
               <div class="relative h-10 min-h-[2.5rem] max-h-[2.5rem] shrink-0 min-w-[4.5rem] max-w-[5.25rem]">
                 <select
                   class="h-10 w-full cursor-pointer appearance-none rounded-lg border border-slate-200 dark:border-slate-600 bg-slate-50 dark:bg-slate-900/50 py-0 pl-2 pr-8 text-xs font-medium text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-slate-400 dark:focus:ring-slate-500 disabled:opacity-50"
-                  :disabled="chatStreaming || chatOutboundInFlight"
+                  :disabled="currentChatOutboundBusy()"
                   aria-label="Reply mode"
                   :value="chatPlanMode ? 'plan' : 'chat'"
                   @change="chatPlanMode = ($event.target.value === 'plan')"
@@ -1515,7 +1515,7 @@ tailwind.config = {
                 <a class="font-semibold text-indigo-600 dark:text-indigo-400 hover:underline" :href="chatPlanInboxOpenHref()">Open plan</a>
               </p>
               <p class="text-[11px] text-slate-500 dark:text-slate-400 leading-snug">Tap <strong class="text-slate-700 dark:text-slate-200">Run plan</strong> when you want the agent to execute. To change steps first, reply in chat so the agent can post an updated <code class="text-[10px]">brain_plan</code> block.</p>
-              <button type="button" @click="executeApprovedChatPlan()" :disabled="chatStreaming || chatOutboundInFlight" class="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold px-3 py-1.5 disabled:opacity-40 disabled:pointer-events-none transition-colors">
+              <button type="button" @click="executeApprovedChatPlan()" :disabled="currentChatOutboundBusy()" class="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold px-3 py-1.5 disabled:opacity-40 disabled:pointer-events-none transition-colors">
                 <i data-lucide="play" class="w-3.5 h-3.5" aria-hidden="true"></i>
                 Run plan
               </button>
@@ -1728,7 +1728,7 @@ tailwind.config = {
             <div class="relative h-10 min-h-[2.5rem] max-h-[2.5rem] shrink-0 min-w-[4rem] max-w-[5rem]">
               <select
                 class="h-10 w-full cursor-pointer appearance-none rounded-lg border border-slate-200 bg-slate-50 py-0 pl-2 pr-8 text-xs font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-slate-400 disabled:opacity-50 dark:border-slate-600 dark:bg-slate-900/50 dark:text-slate-200 dark:focus:ring-slate-500"
-                :disabled="chatStreaming || chatOutboundInFlight"
+                :disabled="currentChatOutboundBusy()"
                 aria-label="Reply mode"
                 :value="chatPlanMode ? 'plan' : 'chat'"
                 @change="chatPlanMode = ($event.target.value === 'plan')"
@@ -1780,7 +1780,7 @@ tailwind.config = {
               <a class="font-semibold text-indigo-600 dark:text-indigo-400 hover:underline" :href="chatPlanInboxOpenHref()">Open plan</a>
             </p>
             <p class="text-[11px] text-slate-500 dark:text-slate-400 leading-snug"><strong class="text-slate-700 dark:text-slate-200">Run plan</strong> to execute. Reply in chat to revise steps.</p>
-            <button type="button" @click="executeApprovedChatPlan()" :disabled="chatStreaming || chatOutboundInFlight" class="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold px-3 py-1.5 disabled:opacity-40 disabled:pointer-events-none transition-colors">
+            <button type="button" @click="executeApprovedChatPlan()" :disabled="currentChatOutboundBusy()" class="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold px-3 py-1.5 disabled:opacity-40 disabled:pointer-events-none transition-colors">
               <i data-lucide="play" class="w-3.5 h-3.5" aria-hidden="true"></i>
               Run plan
             </button>
@@ -1938,10 +1938,13 @@ tailwind.config = {
       </template>
       <template x-for="c in chatConversations" :key="'hist-'+c.id">
         <div class="flex items-stretch gap-1 border-b border-slate-100 dark:border-slate-700/80 hover:bg-slate-50 dark:hover:bg-slate-700/30">
-          <button type="button" @click="openConversation(c.id)" class="flex-1 min-w-0 text-left px-4 py-3">
+          <button type="button" @click="openConversation(c.id)" class="flex-1 min-w-0 text-left px-4 py-3 flex items-start gap-2">
+            <span x-show="c.active" x-cloak class="shrink-0 mt-1 inline-block h-3.5 w-3.5 rounded-full border-2 border-indigo-500 border-t-transparent animate-spin" title="Generating…" aria-hidden="true"></span>
+            <div class="min-w-0 flex-1">
             <div class="text-sm font-medium text-slate-800 dark:text-slate-100 truncate" x-text="c.title"></div>
             <div class="text-xs text-slate-400 dark:text-slate-500 mt-0.5">
               <span x-text="chatAgentDisplayName(c.agent)"></span><template x-if="c.model"><span> · <span class="tabular-nums" x-text="chatModelDisplayLabel(c.model)"></span></span></template>
+            </div>
             </div>
           </button>
           <button type="button" @click="deleteConversation(c.id, $event)" class="icon-btn shrink-0 px-3 text-slate-400 hover:text-red-600 dark:hover:text-red-400" title="Delete" aria-label="Delete conversation">

@@ -108,7 +108,7 @@ Browser  →  public/dashboard.html + public/js/*.mjs  (hash routes: #/, #/caree
          SQLite under DB_DIR (single-tenant) or users/<uuid>/data/ (multi-user)
 ```
 
-**Main JSON endpoints:** `/api/health`, `/api/auth-status`, `/api/login`, `/api/logout`, `/api/dashboard`, `/api/dashboard-manifest`, `/api/dashboard-page/:slug`, `/api/dashboard-section/...`, `/api/dashboard-section-todos/...`, `/api/dashboard-section-view/...`, `/api/career`, `/api/finance`, `/api/business`, `/api/action-domain/:slug`, `/api/action-items/:id`, `/api/files`, `/api/upload`, `/api/chat`, `/api/db`, orchestrator brief routes (`/api/cyrus`, …).
+**Main JSON endpoints:** `/api/health`, `/api/auth-status`, `/api/login`, `/api/logout`, `/api/dashboard`, `/api/dashboard-manifest`, `/api/dashboard-page/:slug`, `/api/dashboard-section/...`, `/api/dashboard-section-todos/...`, `/api/dashboard-section-view/...`, `/api/career`, `/api/finance`, `/api/business`, `/api/action-domain/:slug`, `/api/action-items/:id`, `/api/files`, `/api/upload`, `/api/chat`, `/api/chat/conversations`, `/api/chat/conversations/:id/stream`, `/api/chat/conversations/:id/abort`, `/api/db`, orchestrator brief routes (`/api/cyrus`, …).
 
 ### Dashboard manifest (`workspace/dashboard.json`)
 
@@ -171,6 +171,17 @@ When **`workspace/dashboard.json` is omitted** (single-tenant only), the app shi
 
 `POST /api/chat` streams **Server-Sent Events** (`text/event-stream`): JSON lines with `text`, `tool`, `heartbeat`, or terminal `[DONE]`.
 
+### Concurrent chats and reattach
+
+When **`BRAIN_CHAT_REGISTRY` is not `0`** (default: enabled), each in-flight assistant turn is registered in an in-process **chat run registry** keyed by conversation id:
+
+- **`POST /api/chat`** still accepts the user message and returns the same SSE stream for the initiating tab. If a turn is already running for that conversation, the server responds **409** with `A response is still being generated for this chat.` (the dashboard queues another prompt for that chat until the run finishes).
+- **`GET /api/chat/conversations/:id/stream?fromSeq=N`** attaches to the active run (or returns `noActiveRun` and `[DONE]` if nothing is running). Event payloads include a monotonic **`seq`** so late subscribers can pass **`fromSeq`** to replay buffered events. Multiple browser tabs can attach to the same run.
+- **`POST /api/chat/conversations/:id/abort`** aborts the server-side run (and the CLI child process when applicable). The dashboard **Stop** button calls this so disconnecting one tab does not cancel a background run started from another tab.
+- **`GET /api/chat/conversations`** and **`GET /api/chat/conversations/:id`** include **`active`** and **`lastEventSeq`** when the registry is enabled so the UI can show a spinner on running threads.
+
+Set **`BRAIN_CHAT_REGISTRY=0`** to restore the legacy behaviour where closing the `POST /api/chat` response aborts the run.
+
 | `BRAIN_CHAT_BACKEND` | Behaviour |
 |----------------------|-----------|
 | **`cli`** (default) | Spawns Claude Code: `claude -p --dangerously-skip-permissions`, `cwd` = workspace dir. |
@@ -188,6 +199,9 @@ When **`workspace/dashboard.json` is omitted** (single-tenant only), the app shi
 | `BRAIN_CHAT_MCP_DB=1` | Attach read-only DB MCP (`brain_select`). |
 | `BRAIN_CHAT_MAX_TURNS` | SDK turn limit (default 100). |
 | `BRAIN_CHAT_RESUME` | Set `0` to disable SDK session resume. |
+| `BRAIN_CHAT_REGISTRY` | Set `0` to disable the in-process run registry (legacy: abort run when the POST stream closes). |
+| `BRAIN_CHAT_RUN_MAX_MS` | Hard cap on run wall time in ms (default 30 minutes); aborts the run when exceeded. |
+| `BRAIN_CHAT_RUN_EVENT_BUFFER` | Max buffered SSE events per run (default 5000); older events may be dropped with a `bufferTruncated` marker. |
 
 Plan mode (checklist / execute) requires **`BRAIN_CHAT_BACKEND=sdk`**.
 

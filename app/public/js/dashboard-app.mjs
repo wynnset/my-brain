@@ -4346,8 +4346,23 @@ document.addEventListener('alpine:init', function() {
       if (!this.chatPrompt.trim() && !files.length) return;
       var prompt = this.chatPrompt.trim() || '(See attached file(s).)';
       var planPhase = this.chatPlanAwaitingExecute ? 'execute' : this.chatPlanMode ? 'plan' : null;
-      var b = this.getChatStreamBucket(this.chatConversationId) || this.ensureChatStreamBucket(this.chatConversationId);
-      if (b && (b.streaming || b.outboundInFlight)) {
+      try {
+        await this.ensureChatConversation();
+      } catch (e) {
+        alert('Could not start chat: ' + (e && e.message ? e.message : String(e)));
+        return;
+      }
+      var convId = this.chatConversationId;
+      if (!convId) {
+        alert('Could not start chat: no conversation id.');
+        return;
+      }
+      var b = this.getChatStreamBucket(convId) || this.ensureChatStreamBucket(convId);
+      if (!b) {
+        alert('Could not start chat: internal state error.');
+        return;
+      }
+      if (b.streaming || b.outboundInFlight) {
         b.outboundQueue.push({
           id: 'q-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8),
           prompt: prompt,
@@ -4366,7 +4381,7 @@ document.addEventListener('alpine:init', function() {
         return;
       }
       b.outboundInFlight = true;
-      if (this.chatConversationId === b.convId) this.chatOutboundInFlight = true;
+      if (this.chatConversationId === convId) this.chatOutboundInFlight = true;
       await this.runChatTurn(prompt, files, { planPhase: planPhase });
     },
 

@@ -1697,10 +1697,20 @@ document.addEventListener('alpine:init', function() {
     },
 
     retryLastChat() {
-      if (!this.chatRetryPrompt) return;
+      var prompt = this.chatRetryPrompt;
+      if (!prompt) {
+        for (var i = this.chatMessages.length - 1; i >= 0; i--) {
+          var m = this.chatMessages[i];
+          if (m && m.role === 'user' && typeof m.content === 'string' && m.content.trim()) {
+            prompt = m.content;
+            break;
+          }
+        }
+      }
+      if (!prompt) return;
       var last = this.chatMessages[this.chatMessages.length - 1];
       if (last && last.role === 'assistant' && last.error) this.chatMessages.pop();
-      this.chatPrompt = this.chatRetryPrompt;
+      this.chatPrompt = prompt;
       this.submitChat();
     },
 

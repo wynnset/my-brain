@@ -30,6 +30,7 @@ module.exports = function registerChatRoutes(app, ctx) {
     getRegistryReadonly,
     appendAssistantStreamChunk,
     orchestrator,
+    DB_DIR,
   } = ctx;
   const { assertUnderRoot, safeJoin } = tenancy;
   const {
@@ -866,6 +867,68 @@ module.exports = function registerChatRoutes(app, ctx) {
     }
   }
   
+  /**
+   * Rewrite the tenant's `workspace/config.json` so DB-path keys point at the
+   * actual container paths under `dataDir` (the runtime tenant data dir).
+   *
+   * Background: tenant configs created from a local install (or copied during
+   * the legacy-volume migration) often hold host-machine paths like
+   * `/Users/<me>/.../data/finance.db`. Inside the Fly container those paths
+   * don't exist; an agent that opens them via `sqlite3` gets a brand-new empty
+   * database with no tables and concludes the schema is missing.
+   *
+   * Strategy: only touch the well-known *_db_path keys (and write a single
+   * canonical `data_dir`). Custom keys, thresholds, currency, owner_name etc.
+   * are preserved as-is. Writes are atomic and skipped when nothing changed.
+   *
+   * @param {string} workspaceDir Tenant workspace root (where `config.json` lives).
+   * @param {string} dataDir      Tenant data dir (where `*.db` files live).
+   */
+  function normalizeWorkspaceConfigDbPaths(workspaceDir, dataDir) {
+    if (!workspaceDir || !dataDir) return;
+    const cfgPath = path.join(workspaceDir, 'config.json');
+    let raw;
+    try {
+      raw = fs.readFileSync(cfgPath, 'utf8');
+    } catch (err) {
+      if (err.code !== 'ENOENT') {
+        console.warn('[chat] config.json normalize: read failed:', err.message);
+      }
+      return;
+    }
+    let cfg;
+    try {
+      cfg = JSON.parse(raw);
+    } catch (err) {
+      console.warn('[chat] config.json normalize: parse failed:', err.message);
+      return;
+    }
+    if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) return;
+    const absData = path.resolve(dataDir);
+    const want = {
+      data_dir: absData,
+      db_path: path.join(absData, 'finance.db'),
+      brain_db_path: path.join(absData, 'brain.db'),
+      wynnset_db_path: path.join(absData, 'wynnset.db'),
+      launchpad_db_path: path.join(absData, 'launchpad.db'),
+    };
+    let changed = false;
+    for (const [k, v] of Object.entries(want)) {
+      if (cfg[k] !== v) {
+        cfg[k] = v;
+        changed = true;
+      }
+    }
+    if (!changed) return;
+    try {
+      const tmp = `${cfgPath}.tmp-${process.pid}-${Date.now()}`;
+      fs.writeFileSync(tmp, `${JSON.stringify(cfg, null, 2)}\n`, 'utf8');
+      fs.renameSync(tmp, cfgPath);
+    } catch (err) {
+      console.warn('[chat] config.json normalize: write failed:', err.message);
+    }
+  }
+
   /** Per-tenant dirs so Claude Code does not read the server user’s ~/.claude (memory, CLAUDE.md, OAuth cache) for another login. */
   function ensureTenantChatClaudeDirs(dataDir) {
     const root = path.join(dataDir, '.claude-chat-runtime');
@@ -929,6 +992,48 @@ module.exports = function registerChatRoutes(app, ctx) {
     return !!login && PLATFORM_OWNER_LOGINS.includes(login);
   }
   
+  /**
+   * Appended to every dashboard chat so the model knows the **absolute** paths
+   * of its working directory and tenant data dir. The Claude Code `Write` tool
+   * requires an absolute path; without this block the agent has no grounded
+   * way to construct one and has been observed fabricating UUID segments
+   * (e.g. guessing a `data/users/<wrong-uuid>/workspace/...` prefix). The
+   * spawned child's `cwd` and `BRAIN_DATA_DIR` env are already set to these
+   * values — we just surface them in-prompt so the agent uses them directly.
+   */
+  function appendWorkspaceRuntimePaths(req, basePrompt) {
+    let wsAbs = '';
+    let dataAbs = '';
+    try {
+      wsAbs = path.resolve(workspaceDirForRequest(req));
+    } catch (_) {}
+    try {
+      dataAbs = path.resolve(tenantDataDirForRequest(req));
+    } catch (_) {}
+    if (!wsAbs && !dataAbs) return basePrompt;
+    const lines = [
+      '---',
+      '',
+      '## Workspace runtime paths (absolute)',
+      '',
+      'Your tools run with the working directory set to the workspace root listed below. Use these **exact** absolute paths whenever a tool requires one — do **not** guess UUIDs, hostnames, or container paths from memory.',
+      '',
+    ];
+    if (wsAbs) lines.push(`- Workspace root (your \`cwd\`): \`${wsAbs}\``);
+    if (dataAbs) lines.push(`- Tenant data dir (\`$BRAIN_DATA_DIR\`, holds \`*.db\` files): \`${dataAbs}\``);
+    lines.push('');
+    lines.push(
+      'Path conventions inside tools:',
+      '',
+      '- `Read`, `Edit`, `Glob`, `Grep`, and `Bash` resolve **relative** paths against the workspace root, so `owners-inbox/foo.md` works directly.',
+      '- The `Write` tool requires an **absolute** path. Build it by joining the workspace root above with your workspace-relative path (for example `' +
+        (wsAbs ? `${wsAbs}/owners-inbox/foo.md` : '<workspace-root>/owners-inbox/foo.md') +
+        '`). If you are ever unsure, run `pwd` via `Bash` first and use that — never invent the path from prior context.',
+      '',
+    );
+    return `${basePrompt}\n\n${lines.join('\n')}`;
+  }
+
   /** Appended to every dashboard chat — avoid phantom “file saved / exists” claims without tool evidence. */
   function appendWorkspaceFileEvidenceInstructions(basePrompt) {
     const block = [
@@ -1011,6 +1116,10 @@ module.exports = function registerChatRoutes(app, ctx) {
   
     const td = opts.tenantDataDir != null && multiUserMode() ? String(opts.tenantDataDir).trim() : '';
     if (td) {
+      // Canonical container path to the tenant's data dir. Subagents (and the
+      // `db` CLI) read this instead of guessing or trusting host-machine paths
+      // baked into workspace/config.json.
+      env.BRAIN_DATA_DIR = path.resolve(td);
       // Always block Claude Code auto-memory / global CLAUDE.md layers so another tenant’s session does not load them.
       env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = '1';
       if (process.env.BRAIN_CHAT_LOAD_CLAUDE_MDS === '1') {
@@ -1035,6 +1144,11 @@ module.exports = function registerChatRoutes(app, ctx) {
       ensureFlyClaudeIsolation();
       env.HOME = '/tmp/brain-fake-home';
       env.CLAUDE_CONFIG_DIR = '/tmp/brain-claude-config';
+    }
+    // Single-tenant fallback: still expose a canonical data dir so the `db`
+    // CLI and any agent that wants one consistent answer can find it.
+    if (!env.BRAIN_DATA_DIR) {
+      env.BRAIN_DATA_DIR = path.resolve(DB_DIR);
     }
     return env;
   }
@@ -1542,6 +1656,7 @@ module.exports = function registerChatRoutes(app, ctx) {
       systemPrompt = appendPlatformConfidentialityRules(systemPrompt);
     }
     systemPrompt = appendWorkspaceFileEvidenceInstructions(systemPrompt);
+    systemPrompt = appendWorkspaceRuntimePaths(req, systemPrompt);
     systemPrompt = appendDashboardManifestChatGuidance(req, systemPrompt);
     if (isOrchestratorChatAgent(sessionAgent)) {
       systemPrompt = appendOrchestratorOperatingRules(systemPrompt);
@@ -1727,6 +1842,16 @@ module.exports = function registerChatRoutes(app, ctx) {
           const perm = runner.parsePermissionOptions(process.env.BRAIN_CHAT_PERMISSION_MODE);
           const chatDataDir = tenantDataDirForRequest(req);
           const chatWorkspaceDir = workspaceDirForRequest(req);
+          // Keep the workspace config's DB paths in sync with the runtime data
+          // dir so Bash + sqlite3 subagents (Ledger, Charter, Arc) can read one
+          // key and get a path that exists in this container. Without this,
+          // configs migrated from a local install still hold host paths and
+          // sqlite3 silently creates an empty DB at the bogus path.
+          try {
+            normalizeWorkspaceConfigDbPaths(chatWorkspaceDir, chatDataDir);
+          } catch (err) {
+            console.warn('[chat] config.json normalize:', err.message);
+          }
           let toolsOpt = runner.parseToolsOption(process.env.BRAIN_CHAT_TOOLS);
           if (planPhase === 'plan') {
             toolsOpt = ['Read', 'Glob', 'Grep'];
@@ -1974,7 +2099,13 @@ module.exports = function registerChatRoutes(app, ctx) {
   
     const transcript = formatTranscriptFromMessages(sess.messages, CHAT_MAX_TRANSCRIPT_CHARS);
     const fullPrompt = `${systemPrompt}\n\n---\n\n${transcript}`;
-  
+
+    try {
+      normalizeWorkspaceConfigDbPaths(workspaceDirForRequest(req), tenantDataDirForRequest(req));
+    } catch (err) {
+      console.warn('[chat] config.json normalize:', err.message);
+    }
+
     proc = spawn(CLAUDE_BIN, ['-p', '--dangerously-skip-permissions'], {
       env: envForClaudeChat({
         tenantDataDir: multiUserMode() ? tenantDataDirForRequest(req) : null,

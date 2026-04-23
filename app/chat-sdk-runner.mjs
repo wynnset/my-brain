@@ -304,6 +304,12 @@ export async function runAgentSdkQuery(opts) {
   let sdkBilling = null;
   /** Open delegations: `tool_use_id` → agent slug. Cleared as `tool_result` blocks arrive. */
   const openDelegations = new Map();
+  /**
+   * When the model pauses to call a tool (or hand off to a subagent) we set this flag so that
+   * the next streamed text chunk starts on a new paragraph instead of gluing onto the prior
+   * sentence (e.g. "Let me pull this now.Ok, here's what I found" → proper paragraph break).
+   */
+  let pendingParagraphBreak = false;
 
   const q = query({ prompt: opts.prompt, options });
 
@@ -324,14 +330,23 @@ export async function runAgentSdkQuery(opts) {
       if (msg.type === 'stream_event') {
         const d = extractStreamTextDelta(msg.event);
         if (d) {
-          assistantBuf = appendAssistantStreamChunk(assistantBuf, d);
-          opts.onTextChunk(d);
+          let chunk = d;
+          if (pendingParagraphBreak && assistantBuf && !/\n\n$/.test(assistantBuf)) {
+            const prefix = assistantBuf.endsWith('\n') ? '\n' : '\n\n';
+            chunk = prefix + d;
+          }
+          pendingParagraphBreak = false;
+          assistantBuf = appendAssistantStreamChunk(assistantBuf, chunk);
+          opts.onTextChunk(chunk);
         }
       }
 
       if (msg.type === 'assistant') {
         const label = extractToolLabelFromAssistant(msg.message);
-        if (label) opts.onTool?.(label);
+        if (label) {
+          opts.onTool?.(label);
+          if (assistantBuf) pendingParagraphBreak = true;
+        }
         const starts = extractDelegationStartsFromAssistant(msg.message);
         for (const s of starts) {
           if (s.id) openDelegations.set(s.id, s.agent);

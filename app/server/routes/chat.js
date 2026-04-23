@@ -2113,7 +2113,10 @@ module.exports = function registerChatRoutes(app, ctx) {
             });
             mergePendingWorkspaceTouchesIntoSession(req, conversationId, pendingWorkspaceTouches);
             if (!assistantSavedRun) {
-              let content = (out.finalText || assistantBufRun || '').trim();
+              // Prefer the fully streamed buffer (includes intermediate "let me check…" narration
+              // between tool calls) over the SDK's collapsed `finalText`, so the saved transcript
+              // matches what the user just watched stream in — no transient context gets overwritten.
+              let content = (assistantBufRun || out.finalText || '').trim();
               if (!content && out.errors && out.errors.length) content = out.errors.join('\n');
               if (!content && out.hadError) content = '[Assistant finished with errors]';
               const b = out.sdkBilling;
@@ -2612,7 +2615,10 @@ module.exports = function registerChatRoutes(app, ctx) {
           });
           mergePendingWorkspaceTouchesIntoSession(req, conversationId, pendingWorkspaceTouches);
           if (!assistantSaved) {
-            let content = (out.finalText || assistantBuf || '').trim();
+            // Prefer the fully streamed buffer (includes intermediate "let me check…" narration
+            // between tool calls) over the SDK's collapsed `finalText`, so the saved transcript
+            // matches what the user just watched stream in — no transient context gets overwritten.
+            let content = (assistantBuf || out.finalText || '').trim();
             if (!content && out.errors && out.errors.length) content = out.errors.join('\n');
             if (!content && out.hadError) content = '[Assistant finished with errors]';
             const b = out.sdkBilling;

@@ -663,6 +663,123 @@ document.addEventListener('alpine:init', function() {
         + '   •   This month: ' + fmt(c.monthSpendUsd) + ' / ' + fmt(c.monthlyLimitUsd);
     },
 
+    // ─── Usage-page credit-limit helpers ───────────────────────────────────
+    //
+    // Thin computed helpers used by the progress bars + history table on the
+    // Usage page. They all degrade gracefully when `chatCreditLimit` is null
+    // (e.g. single-tenant mode) so the surrounding Alpine template can hide
+    // the whole block via `x-show="chatCreditLimitIsActive()"`.
+
+    /** True when the multi-user credit-limit feature is active for this tenant. */
+    chatCreditLimitIsActive() {
+      var c = this.chatCreditLimit;
+      return !!(c && c.enabled !== false);
+    },
+
+    /**
+     * Progress-bar percentage (0–100, capped) for the daily or monthly cycle.
+     * Returns 0 when the cap is 0 / unset (a limit of 0 means "disabled" on
+     * the server).
+     */
+    chatCreditLimitPercent(kind) {
+      var c = this.chatCreditLimit;
+      if (!c) return 0;
+      var spend = kind === 'monthly' ? Number(c.monthSpendUsd) : Number(c.daySpendUsd);
+      var cap = kind === 'monthly' ? Number(c.monthlyLimitUsd) : Number(c.dailyLimitUsd);
+      if (!Number.isFinite(spend) || spend <= 0) return 0;
+      if (!Number.isFinite(cap) || cap <= 0) return 0;
+      var pct = (spend / cap) * 100;
+      if (pct < 0) return 0;
+      if (pct > 100) return 100;
+      return pct;
+    },
+
+    /** Tailwind class for the progress bar fill, scaled by usage ratio. */
+    chatCreditLimitBarClass(kind) {
+      var pct = this.chatCreditLimitPercent(kind);
+      if (pct >= 100) return 'bg-rose-500 dark:bg-rose-500';
+      if (pct >= 85) return 'bg-amber-500 dark:bg-amber-400';
+      if (pct >= 60) return 'bg-indigo-500 dark:bg-indigo-400';
+      return 'bg-emerald-500 dark:bg-emerald-400';
+    },
+
+    /** "$1.23 / $10.00 used" line above each progress bar. */
+    chatCreditLimitSpendLine(kind) {
+      var c = this.chatCreditLimit;
+      if (!c) return '';
+      var spend = kind === 'monthly' ? c.monthSpendUsd : c.daySpendUsd;
+      var cap = kind === 'monthly' ? c.monthlyLimitUsd : c.dailyLimitUsd;
+      var capNum = Number(cap);
+      if (!Number.isFinite(capNum) || capNum <= 0) {
+        return this._fmtCreditUsd(spend) + ' used   \u2022   No limit';
+      }
+      var remaining = capNum - (Number(spend) || 0);
+      if (!Number.isFinite(remaining) || remaining < 0) remaining = 0;
+      return (
+        this._fmtCreditUsd(spend) + ' / ' + this._fmtCreditUsd(cap)
+        + '   \u2022   '
+        + this._fmtCreditUsd(remaining) + ' remaining'
+      );
+    },
+
+    /** "Resets at …" caption beneath each bar (uses visitor locale). */
+    chatCreditLimitResetCaption(kind) {
+      var c = this.chatCreditLimit;
+      if (!c) return '';
+      var iso = kind === 'monthly' ? c.monthResetsAt : c.dayResetsAt;
+      if (!iso) return '';
+      try {
+        var d = new Date(iso);
+        var opts = kind === 'monthly'
+          ? { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }
+          : { weekday: 'short', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' };
+        return 'Resets ' + d.toLocaleString(undefined, opts);
+      } catch (_) { return ''; }
+    },
+
+    /** Subtitle for the monthly card — e.g. "Apr 20 → May 20 cycle". */
+    chatCreditLimitMonthlyCycleLabel() {
+      var c = this.chatCreditLimit;
+      if (!c || !c.monthPeriodStart || !c.monthResetsAt) return '';
+      try {
+        var start = new Date(c.monthPeriodStart + 'T12:00:00Z');
+        var end = new Date(c.monthResetsAt);
+        var o = { month: 'short', day: 'numeric' };
+        return start.toLocaleDateString(undefined, o) + ' \u2192 ' + end.toLocaleDateString(undefined, o) + ' cycle';
+      } catch (_) { return ''; }
+    },
+
+    /** Human-friendly label for an archived monthly cycle row. */
+    chatCreditLimitHistoryLabel(row) {
+      if (!row || !row.periodStart) return '';
+      try {
+        var start = new Date(row.periodStart + 'T12:00:00Z');
+        var end = row.periodEnd ? new Date(row.periodEnd + 'T12:00:00Z') : null;
+        var o = { month: 'short', day: 'numeric', year: 'numeric' };
+        if (!end) return start.toLocaleDateString(undefined, o);
+        return (
+          start.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+          + ' \u2013 '
+          + end.toLocaleDateString(undefined, o)
+        );
+      } catch (_) {
+        return String(row.periodStart);
+      }
+    },
+
+    /** History-row progress ratio, measured against the user's CURRENT monthly cap. */
+    chatCreditLimitHistoryPercent(row) {
+      var c = this.chatCreditLimit;
+      if (!c || !row) return 0;
+      var cap = Number(c.monthlyLimitUsd);
+      if (!Number.isFinite(cap) || cap <= 0) return 0;
+      var spend = Number(row.spendUsd) || 0;
+      var pct = (spend / cap) * 100;
+      if (pct < 0) return 0;
+      if (pct > 100) return 100;
+      return pct;
+    },
+
     closeChat() {
       this.chatOpen = false;
       this.closeChatAgentProfile();
@@ -773,8 +890,32 @@ document.addEventListener('alpine:init', function() {
       }
     },
 
-    /** One-line stats for home footer (month-to-date, UTC, from `/api/chat/usage-summary`). */
+    /**
+     * One-line stats for the home footer. When the multi-user credit-limit
+     * feature is enabled, formats as:
+     *   "Today $1.23 / $10.00  •  April $7.45 / $10.00"
+     * so the caps are visible at a glance. Falls back to the simpler
+     * month-to-date phrasing (from `/api/chat/usage-summary`) when limits are
+     * not in play (single-tenant mode or when the limits snapshot hasn't
+     * loaded yet).
+     */
     homeUsageFooterMain() {
+      var limits = this.chatCreditLimit;
+      if (limits && limits.enabled !== false) {
+        var monthName = 'This month';
+        var mps = limits.monthPeriodStart || '';
+        if (mps && mps.length >= 7) {
+          try {
+            var d = new Date(mps + 'T12:00:00Z');
+            monthName = d.toLocaleDateString('en-US', { month: 'long', timeZone: 'UTC' });
+          } catch (_) {}
+        }
+        return (
+          'Today ' + this._fmtCreditUsd(limits.daySpendUsd) + ' / ' + this._fmtCreditUsd(limits.dailyLimitUsd)
+          + '  \u2022  '
+          + monthName + ' ' + this._fmtCreditUsd(limits.monthSpendUsd) + ' / ' + this._fmtCreditUsd(limits.monthlyLimitUsd)
+        );
+      }
       var u = this.chatUsageSummaryForHome;
       if (!u || !u.monthToDate) return 'No usage yet';
       var m = u.monthToDate;
@@ -782,12 +923,17 @@ document.addEventListener('alpine:init', function() {
       var name = 'This month';
       if (monthKey && monthKey.length >= 7) {
         try {
-          var d = new Date(monthKey + '-01T12:00:00Z');
-          name = d.toLocaleDateString('en-US', { month: 'long', timeZone: 'UTC' });
+          var d2 = new Date(monthKey + '-01T12:00:00Z');
+          name = d2.toLocaleDateString('en-US', { month: 'long', timeZone: 'UTC' });
         } catch (_) {}
       }
       var usd = typeof m.totalCostUsd === 'number' && Number.isFinite(m.totalCostUsd) ? m.totalCostUsd : 0;
       return name + ' usage: $' + usd.toFixed(2);
+    },
+
+    _fmtCreditUsd(n) {
+      var v = Number(n);
+      return Number.isFinite(v) ? '$' + v.toFixed(2) : '—';
     },
 
     usageTokPair(inTok, outTok) {
@@ -3037,6 +3183,7 @@ document.addEventListener('alpine:init', function() {
         if (!force && this.cache.usage && now - this.cache.usage.ts < STALE_MS) {
           this.chatUsageSummary = this.cache.usage.data;
           this.pageReady.usage = true;
+          this.refreshChatCreditLimit().catch(function () {});
           return;
         }
         this.refreshing = true;
@@ -3049,6 +3196,12 @@ document.addEventListener('alpine:init', function() {
           this.chatUsageSummary = usageData;
           this.cache.usage = { ts: Date.now(), data: usageData };
           this.pageReady.usage = true;
+          // Keep the credit-limit cards on this page in sync with the server.
+          // Repaint lucide icons once the "Over limit" badge lands in the DOM.
+          var selfU = this;
+          this.refreshChatCreditLimit()
+            .catch(function () {})
+            .then(function () { selfU.$nextTick(function () { selfU.refreshIcons(); }); });
         } catch (eU) {
           this.loadError.usage = 'Could not load usage. ' + (eU.message || String(eU));
           this.chatUsageSummary = null;
@@ -3066,7 +3219,10 @@ document.addEventListener('alpine:init', function() {
         this.datatableTruncated = false;
         this.sectionsPagePanels = [];
         this.sectionsPageReady = false;
-        if (!force && this.cache.home && (now - this.cache.home.ts < STALE_MS)) return;
+        if (!force && this.cache.home && (now - this.cache.home.ts < STALE_MS)) {
+          this.refreshChatCreditLimit().catch(function () {});
+          return;
+        }
         this.refreshing = true;
         this.loadError.home = null;
         try {
@@ -3084,6 +3240,10 @@ document.addEventListener('alpine:init', function() {
           } catch (_) {
             this.chatUsageSummaryForHome = null;
           }
+          // Credit-limit snapshot powers the "Today $X / $Y" footer on home and
+          // the progress cards on /usage. Fire-and-forget so a failure doesn't
+          // block the rest of the page from rendering.
+          this.refreshChatCreditLimit().catch(function () {});
         } catch (e) {
           this.loadError.home = 'Failed to load data. Is server.js running? (' + e.message + ')';
           this.pageReady.home = true;

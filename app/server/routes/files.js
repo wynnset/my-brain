@@ -5,7 +5,6 @@ const fs = require('fs');
 const express = require('express');
 const multer = require('multer');
 const { safeJoin } = require('../tenancy/tenancy-utils.js');
-const session = require('../lib/session.js');
 
 const FILES_META_FILE = '.files-meta.json';
 const META_STRING_MAX = 240;
@@ -117,7 +116,6 @@ function registerFileRoutes(app, ctx) {
   const {
     ORCH_BRIEF_FILE,
     ORCH_BRIEF_LEGACY,
-    resolveOrchestratorBriefPath,
     resolveOrchestratorBriefPathInWorkspace,
   } = orchestrator;
 
@@ -143,9 +141,7 @@ function registerFileRoutes(app, ctx) {
     if (!base) return null;
     const ws = workspaceDirForRequest(req);
     if (dir === 'root') {
-      const brief = session.multiUserMode()
-        ? resolveOrchestratorBriefPathInWorkspace(ws)
-        : resolveOrchestratorBriefPath();
+      const brief = resolveOrchestratorBriefPathInWorkspace(ws);
       if (!brief) return null;
       const onDisk = path.basename(brief);
       if (base !== onDisk && base !== ORCH_BRIEF_FILE && base !== ORCH_BRIEF_LEGACY) return null;
@@ -201,7 +197,7 @@ function registerFileRoutes(app, ctx) {
       const listed = listVisibleFilesInDir(dirPath);
       result[dir] = FILES_META_DIRS.has(dir) ? attachMetaToEntries(dirPath, listed) : entriesWithoutMeta(listed);
     }
-    const briefPath = session.multiUserMode() ? resolveOrchestratorBriefPathInWorkspace(ws) : resolveOrchestratorBriefPath();
+    const briefPath = resolveOrchestratorBriefPathInWorkspace(ws);
     if (briefPath) {
       const stat = fs.statSync(briefPath);
       const rootName = path.basename(briefPath);

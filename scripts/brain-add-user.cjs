@@ -13,7 +13,6 @@
  *   Default chat-credit limits: $10 daily / $10 monthly (override via --daily-limit / --monthly-limit, or later via
  *   scripts/brain-set-limits.cjs).
  *
- *   --claim-legacy ONLY after the server migrated a flat volume (it writes .legacy-tenant-uuid).
  *   New tenants get brain.db only (from brain.sql under --seed-dbs / BRAIN_SEED_DBS / ./data, merged with docker-seed/).
  *   Other SQLite files (launchpad, finance, wynnset, or custom) can be created later via POST /api/db or sqlite.
  *
@@ -47,7 +46,6 @@ function parseArgs(argv) {
     else if (a === '--password') o.password = argv[++i];
     else if (a === '--seed-dbs') o.seedDbs = argv[++i];
     else if (a === '--full-team') o.fullTeam = true;
-    else if (a === '--claim-legacy') o.claimLegacy = true;
     else if (a === '--api-token') o.apiToken = argv[++i];
     else if (a === '--name') o.name = argv[++i];
     else if (a === '--daily-limit') o.dailyLimitUsd = argv[++i];
@@ -368,14 +366,10 @@ function migrateBrainDetails(dataDir) {
 
 async function main() {
   const args = parseArgs(process.argv);
-  const usage = `Usage (new tenant — omit --claim-legacy):
+  const usage = `Usage:
   node scripts/brain-add-user.cjs
     (interactive: email, password, optional name)
-  node scripts/brain-add-user.cjs --login USER --password PASS [--name "Display Name"] [--full-team] [--seed-dbs DIR]
-
-After a server-side flat-volume migration only:
-  node scripts/brain-add-user.cjs --claim-legacy [--login USER --password PASS]
-    (omit flags to be prompted)`;
+  node scripts/brain-add-user.cjs --login USER --password PASS [--name "Display Name"] [--full-team] [--seed-dbs DIR]`;
 
   await promptForCredentials(args);
 
@@ -388,49 +382,23 @@ After a server-side flat-volume migration only:
   ensureRegistry();
   const displayName = deriveDisplayName(args.login, args.name);
 
-  let userId;
-  if (args.claimLegacy) {
-    const legacyFile = path.join(vol, '.legacy-tenant-uuid');
-    if (!fs.existsSync(legacyFile)) {
-      console.error(
-        'No .legacy-tenant-uuid in this volume — nothing to claim.\n' +
-          '  --claim-legacy is only for the one-time step AFTER the server moved an old flat /data layout ' +
-          'into users/<uuid>/ (see server boot / migrate logs).\n' +
-          '  To add a normal user, run WITHOUT --claim-legacy, e.g.:\n' +
-          `    node scripts/brain-add-user.cjs --login YOUR_EMAIL --password '…'\n` +
-          `  Volume root in use: ${vol}`,
-      );
-      process.exit(1);
-    }
-    userId = fs.readFileSync(legacyFile, 'utf8').trim();
-    fs.unlinkSync(legacyFile);
-    console.log('Claiming legacy tenant', userId);
-  } else {
-    userId = crypto.randomUUID();
-  }
+  const userId = crypto.randomUUID();
 
   const base = path.join(vol, 'users', userId);
   const workspaceDir = path.join(base, 'workspace');
   const dataDir = path.join(base, 'data');
 
-  if (args.claimLegacy) {
-    if (!fs.existsSync(dataDir) || !fs.existsSync(path.join(dataDir, 'brain.db'))) {
-      console.error('Legacy tenant data missing under', dataDir);
-      process.exit(1);
-    }
-  } else if (fs.existsSync(base)) {
+  if (fs.existsSync(base)) {
     console.error('Tenant path already exists:', base);
     process.exit(1);
   }
 
-  if (!args.claimLegacy) {
-    fs.mkdirSync(workspaceDir, { recursive: true });
-    fs.mkdirSync(path.join(dataDir, 'chat-sessions'), { recursive: true });
-    const primarySeed = args.seedDbs || process.env.BRAIN_SEED_DBS || path.join(repoRoot, 'data');
-    seedDatabases(dataDir, primarySeed);
-    migrateBrainDetails(dataDir);
-    seedWorkspace(workspaceDir, { fullTeam: Boolean(args.fullTeam), displayName });
-  }
+  fs.mkdirSync(workspaceDir, { recursive: true });
+  fs.mkdirSync(path.join(dataDir, 'chat-sessions'), { recursive: true });
+  const primarySeed = args.seedDbs || process.env.BRAIN_SEED_DBS || path.join(repoRoot, 'data');
+  seedDatabases(dataDir, primarySeed);
+  migrateBrainDetails(dataDir);
+  seedWorkspace(workspaceDir, { fullTeam: Boolean(args.fullTeam), displayName });
 
   const dailyLimitUsd = parseLimitArg(args.dailyLimitUsd, 'daily-limit');
   const monthlyLimitUsd = parseLimitArg(args.monthlyLimitUsd, 'monthly-limit');

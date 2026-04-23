@@ -16,7 +16,6 @@ my-brain/                    (directory name may differ)
 │   │   ├── middleware/      # Session gate, tenant API token, dashboard DB readiness
 │   │   ├── lib/             # Session cookies, orchestrator paths, SQLite helpers, …
 │   │   ├── tenancy/         # Volume paths, registry DB helpers, per-tenant SQLite
-│   │   ├── migrate/         # Multi-user startup: normalise volume → users/<id>/…
 │   │   └── dashboard/       # `workspace/dashboard.json` manifest (pages, nav, SQL)
 │   ├── public/              # Static assets (Express `static` root after auth)
 │   │   ├── dashboard.html   # SPA shell (Tailwind CDN, hash routing)
@@ -24,14 +23,12 @@ my-brain/                    (directory name may differ)
 │   │   ├── dashboard.css , favicon.svg
 │   │   ├── js/              # Dashboard client (ES modules)
 │   │   └── shared/          # Small modules also imported by Node (e.g. stream chunk joiner)
-│   ├── chat-sdk-runner.mjs  # Agent SDK runner (ESM); loaded when `BRAIN_CHAT_BACKEND=sdk`
+│   ├── chat-sdk-runner.mjs  # Agent SDK runner (ESM); the only chat backend
 │   ├── mcp-brain-db.mjs     # stdio MCP server: read-only `SELECT` on tenant DB files
 │   └── package.json
-├── data/                    # Default DB dir: single-tenant `*.db` files and multi-user volume root
+├── data/                    # Default volume root (registry.db + users/<uuid>/…)
 ├── docker-seed/             # Files for Fly images / init (e.g. `brain.sql`, `registry.sql`)
 ├── tenant-defaults/         # Neutral stubs for new tenants (`CYRUS.md`, `config.json`, `team/`, …)
-├── team/                    # Agent definitions (one `.md` per agent)
-├── team-inbox/ , owners-inbox/ , docs/   # Workspace content (single-tenant or per-tenant copy)
 └── docs/                    # This documentation
 ```
 
@@ -92,7 +89,7 @@ cd ..                    # repo root
 node app/server.js       # default http://localhost:3131 (may auto-open browser)
 ```
 
-Optional **repo-root `.env`** (same level as `CYRUS.md`): loaded on startup. See **`.env.example`**. Common keys: `ANTHROPIC_API_KEY`, `BRAIN_CHAT_BACKEND`, `PORT`, `DATA_DIR`, `DB_DIR`, `BRAIN_MULTI_USER`, `SESSION_SECRET`, `DASHBOARD_PASSWORD`.
+Optional **repo-root `.env`** (same level as `CYRUS.md`): loaded on startup. See **`.env.example`**. Common keys: `ANTHROPIC_API_KEY`, `PORT`, `DATA_DIR`, `DB_DIR`, `SESSION_SECRET`, `TENANT_VOLUME_ROOT`. **`SESSION_SECRET`** (32+ chars) is required — the server refuses to start without it.
 
 ### Request flow (conceptual)
 
@@ -105,7 +102,7 @@ Browser  →  public/dashboard.html + public/js/*.mjs  (hash routes: #/, #/caree
               ↓
          server/routes/*.js  →  better-sqlite3 (read-only opens) + workspace file I/O
               ↓
-         SQLite under DB_DIR (single-tenant) or users/<uuid>/data/ (multi-user)
+         SQLite under users/<uuid>/data/ (per-tenant)
 ```
 
 **Main JSON endpoints:** `/api/health`, `/api/auth-status`, `/api/login`, `/api/logout`, `/api/dashboard`, `/api/dashboard-manifest`, `/api/dashboard-page/:slug`, `/api/dashboard-section/...`, `/api/dashboard-section-todos/...`, `/api/dashboard-section-view/...`, `/api/career`, `/api/finance`, `/api/business`, `/api/action-domain/:slug`, `/api/action-items/:id`, `/api/files`, `/api/upload`, `/api/chat`, `/api/chat/limits`, `/api/chat/usage-summary`, `/api/chat/conversations`, `/api/chat/conversations/:id/stream`, `/api/chat/conversations/:id/abort`, `/api/db`, orchestrator brief routes (`/api/cyrus`, …).
@@ -145,20 +142,9 @@ The dashboard reads **`workspace/dashboard.json`** (see `app/server/dashboard/da
 }
 ```
 
-Multi-user tenants with **no** `dashboard.json` start with **no** default domain pages (Home + Files only) until they add `pages` or copy an example from **`tenant-defaults/dashboard.example.json`**.
+New tenants with **no** `dashboard.json` start with **no** default domain pages (Home + Files only) until they add `pages` or copy an example from **`tenant-defaults/dashboard.example.json`**.
 
-### Dashboard pages (built-in templates)
-
-When **`workspace/dashboard.json` is omitted** (single-tenant only), the app ships default **Career**, **Finance**, and **Business** tabs as **`template: "sections"`** pages: each tab runs the same read-only SQL (against `brain`, `launchpad`, `finance`, and/or `wynnset` DB files) that previously powered the legacy JSON APIs—composed sections, sortable/filterable tables in the browser, no per-domain server edits.
-
-| Area | Data | Purpose |
-|------|------|---------|
-| **Home** | `brain.db` + optional `launchpad.db` | All-domain action items, summary cards, active week |
-| **Career** | `brain.db` + `launchpad.db` | Sections: actions, pipeline, applications, goals, outreach, consulting |
-| **Finance** | `brain.db` + `finance.db` + `wynnset.db` | Sections: actions, burn, categories, accounts, compliance, trial balance, … |
-| **Business** | `brain.db` + `wynnset.db` | Sections: actions, compliance, ledger, chart of accounts |
-
-**`action_domain`** pages (declared in `dashboard.json`) reuse the same action-item list behaviour as the domains above, scoped to one `domain` value and **`brain.db`** only.
+**`action_domain`** pages (declared in `dashboard.json`) provide a one-tab list of open action items scoped to a single `domain` value, backed by **`brain.db`**.
 
 ### Client UX (brief)
 
@@ -177,15 +163,12 @@ When **`BRAIN_CHAT_REGISTRY` is not `0`** (default: enabled), each in-flight ass
 
 - **`POST /api/chat`** still accepts the user message and returns the same SSE stream for the initiating tab. If a turn is already running for that conversation, the server responds **409** with `A response is still being generated for this chat.` (the dashboard queues another prompt for that chat until the run finishes).
 - **`GET /api/chat/conversations/:id/stream?fromSeq=N`** attaches to the active run (or returns `noActiveRun` and `[DONE]` if nothing is running). Event payloads include a monotonic **`seq`** so late subscribers can pass **`fromSeq`** to replay buffered events. Multiple browser tabs can attach to the same run.
-- **`POST /api/chat/conversations/:id/abort`** aborts the server-side run (and the CLI child process when applicable). The dashboard **Stop** button calls this so disconnecting one tab does not cancel a background run started from another tab.
+- **`POST /api/chat/conversations/:id/abort`** aborts the server-side run. The dashboard **Stop** button calls this so disconnecting one tab does not cancel a background run started from another tab.
 - **`GET /api/chat/conversations`** and **`GET /api/chat/conversations/:id`** include **`active`** and **`lastEventSeq`** when the registry is enabled so the UI can show a spinner on running threads.
 
 Set **`BRAIN_CHAT_REGISTRY=0`** to restore the legacy behaviour where closing the `POST /api/chat` response aborts the run.
 
-| `BRAIN_CHAT_BACKEND` | Behaviour |
-|----------------------|-----------|
-| **`cli`** (default) | Spawns Claude Code: `claude -p --dangerously-skip-permissions`, `cwd` = workspace dir. |
-| **`sdk`** | Loads `app/chat-sdk-runner.mjs` and runs the Agent SDK in-process; optional resume via `agentSdkSessionId` stored in the session JSON file. |
+The chat backend is the **Claude Agent SDK** (`app/chat-sdk-runner.mjs`), loaded in-process; optional resume via `agentSdkSessionId` stored in the session JSON file.
 
 **Auth for the model:** same rules as Claude Code locally — Console **API key** in `.env` and/or **subscription** OAuth under `~/.claude` when no key is set. On **Fly.io**, use an API key or cloud-provider env (`CLAUDE_CODE_USE_BEDROCK`, etc.); the app may isolate `HOME` / config dirs so volume state does not override billing.
 
@@ -193,8 +176,8 @@ Set **`BRAIN_CHAT_REGISTRY=0`** to restore the legacy behaviour where closing th
 
 | Variable | Purpose |
 |----------|---------|
-| `ANTHROPIC_API_KEY` | Normalises and passes through to the child; may drop `ANTHROPIC_AUTH_TOKEN` unless `BRAIN_CHAT_KEEP_ANTHROPIC_AUTH_TOKEN=1`. |
-| `CLAUDE_CODE_EXECUTABLE` / `CLAUDE_BIN` | Path to `claude` binary (CLI backend and SDK). |
+| `ANTHROPIC_API_KEY` | Normalises and passes through to the SDK; may drop `ANTHROPIC_AUTH_TOKEN` unless `BRAIN_CHAT_KEEP_ANTHROPIC_AUTH_TOKEN=1`. |
+| `CLAUDE_CODE_EXECUTABLE` / `CLAUDE_BIN` | Path to `claude` binary used by the SDK. |
 | `BRAIN_CHAT_TOOLS`, `BRAIN_CHAT_ALLOWED_TOOLS`, `BRAIN_CHAT_PERMISSION_MODE` | SDK tool policy. |
 | `BRAIN_CHAT_MCP_DB=1` | Attach read-only DB MCP (`brain_select`). |
 | `BRAIN_CHAT_MAX_TURNS` | SDK turn limit (default 100). |
@@ -203,21 +186,17 @@ Set **`BRAIN_CHAT_REGISTRY=0`** to restore the legacy behaviour where closing th
 | `BRAIN_CHAT_RUN_MAX_MS` | Hard cap on run wall time in ms (default 30 minutes); aborts the run when exceeded. |
 | `BRAIN_CHAT_RUN_EVENT_BUFFER` | Max buffered SSE events per run (default 5000); older events may be dropped with a `bufferTruncated` marker. |
 
-Plan mode (checklist / execute) requires **`BRAIN_CHAT_BACKEND=sdk`**.
-
 ---
 
-## Multi-user mode (`BRAIN_MULTI_USER=1`)
+## Multi-tenant layout
 
 - **Volume root:** `TENANT_VOLUME_ROOT` or `DB_DIR` (if unset, defaults to repo **`data/`**, same basis as `server.js`’s `DB_DIR`). Holds **`registry.db`** and **`users/<uuid>/`** trees.
 - **Per user:** `users/<uuid>/workspace/` (files, `team/`, inbox folders, `dashboard.json`) and `users/<uuid>/data/` (SQLite files, `chat-sessions/`, optional `chat-tool-audit.log`).
-- **Auth:** `SESSION_SECRET` (32+ chars). Login + password; bcrypt in `registry.db`. Session cookie carries user id; the server resolves paths from that, never from unchecked client input.
+- **Auth:** `SESSION_SECRET` (32+ chars) is required. Login + password; bcrypt in `registry.db`. Session cookie carries user id; the server resolves paths from that, never from unchecked client input.
 - **Provisioning:** `node scripts/brain-add-user.cjs` (see script header for flags). New tenants get starter workspace files from **`tenant-defaults/`** and a **`brain.db`** seed from configured seed dirs / **`docker-seed/`** as documented in the script.
 - **Machine API:** optional per-user `api_token` in `registry`; send `Authorization: Bearer <token>` for `POST /api/db` and `POST /api/upload` without a browser cookie.
 
-Single-tenant mode: leave **`BRAIN_MULTI_USER` unset**, put the four `*.db` files under `DB_DIR`, set **`DASHBOARD_PASSWORD`** (or rely on open local use).
-
-### Per-user chat credit limits (multi-user only)
+### Per-user chat credit limits
 
 Every tenant has a **daily** and **monthly** USD cap on chat spend, enforced by
 the server before `POST /api/chat` accepts a new message. Counters live in
@@ -233,16 +212,15 @@ user nor the agents running on their behalf can edit them — the per-tenant
   (`users.created_at`). When a month does not contain that day (Feb 30/31, etc.)
   the cycle starts on that month's last day instead, so Jan 31 → Feb 28/29 → Mar 31.
 - **Accounting:** after each assistant turn with billing data, the chat route
-  calls `registryDb.addUsage(db, userId, totalCostUsd)`. The SDK backend reports
-  `totalCostUsd`; the CLI backend does not, so CLI turns currently do not move
-  the counters (see "Useful env (chat)").
+  calls `registryDb.addUsage(db, userId, totalCostUsd)`. The Agent SDK reports
+  `totalCostUsd` per turn.
 - **Enforcement:** `POST /api/chat` returns **`402 Payment Required`** with a
   JSON body `{ creditLimitExceeded: true, exceededKind: 'daily'|'monthly',
   resetsAt, dailyLimitUsd, monthlyLimitUsd, daySpendUsd, monthSpendUsd, … }`
   when a cap is hit. The dashboard shows a prominent red banner above the chat
   composer with the reset time and disables the Send button until the reset.
 - **Read the snapshot:** `GET /api/chat/limits` returns the same payload for
-  the authenticated tenant (plus `enabled: false` in single-tenant mode). The
+  the authenticated tenant. The
   payload also carries a `monthHistory` array (newest cycle first, up to
   `BRAIN_CHAT_MONTH_HISTORY_LIMIT`, default `12`) of closed monthly cycles:
   `{ periodStart, periodEnd, spendUsd, closedAt }`.
@@ -266,7 +244,7 @@ user nor the agents running on their behalf can edit them — the per-tenant
 
 1. Build/deploy from repo **`Dockerfile`** (installs app deps + global `claude-code`, copies `app/server.js`, `app/server/`, `app/public/`, `chat-sdk-runner.mjs`, `mcp-brain-db.mjs`, seeds, `tenant-defaults/`).
 2. Mount persistent volume at **`/data`**; set **`DATA_DIR`** / **`DB_DIR`** to `/data` in production.
-3. **`fly secrets set`:** at minimum `ANTHROPIC_API_KEY` for chat; `SESSION_SECRET` + multi-user **or** `DASHBOARD_PASSWORD` for single-tenant; optional `BRAIN_API_TOKEN` for scripted `POST /api/db`.
+3. **`fly secrets set`:** at minimum `ANTHROPIC_API_KEY` for chat and `SESSION_SECRET` (32+ chars) for dashboard login. Per-user API tokens (for scripted `POST /api/db`) are stored on the `registry.db` `users.api_token` column — set via `brain-add-user.cjs --api-token …` or by editing the row.
 4. Smoke: `curl https://<app>.fly.dev/api/health` → `{"ok":true,...}`.
 
 ---
@@ -300,5 +278,5 @@ user nor the agents running on their behalf can edit them — the per-tenant
 ## Related paths
 
 - **MCP (editors):** `app/mcp-brain-db.mjs` — read-only queries against the same DB files the dashboard uses.
-- **Tests:** from **`app/`**, `npm test` runs `node --test` on `server/tenancy/`, `server/migrate/`, and `server/dashboard/` `*.test.js` files.
+- **Tests:** from **`app/`**, `npm test` runs `node --test` on `server/tenancy/` and `server/dashboard/` `*.test.js` files.
 - **Tenant maintenance:** `scripts/brain-delete-user.cjs` loads tenancy helpers from **`app/server/tenancy/`**.

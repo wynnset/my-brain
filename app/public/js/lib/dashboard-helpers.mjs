@@ -390,7 +390,7 @@ export function uploadDefaultDomainForAgent(agentId, pages) {
   if (a === 'owner') return 'personal';
   return p.career ? 'career' : 'personal';
 }
-/** Same-origin API calls; sends session cookie when DASHBOARD_PASSWORD auth is enabled. */
+/** Same-origin API calls; sends session cookie when SESSION_SECRET auth is enabled. */
 export function fetchWithAuth(url, init) {
   var cfg = init ? Object.assign({}, init) : {};
   cfg.credentials = 'include';

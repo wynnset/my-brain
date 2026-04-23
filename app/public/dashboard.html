@@ -205,9 +205,9 @@ tailwind.config = {
     </template>
 
     <div x-show="pageReady.usage && !loadError.usage && chatUsageSummary" x-cloak class="space-y-6">
-      <!-- Per-user credit limits (multi-user mode only). Progress bars for
-           the live daily + monthly cycles, plus a tracked-history roll-up.
-           Hidden for single-tenant deployments via chatCreditLimitIsActive(). -->
+      <!-- Per-user credit limits. Progress bars for the live daily + monthly
+           cycles, plus a tracked-history roll-up. Hidden when no limits row
+           exists yet via chatCreditLimitIsActive(). -->
       <section x-show="chatCreditLimitIsActive()" x-cloak
         class="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800/80 p-4 sm:p-5 shadow-sm space-y-5"
         aria-label="Chat credit limits">

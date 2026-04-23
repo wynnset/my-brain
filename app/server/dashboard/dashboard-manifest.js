@@ -2,7 +2,6 @@
 
 const fs = require('fs');
 const path = require('path');
-const { builtinDomainSectionPages } = require('./builtin-domain-sections.js');
 
 /** Basenames only (no path / `.db`); aligned with POST /api/db allowlist. */
 const DB_BASE_RE = /^[a-z][a-z0-9_-]{0,62}$/i;
@@ -34,12 +33,8 @@ const TEMPLATE = {
   },
 };
 
-function buildBuiltinManifestDefinition(multiUser) {
-  if (multiUser) {
-    return { version: 1, pages: [] };
-  }
-  /** Default tenant: three domain tabs as `sections` (SQL-driven datatables), same data as legacy domain APIs. */
-  return { version: 1, pages: builtinDomainSectionPages() };
+function buildBuiltinManifestDefinition() {
+  return { version: 1, pages: [] };
 }
 
 function readManifestFile(workspaceDir) {
@@ -660,18 +655,15 @@ function normalizePageEntry(raw, index) {
 
 /**
  * Resolve workspace `dashboard.json` against files on disk.
- * @param {object} [opts]
- * @param {boolean} [opts.multiUser]
- * - Missing file → built-in default (empty pages if multiUser; else Career / Finance / Business with stock slugs and DB gates).
- * - Multi-user with a custom file: `career` / `finance` / `business` templates are allowed whenever listed (same rules as single-tenant); tabs stay disabled until the matching `*.db` exists.
+ * - Missing file → built-in default (empty pages; tenant must declare pages in `dashboard.json`).
+ * - `career` / `finance` / `business` templates stay disabled until the matching `*.db` exists.
  * - `template: "datatable"` + `db` + `sql` → read-only table page backed by any tenant SQLite basename.
  * - `template: "sections"` + `sections: [{ id, template, ... }]` → one nav tab; each child section is currently a `datatable` (same `db`/`sql` rules). Page is enabled if at least one child section has its DB file.
  * - `template: "action_domain"` + `domain` → one nav tab of open `action_items` filtered to that domain (requires `brain.db` only). Same domains as `action_items.domain` in brain.db.
  */
-function resolveDashboardManifest(workspaceDir, dataDir, opts) {
-  const multiUser = !!(opts && opts.multiUser);
+function resolveDashboardManifest(workspaceDir, dataDir) {
   const rawFile = readManifestFile(workspaceDir);
-  const builtin = buildBuiltinManifestDefinition(multiUser);
+  const builtin = buildBuiltinManifestDefinition();
   let pagesRaw;
   if (rawFile == null) {
     pagesRaw = builtin.pages;
@@ -731,8 +723,8 @@ function resolveDashboardManifest(workspaceDir, dataDir, opts) {
   };
 }
 
-function enabledTemplates(workspaceDir, dataDir, opts) {
-  const { enabledPages } = resolveDashboardManifest(workspaceDir, dataDir, opts);
+function enabledTemplates(workspaceDir, dataDir) {
+  const { enabledPages } = resolveDashboardManifest(workspaceDir, dataDir);
   const s = new Set();
   for (const p of enabledPages) {
     s.add(p.template);
@@ -773,16 +765,16 @@ function navPayloadFromEnabled(enabledPages) {
   });
 }
 
-function findEnabledPageBySlug(workspaceDir, dataDir, opts, slug) {
+function findEnabledPageBySlug(workspaceDir, dataDir, slug) {
   const s = String(slug || '').trim().toLowerCase();
   if (!SLUG_RE.test(s) || RESERVED_SLUGS.has(s)) return null;
-  const { enabledPages } = resolveDashboardManifest(workspaceDir, dataDir, opts);
+  const { enabledPages } = resolveDashboardManifest(workspaceDir, dataDir);
   return enabledPages.find((p) => p.slug === s) || null;
 }
 
 /** Enabled `datatable` section inside an enabled `sections` page (for GET /api/dashboard-section/...). */
-function findEnabledSection(workspaceDir, dataDir, opts, pageSlug, sectionId) {
-  const page = findEnabledPageBySlug(workspaceDir, dataDir, opts, pageSlug);
+function findEnabledSection(workspaceDir, dataDir, pageSlug, sectionId) {
+  const page = findEnabledPageBySlug(workspaceDir, dataDir, pageSlug);
   if (!page || page.template !== 'sections' || !Array.isArray(page.sections)) return null;
   const sid = String(sectionId || '').trim().toLowerCase();
   if (!SLUG_RE.test(sid) || RESERVED_SLUGS.has(sid)) return null;
@@ -792,8 +784,8 @@ function findEnabledSection(workspaceDir, dataDir, opts, pageSlug, sectionId) {
 }
 
 /** Enabled `todos` section (for GET /api/dashboard-section-todos/...). */
-function findEnabledTodosSection(workspaceDir, dataDir, opts, pageSlug, sectionId) {
-  const page = findEnabledPageBySlug(workspaceDir, dataDir, opts, pageSlug);
+function findEnabledTodosSection(workspaceDir, dataDir, pageSlug, sectionId) {
+  const page = findEnabledPageBySlug(workspaceDir, dataDir, pageSlug);
   if (!page || page.template !== 'sections' || !Array.isArray(page.sections)) return null;
   const sid = String(sectionId || '').trim().toLowerCase();
   if (!SLUG_RE.test(sid) || RESERVED_SLUGS.has(sid)) return null;
@@ -813,8 +805,8 @@ const RICH_VIEW_TEMPLATES = new Set([
 ]);
 
 /** Enabled rich HTML section (`funnel_bars`, `progress_card`). */
-function findEnabledRichSection(workspaceDir, dataDir, opts, pageSlug, sectionId) {
-  const page = findEnabledPageBySlug(workspaceDir, dataDir, opts, pageSlug);
+function findEnabledRichSection(workspaceDir, dataDir, pageSlug, sectionId) {
+  const page = findEnabledPageBySlug(workspaceDir, dataDir, pageSlug);
   if (!page || page.template !== 'sections' || !Array.isArray(page.sections)) return null;
   const sid = String(sectionId || '').trim().toLowerCase();
   if (!SLUG_RE.test(sid) || RESERVED_SLUGS.has(sid)) return null;

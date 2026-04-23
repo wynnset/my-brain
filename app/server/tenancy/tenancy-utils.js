@@ -6,10 +6,6 @@ const crypto = require('crypto');
 
 const TENANT_USER_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-function isMultiUser() {
-  return process.env.BRAIN_MULTI_USER === '1';
-}
-
 /**
  * Default DB / tenancy volume when env unset — must match server.js `DB_DIR` default
  * (`path.join(__dirname, '..', 'data')` with server.js living in `app/` → repo `data/`).
@@ -72,7 +68,6 @@ function randomUuidV4() {
 
 module.exports = {
   TENANT_USER_ID_RE,
-  isMultiUser,
   volumeRoot,
   registryDbPath,
   tenantPaths,

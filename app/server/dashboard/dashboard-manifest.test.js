@@ -12,25 +12,12 @@ const {
   findEnabledSection,
 } = require('./dashboard-manifest.js');
 
-test('missing dashboard.json uses builtin three slugs (single-tenant)', () => {
+test('missing dashboard.json yields no default pages', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dash-'));
   const dataDir = path.join(tmp, 'data');
   fs.mkdirSync(dataDir);
   fs.writeFileSync(path.join(dataDir, 'launchpad.db'), '');
-  const r = resolveDashboardManifest(tmp, dataDir, { multiUser: false });
-  assert.equal(r.pages.length, 3);
-  const career = r.pages.find((p) => p.slug === 'career' && p.template === 'sections');
-  assert.ok(career);
-  assert.ok(career.enabled);
-  assert.ok(!r.pages.find((p) => p.slug === 'finance').enabled);
-});
-
-test('missing dashboard.json in multi-user yields no default domain pages', () => {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dash-'));
-  const dataDir = path.join(tmp, 'data');
-  fs.mkdirSync(dataDir);
-  fs.writeFileSync(path.join(dataDir, 'launchpad.db'), '');
-  const r = resolveDashboardManifest(tmp, dataDir, { multiUser: true });
+  const r = resolveDashboardManifest(tmp, dataDir);
   assert.equal(r.pages.length, 0);
   assert.equal(r.enabledPages.length, 0);
 });
@@ -41,7 +28,7 @@ test('dashboard.json pages [] yields no enabled pages', () => {
   const dataDir = path.join(tmp, 'data');
   fs.mkdirSync(dataDir);
   fs.writeFileSync(path.join(dataDir, 'launchpad.db'), '');
-  const r = resolveDashboardManifest(tmp, dataDir, { multiUser: false });
+  const r = resolveDashboardManifest(tmp, dataDir);
   assert.equal(r.enabledPages.length, 0);
   assert.equal(r.dashboardPages.career, false);
 });
@@ -61,13 +48,13 @@ test('custom slug with career template', () => {
   const dataDir = path.join(tmp, 'data');
   fs.mkdirSync(dataDir);
   fs.writeFileSync(path.join(dataDir, 'launchpad.db'), '');
-  const r = resolveDashboardManifest(tmp, dataDir, { multiUser: false });
+  const r = resolveDashboardManifest(tmp, dataDir);
   assert.equal(r.enabledPages.length, 1);
   assert.equal(r.enabledPages[0].slug, 'jobs');
   assert.equal(r.enabledPages[0].template, 'career');
 });
 
-test('multi-user allows career template when listed and launchpad.db exists', () => {
+test('career template enables when listed and launchpad.db exists', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dash-'));
   fs.writeFileSync(
     path.join(tmp, 'dashboard.json'),
@@ -80,7 +67,7 @@ test('multi-user allows career template when listed and launchpad.db exists', ()
   const dataDir = path.join(tmp, 'data');
   fs.mkdirSync(dataDir);
   fs.writeFileSync(path.join(dataDir, 'launchpad.db'), '');
-  const r = resolveDashboardManifest(tmp, dataDir, { multiUser: true });
+  const r = resolveDashboardManifest(tmp, dataDir);
   assert.equal(r.errors.length, 0);
   assert.equal(r.enabledPages.length, 1);
   assert.equal(r.enabledPages[0].template, 'career');
@@ -109,7 +96,7 @@ test('sections page enables when any child section has its db', () => {
   const dataDir = path.join(tmp, 'data');
   fs.mkdirSync(dataDir);
   fs.writeFileSync(path.join(dataDir, 'finance.db'), '');
-  const r = resolveDashboardManifest(tmp, dataDir, { multiUser: true });
+  const r = resolveDashboardManifest(tmp, dataDir);
   assert.equal(r.errors.length, 0);
   assert.equal(r.enabledPages.length, 1);
   const p = r.enabledPages[0];
@@ -117,10 +104,10 @@ test('sections page enables when any child section has its db', () => {
   assert.equal(p.sections.length, 2);
   assert.equal(p.sections[0].enabled, false);
   assert.equal(p.sections[1].enabled, true);
-  const hit = findEnabledSection(tmp, dataDir, { multiUser: true }, 'reports', 'b');
+  const hit = findEnabledSection(tmp, dataDir, 'reports', 'b');
   assert.ok(hit);
   assert.equal(hit.section.id, 'b');
-  assert.ok(!findEnabledSection(tmp, dataDir, { multiUser: true }, 'reports', 'a'));
+  assert.ok(!findEnabledSection(tmp, dataDir, 'reports', 'a'));
 });
 
 test('datatable page normalizes and requires db file', () => {
@@ -143,10 +130,10 @@ test('datatable page normalizes and requires db file', () => {
   );
   const dataDir = path.join(tmp, 'data');
   fs.mkdirSync(dataDir);
-  const r0 = resolveDashboardManifest(tmp, dataDir, { multiUser: true });
+  const r0 = resolveDashboardManifest(tmp, dataDir);
   assert.equal(r0.enabledPages.length, 0);
   fs.writeFileSync(path.join(dataDir, 'finance.db'), '');
-  const r1 = resolveDashboardManifest(tmp, dataDir, { multiUser: true });
+  const r1 = resolveDashboardManifest(tmp, dataDir);
   assert.equal(r1.enabledPages.length, 1);
   assert.equal(r1.enabledPages[0].template, 'datatable');
   assert.equal(r1.enabledPages[0].apiPath, '/api/dashboard-page/ledger-preview');
@@ -174,7 +161,7 @@ test('datatable page accepts optional columns with format and rejects invalid fo
     }),
     'utf8',
   );
-  const rOk = resolveDashboardManifest(tmp, dataDir, { multiUser: true });
+  const rOk = resolveDashboardManifest(tmp, dataDir);
   assert.equal(rOk.errors.length, 0);
   assert.equal(rOk.enabledPages[0].columnSpecs.length, 1);
   assert.equal(rOk.enabledPages[0].columnSpecs[0].format, 'currency');
@@ -196,7 +183,7 @@ test('datatable page accepts optional columns with format and rejects invalid fo
     }),
     'utf8',
   );
-  const rBad = resolveDashboardManifest(tmp, dataDir, { multiUser: true });
+  const rBad = resolveDashboardManifest(tmp, dataDir);
   assert.ok(rBad.errors.some((e) => String(e).includes('not_a_real_format')));
 });
 
@@ -223,7 +210,7 @@ test('sections page normalizes job_pipeline and week_card to funnel_bars and pro
   const dataDir = path.join(tmp, 'data');
   fs.mkdirSync(dataDir);
   fs.writeFileSync(path.join(dataDir, 'launchpad.db'), '');
-  const r = resolveDashboardManifest(tmp, dataDir, { multiUser: true });
+  const r = resolveDashboardManifest(tmp, dataDir);
   assert.equal(r.errors.length, 0);
   const p = r.enabledPages[0];
   assert.equal(p.sections[0].template, 'funnel_bars');
@@ -260,7 +247,7 @@ test('sections page accepts account_cards', () => {
   const dataDir = path.join(tmp, 'data');
   fs.mkdirSync(dataDir);
   fs.writeFileSync(path.join(dataDir, 'finance.db'), '');
-  const r = resolveDashboardManifest(tmp, dataDir, { multiUser: true });
+  const r = resolveDashboardManifest(tmp, dataDir);
   assert.equal(r.errors.length, 0);
   assert.equal(r.enabledPages[0].sections[0].template, 'account_cards');
 });
@@ -304,7 +291,7 @@ test('sections page accepts link_groups with static groups', () => {
   const dataDir = path.join(tmp, 'data');
   fs.mkdirSync(dataDir);
   fs.writeFileSync(path.join(dataDir, 'finance.db'), '');
-  const r = resolveDashboardManifest(tmp, dataDir, { multiUser: true });
+  const r = resolveDashboardManifest(tmp, dataDir);
   assert.equal(r.errors.length, 0);
   const p = r.enabledPages[0];
   assert.equal(p.sections[0].template, 'link_groups');
@@ -356,7 +343,7 @@ test('sections page accepts stat_cards, grouped_accordion, and metric_datatable'
   const dataDir = path.join(tmp, 'data');
   fs.mkdirSync(dataDir);
   fs.writeFileSync(path.join(dataDir, 'wynnset.db'), '');
-  const r = resolveDashboardManifest(tmp, dataDir, { multiUser: true });
+  const r = resolveDashboardManifest(tmp, dataDir);
   assert.equal(r.errors.length, 0);
   const p = r.enabledPages[0];
   assert.equal(p.sections[0].template, 'stat_cards');
@@ -388,7 +375,7 @@ test('sections page accepts todos section with domain', () => {
   const dataDir = path.join(tmp, 'data');
   fs.mkdirSync(dataDir);
   fs.writeFileSync(path.join(dataDir, 'brain.db'), '');
-  const r = resolveDashboardManifest(tmp, dataDir, { multiUser: true });
+  const r = resolveDashboardManifest(tmp, dataDir);
   assert.equal(r.errors.length, 0);
   const p = r.enabledPages[0];
   assert.equal(p.template, 'sections');
@@ -403,10 +390,8 @@ test('isSafeSelectSql accepts single select and rejects comments', () => {
 });
 
 test('builtin manifest shape', () => {
-  const b = buildBuiltinManifestDefinition(false);
-  assert.equal(b.pages.length, 3);
-  const b2 = buildBuiltinManifestDefinition(true);
-  assert.equal(b2.pages.length, 0);
+  const b = buildBuiltinManifestDefinition();
+  assert.equal(b.pages.length, 0);
 });
 
 test('action_domain page requires brain.db and exposes actionDomain', () => {
@@ -428,10 +413,10 @@ test('action_domain page requires brain.db and exposes actionDomain', () => {
   );
   const dataDir = path.join(tmp, 'data');
   fs.mkdirSync(dataDir);
-  const r0 = resolveDashboardManifest(tmp, dataDir, { multiUser: true });
+  const r0 = resolveDashboardManifest(tmp, dataDir);
   assert.equal(r0.enabledPages.length, 0);
   fs.writeFileSync(path.join(dataDir, 'brain.db'), '');
-  const r1 = resolveDashboardManifest(tmp, dataDir, { multiUser: true });
+  const r1 = resolveDashboardManifest(tmp, dataDir);
   assert.equal(r1.errors.length, 0);
   assert.equal(r1.enabledPages.length, 1);
   const p = r1.enabledPages[0];

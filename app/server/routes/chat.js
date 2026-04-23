@@ -20,23 +20,19 @@ module.exports = function registerChatRoutes(app, ctx) {
     path,
     fs,
     crypto,
-    spawn,
     pathToFileURL,
     Database,
     tenancy,
     registryDb,
-    multiUserMode,
     tenantDataDirForRequest,
     workspaceDirForRequest,
     getRegistryReadonly,
     withRegistryReadWrite,
     appendAssistantStreamChunk,
     orchestrator,
-    DB_DIR,
   } = ctx;
   const { assertUnderRoot, safeJoin } = tenancy;
   const {
-    resolveOrchestratorBriefPath,
     resolveOrchestratorBriefPathInWorkspace,
     isOrchestratorChatAgent,
   } = orchestrator;
@@ -49,8 +45,6 @@ module.exports = function registerChatRoutes(app, ctx) {
   const CHAT_HEARTBEAT_MS = Number(process.env.BRAIN_CHAT_HEARTBEAT_MS) || 5000;
   const CHAT_MAX_TRANSCRIPT_CHARS = Number(process.env.BRAIN_CHAT_MAX_TRANSCRIPT_CHARS) || 100000;
   const CHAT_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-  /** `cli` (default): spawn Claude Code. `sdk`: Claude Agent SDK in-process. */
-  const BRAIN_CHAT_BACKEND = String(process.env.BRAIN_CHAT_BACKEND || 'cli').toLowerCase();
 
   /** When truthy (default), chat runs use the in-process registry (multi-tab / reattach). Set BRAIN_CHAT_REGISTRY=0 to restore legacy single-stream POST behavior. */
   const USE_CHAT_RUN_REGISTRY = String(process.env.BRAIN_CHAT_REGISTRY || '1').trim() !== '0';
@@ -59,7 +53,7 @@ module.exports = function registerChatRoutes(app, ctx) {
 
   /** Opaque tenant scope for chat run registry (must match between POST /api/chat and GET stream). */
   function tenantKeyForChatRun(req) {
-    if (multiUserMode() && req.tenant && req.tenant.userId != null) {
+    if (req.tenant && req.tenant.userId != null) {
       return `u:${String(req.tenant.userId)}`;
     }
     return `d:${path.resolve(tenantDataDirForRequest(req))}`;
@@ -828,8 +822,8 @@ module.exports = function registerChatRoutes(app, ctx) {
     if (source.planUpdatedAt) newSess.planUpdatedAt = source.planUpdatedAt;
   }
   
-  // ─── POST /api/chat — spawn claude with agent system prompt ───────────────────
-  /** CLI spawn target; SDK uses `pathToClaudeCodeExecutable` (same search order). */
+  // ─── POST /api/chat — run the Claude Agent SDK against an agent prompt ────────
+  /** SDK passes this to `pathToClaudeCodeExecutable`; falls back to sibling of `node`. */
   function resolveClaudeCodeExecutablePath() {
     const a = (process.env.CLAUDE_BIN || '').trim();
     const b = (process.env.CLAUDE_CODE_EXECUTABLE || '').trim();
@@ -849,8 +843,7 @@ module.exports = function registerChatRoutes(app, ctx) {
     }
     return '';
   }
-  const CLAUDE_BIN = resolveClaudeCodeExecutablePath() || 'claude';
-  
+
   /** Fly has no macOS keychain; Claude needs an API key, bearer token, OAuth token, or cloud-provider env. */
   function claudeAuthConfiguredOnFly() {
     if (!process.env.FLY_APP_NAME) return true;
@@ -967,8 +960,8 @@ module.exports = function registerChatRoutes(app, ctx) {
   }
   
   /** Append registry-backed identity so the model does not “remember” the wrong person from shared auth. */
-  function augmentChatSystemPromptForMultiUser(req, basePrompt) {
-    if (!multiUserMode() || !req.tenant) return basePrompt;
+  function augmentChatSystemPromptWithTenantIdentity(req, basePrompt) {
+    if (!req.tenant) return basePrompt;
     const reg = getRegistryReadonly();
     if (!reg) return basePrompt;
     const row = registryDb.findUserSessionSummary(reg, req.tenant.userId);
@@ -994,13 +987,11 @@ module.exports = function registerChatRoutes(app, ctx) {
 
   /**
    * True when the current request is from a verified registry login that is
-   * on the platform-owner allowlist. Only applies in multi-user mode where we
-   * can actually verify identity via the registry; single-user deployments are
-   * unaffected (behavior unchanged).
+   * on the platform-owner allowlist.
    */
   function isPlatformOwnerRequest(req) {
     if (!PLATFORM_OWNER_LOGINS.length) return false;
-    if (!multiUserMode() || !req.tenant) return false;
+    if (!req.tenant) return false;
     const reg = getRegistryReadonly();
     if (!reg) return false;
     const row = registryDb.findUserSessionSummary(reg, req.tenant.userId);
@@ -1113,8 +1104,8 @@ module.exports = function registerChatRoutes(app, ctx) {
   }
   
   /**
-   * Env for the Claude CLI / Agent SDK child.
-   * @param {{ tenantDataDir?: string | null }} [opts]
+   * Env for the Claude Agent SDK child process.
+   * @param {{ tenantDataDir?: string | null, model?: string }} [opts]
    */
   function envForClaudeChat(opts = {}) {
     const env = { ...process.env };
@@ -1130,42 +1121,34 @@ module.exports = function registerChatRoutes(app, ctx) {
     if (!hasApiKey) {
       console.warn('[chat] ANTHROPIC_API_KEY is not set; Claude Code may use OAuth subscription auth instead of Console API credits');
     }
-  
-    const td = opts.tenantDataDir != null && multiUserMode() ? String(opts.tenantDataDir).trim() : '';
-    if (td) {
-      // Canonical container path to the tenant's data dir. Subagents (and the
-      // `db` CLI) read this instead of guessing or trusting host-machine paths
-      // baked into workspace/config.json.
-      env.BRAIN_DATA_DIR = path.resolve(td);
-      // Always block Claude Code auto-memory / global CLAUDE.md layers so another tenant’s session does not load them.
-      env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = '1';
-      if (process.env.BRAIN_CHAT_LOAD_CLAUDE_MDS === '1') {
-        delete env.CLAUDE_CODE_DISABLE_CLAUDE_MDS;
-      } else {
-        env.CLAUDE_CODE_DISABLE_CLAUDE_MDS = '1';
-      }
-      // OAuth / subscription lives under the real ~/.claude — only isolate HOME when an API key is present (auth does not need ~/.claude).
-      if (hasApiKey) {
-        ensureTenantChatClaudeDirs(td);
-        const root = path.join(td, '.claude-chat-runtime');
-        env.HOME = path.join(root, 'home');
-        env.CLAUDE_CONFIG_DIR = path.join(root, 'config');
-        env.XDG_CONFIG_HOME = path.join(root, 'xdg', 'config');
-        env.XDG_CACHE_HOME = path.join(root, 'xdg', 'cache');
-        env.XDG_DATA_HOME = path.join(root, 'xdg', 'share');
-      }
-      return env;
+
+    const td = opts.tenantDataDir != null ? String(opts.tenantDataDir).trim() : '';
+    if (!td) return env;
+
+    // Canonical container path to the tenant's data dir. Subagents (and the
+    // `db` CLI) read this instead of guessing or trusting host-machine paths
+    // baked into workspace/config.json.
+    env.BRAIN_DATA_DIR = path.resolve(td);
+    // Always block Claude Code auto-memory / global CLAUDE.md layers so another tenant’s session does not load them.
+    env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = '1';
+    if (process.env.BRAIN_CHAT_LOAD_CLAUDE_MDS === '1') {
+      delete env.CLAUDE_CODE_DISABLE_CLAUDE_MDS;
+    } else {
+      env.CLAUDE_CODE_DISABLE_CLAUDE_MDS = '1';
     }
-  
-    if (process.env.FLY_APP_NAME) {
+    // OAuth / subscription lives under the real ~/.claude — only isolate HOME when an API key is present (auth does not need ~/.claude).
+    if (hasApiKey) {
+      ensureTenantChatClaudeDirs(td);
+      const root = path.join(td, '.claude-chat-runtime');
+      env.HOME = path.join(root, 'home');
+      env.CLAUDE_CONFIG_DIR = path.join(root, 'config');
+      env.XDG_CONFIG_HOME = path.join(root, 'xdg', 'config');
+      env.XDG_CACHE_HOME = path.join(root, 'xdg', 'cache');
+      env.XDG_DATA_HOME = path.join(root, 'xdg', 'share');
+    } else if (process.env.FLY_APP_NAME) {
       ensureFlyClaudeIsolation();
       env.HOME = '/tmp/brain-fake-home';
       env.CLAUDE_CONFIG_DIR = '/tmp/brain-claude-config';
-    }
-    // Single-tenant fallback: still expose a canonical data dir so the `db`
-    // CLI and any agent that wants one consistent answer can find it.
-    if (!env.BRAIN_DATA_DIR) {
-      env.BRAIN_DATA_DIR = path.resolve(DB_DIR);
     }
     return env;
   }
@@ -1368,15 +1351,13 @@ module.exports = function registerChatRoutes(app, ctx) {
 
   /**
    * Load the current snapshot + exceeded state for the authenticated tenant.
-   * Returns `null` when the feature does not apply (single-tenant mode, or
-   * the registry file is missing). When `opts.includeHistory` is true, the
-   * snapshot's `monthHistory` array carries up to
+   * Returns `null` when the registry file is missing. When `opts.includeHistory`
+   * is true, the snapshot's `monthHistory` array carries up to
    * `CHAT_MONTH_HISTORY_LIMIT` prior monthly cycles (newest first).
    * @param {import('express').Request} req
    * @param {{ includeHistory?: boolean }} [opts]
    */
   function loadChatLimitState(req, opts = {}) {
-    if (!multiUserMode()) return null;
     if (!req.tenant || !req.tenant.userId) return null;
     if (typeof withRegistryReadWrite !== 'function') return null;
     const snapshotOpts = opts.includeHistory
@@ -1392,13 +1373,12 @@ module.exports = function registerChatRoutes(app, ctx) {
 
   /**
    * Record `usd` against the authenticated tenant's counters. Caller passes
-   * the billing delta reported for a single assistant turn. No-ops outside
-   * multi-user mode or when the amount is not a positive finite number.
+   * the billing delta reported for a single assistant turn. No-ops when the
+   * amount is not a positive finite number.
    */
   function recordChatSpend(req, usd) {
     const amount = Number(usd);
     if (!Number.isFinite(amount) || amount <= 0) return;
-    if (!multiUserMode()) return;
     if (!req.tenant || !req.tenant.userId) return;
     if (typeof withRegistryReadWrite !== 'function') return;
     try {
@@ -1490,7 +1470,7 @@ module.exports = function registerChatRoutes(app, ctx) {
     if (rawModel && !model) return res.status(400).json({ error: 'Invalid model' });
     const ws = workspaceDirForRequest(req);
     const systemFile = isOrchestratorChatAgent(agent)
-      ? (multiUserMode() ? resolveOrchestratorBriefPathInWorkspace(ws) : resolveOrchestratorBriefPath())
+      ? resolveOrchestratorBriefPathInWorkspace(ws)
       : path.join(ws, 'team', `${agent}.md`);
     if (!systemFile || !fs.existsSync(systemFile)) return res.status(404).json({ error: `Agent "${agent}" not found` });
     ensureChatSessionsDir(req);
@@ -1819,12 +1799,7 @@ module.exports = function registerChatRoutes(app, ctx) {
       sess.planExecutePending === true && sanitizePlanTodoItems(sess.planTodos || []).length > 0;
   
     const planPhase = normalizeChatPlanPhase(body.planPhase);
-    if (planPhase && BRAIN_CHAT_BACKEND !== 'sdk') {
-      return res.status(400).json({
-        error: 'Dashboard plan mode requires BRAIN_CHAT_BACKEND=sdk on the server.',
-      });
-    }
-  
+
     /** @type {null | { id: string, title: string, status: string }[]> */
     let chatPlanExecuteTodos = null;
     if (planPhase === 'execute') {
@@ -1858,7 +1833,7 @@ module.exports = function registerChatRoutes(app, ctx) {
   
     const ws = workspaceDirForRequest(req);
     const systemFile = isOrchestratorChatAgent(sessionAgent)
-      ? (multiUserMode() ? resolveOrchestratorBriefPathInWorkspace(ws) : resolveOrchestratorBriefPath())
+      ? resolveOrchestratorBriefPathInWorkspace(ws)
       : path.join(ws, 'team', `${sessionAgent}.md`);
     if (!systemFile || !fs.existsSync(systemFile)) return res.status(404).json({ error: `Agent "${sessionAgent}" not found` });
   
@@ -1877,7 +1852,7 @@ module.exports = function registerChatRoutes(app, ctx) {
     } catch (err) {
       return res.status(500).json({ error: `Could not read agent file: ${err.message}` });
     }
-    systemPrompt = augmentChatSystemPromptForMultiUser(req, systemPrompt);
+    systemPrompt = augmentChatSystemPromptWithTenantIdentity(req, systemPrompt);
     const isPlatformOwner = isPlatformOwnerRequest(req);
     if (!isPlatformOwner) {
       systemPrompt = appendPlatformConfidentialityRules(systemPrompt);
@@ -1913,7 +1888,7 @@ module.exports = function registerChatRoutes(app, ctx) {
     }
 
     console.log(
-      `[chat] backend=${BRAIN_CHAT_BACKEND} agent=${sessionAgent} model=${sess.model} conversation=${conversationId}` +
+      `[chat] agent=${sessionAgent} model=${sess.model} conversation=${conversationId}` +
         (planPhase ? ` planPhase=${planPhase}` : '')
     );
 
@@ -1985,301 +1960,237 @@ module.exports = function registerChatRoutes(app, ctx) {
           }
         }
 
-        if (BRAIN_CHAT_BACKEND === 'sdk') {
-          let pendingWorkspaceTouches = [];
+        let pendingWorkspaceTouches = [];
+        try {
+          const runner = await import(pathToFileURL(path.join(__dirname, '..', '..', 'chat-sdk-runner.mjs')).href);
+          const freshSess = readChatSession(req, conversationId) || freshSess0;
+          const useResume = Boolean(freshSess.agentSdkSessionId && process.env.BRAIN_CHAT_RESUME !== '0');
+          let promptText = useResume
+            ? lastUserContent(freshSess.messages)
+            : formatTranscriptFromMessages(freshSess.messages, CHAT_MAX_TRANSCRIPT_CHARS);
+          if (useResume && !String(promptText || '').trim()) {
+            promptText = formatTranscriptFromMessages(freshSess.messages, CHAT_MAX_TRANSCRIPT_CHARS);
+          }
+          if (planPhase === 'execute' && chatPlanExecuteTodos && chatPlanExecuteTodos.length) {
+            const block =
+              '[Approved plan — execute in order]\n```json\n' +
+              JSON.stringify(chatPlanExecuteTodos, null, 2) +
+              '\n```';
+            promptText = `${block}\n\n${promptText}`;
+          }
+          const allowedRaw = (process.env.BRAIN_CHAT_ALLOWED_TOOLS || '').trim();
+          const allowedTools = allowedRaw ? allowedRaw.split(',').map((t) => t.trim()).filter(Boolean) : undefined;
+          const chatEnv = envForClaudeChat({
+            tenantDataDir: tenantDataDirForRequest(req),
+            model: freshSess.model || sess.model,
+          });
+          const perm = runner.parsePermissionOptions(process.env.BRAIN_CHAT_PERMISSION_MODE);
+          const chatDataDir = tenantDataDirForRequest(req);
+          const chatWorkspaceDir = workspaceDirForRequest(req);
           try {
-            const runner = await import(pathToFileURL(path.join(__dirname, '..', '..', 'chat-sdk-runner.mjs')).href);
-            const freshSess = readChatSession(req, conversationId) || freshSess0;
-            const useResume = Boolean(freshSess.agentSdkSessionId && process.env.BRAIN_CHAT_RESUME !== '0');
-            let promptText = useResume
-              ? lastUserContent(freshSess.messages)
-              : formatTranscriptFromMessages(freshSess.messages, CHAT_MAX_TRANSCRIPT_CHARS);
-            if (useResume && !String(promptText || '').trim()) {
-              promptText = formatTranscriptFromMessages(freshSess.messages, CHAT_MAX_TRANSCRIPT_CHARS);
-            }
-            if (planPhase === 'execute' && chatPlanExecuteTodos && chatPlanExecuteTodos.length) {
-              const block =
-                '[Approved plan — execute in order]\n```json\n' +
-                JSON.stringify(chatPlanExecuteTodos, null, 2) +
-                '\n```';
-              promptText = `${block}\n\n${promptText}`;
-            }
-            const allowedRaw = (process.env.BRAIN_CHAT_ALLOWED_TOOLS || '').trim();
-            const allowedTools = allowedRaw ? allowedRaw.split(',').map((t) => t.trim()).filter(Boolean) : undefined;
-            const chatEnv = envForClaudeChat({
-              tenantDataDir: multiUserMode() ? tenantDataDirForRequest(req) : null,
-              model: freshSess.model || sess.model,
-            });
-            const perm = runner.parsePermissionOptions(process.env.BRAIN_CHAT_PERMISSION_MODE);
-            const chatDataDir = tenantDataDirForRequest(req);
-            const chatWorkspaceDir = workspaceDirForRequest(req);
+            normalizeWorkspaceConfigDbPaths(chatWorkspaceDir, chatDataDir);
+          } catch (err) {
+            console.warn('[chat] config.json normalize:', err.message);
+          }
+          let toolsOpt = runner.parseToolsOption(process.env.BRAIN_CHAT_TOOLS);
+          if (planPhase === 'plan') {
+            toolsOpt = ['Read', 'Glob', 'Grep'];
+          }
+          let tenantAgents;
+          if (isOrchestratorChatAgent(sessionAgent) && planPhase !== 'plan') {
             try {
-              normalizeWorkspaceConfigDbPaths(chatWorkspaceDir, chatDataDir);
+              tenantAgents = loadTenantAgentDefinitions({
+                workspaceDir: chatWorkspaceDir,
+                subagentRules: readSubagentOperatingRules(),
+                proprietaryBlock: isPlatformOwner ? '' : readPlatformConfidentialityRules(),
+                globalToolAllow: parseGlobalToolAllowEnv(process.env.BRAIN_CHAT_SUBAGENT_TOOLS),
+                onWarn: (m) => console.warn(m),
+              });
+              if (tenantAgents && Object.keys(tenantAgents).length) {
+                console.log(
+                  `[chat] team-agents loaded for ${sessionAgent} from ${chatWorkspaceDir}/team: ${Object.keys(tenantAgents).sort().join(', ')}`
+                );
+                const rosterLines = Object.entries(tenantAgents)
+                  .sort((a, b) => a[0].localeCompare(b[0]))
+                  .map(([slug, def]) => `- \`${slug}\` — ${def.description || ''}`.trim());
+                const rosterBlock = [
+                  '## Available team members (as `Task(subagent_type=…)` targets)',
+                  '',
+                  'These are the exact subagent_type values registered for this workspace.',
+                  'When you decide to delegate, you MUST pick one of these slugs — do not',
+                  'use `general-purpose` to impersonate a team member via the prompt body.',
+                  '',
+                  ...rosterLines,
+                ].join('\n');
+                systemPrompt = `${systemPrompt}\n\n---\n\n${rosterBlock}\n`;
+              } else {
+                console.warn(
+                  `[chat] team-agents: no definitions found in ${chatWorkspaceDir}/team (Cyrus has nothing to delegate to)`
+                );
+              }
             } catch (err) {
-              console.warn('[chat] config.json normalize:', err.message);
+              console.warn('[chat-sdk] team-agents load failed:', err.message);
             }
-            let toolsOpt = runner.parseToolsOption(process.env.BRAIN_CHAT_TOOLS);
-            if (planPhase === 'plan') {
-              toolsOpt = ['Read', 'Glob', 'Grep'];
-            }
-            let tenantAgents;
-            if (isOrchestratorChatAgent(sessionAgent) && planPhase !== 'plan') {
-              try {
-                tenantAgents = loadTenantAgentDefinitions({
-                  workspaceDir: chatWorkspaceDir,
-                  subagentRules: readSubagentOperatingRules(),
-                  proprietaryBlock: isPlatformOwner ? '' : readPlatformConfidentialityRules(),
-                  globalToolAllow: parseGlobalToolAllowEnv(process.env.BRAIN_CHAT_SUBAGENT_TOOLS),
-                  onWarn: (m) => console.warn(m),
-                });
-                if (tenantAgents && Object.keys(tenantAgents).length) {
-                  console.log(
-                    `[chat] team-agents loaded for ${sessionAgent} from ${chatWorkspaceDir}/team: ${Object.keys(tenantAgents).sort().join(', ')}`
-                  );
-                  const rosterLines = Object.entries(tenantAgents)
-                    .sort((a, b) => a[0].localeCompare(b[0]))
-                    .map(([slug, def]) => `- \`${slug}\` — ${def.description || ''}`.trim());
-                  const rosterBlock = [
-                    '## Available team members (as `Task(subagent_type=…)` targets)',
-                    '',
-                    'These are the exact subagent_type values registered for this workspace.',
-                    'When you decide to delegate, you MUST pick one of these slugs — do not',
-                    'use `general-purpose` to impersonate a team member via the prompt body.',
-                    '',
-                    ...rosterLines,
-                  ].join('\n');
-                  systemPrompt = `${systemPrompt}\n\n---\n\n${rosterBlock}\n`;
-                } else {
-                  console.warn(
-                    `[chat] team-agents: no definitions found in ${chatWorkspaceDir}/team (Cyrus has nothing to delegate to)`
-                  );
-                }
-              } catch (err) {
-                console.warn('[chat-sdk] team-agents load failed:', err.message);
-              }
-            }
-            const out = await runner.runAgentSdkQuery({
-              prompt: promptText,
-              systemPrompt,
-              resume: useResume ? freshSess.agentSdkSessionId : undefined,
-              cwd: chatWorkspaceDir,
-              env: chatEnv,
-              model: freshSess.model || sess.model,
-              tools: toolsOpt,
-              allowedTools,
-              permissionMode: perm.permissionMode,
-              allowDangerouslySkipPermissions: perm.allowDangerouslySkipPermissions,
-              enableMcpBrainDb: process.env.BRAIN_CHAT_MCP_DB === '1',
-              dbDir: chatDataDir,
-              auditLogPath: path.join(chatDataDir, 'chat-tool-audit.log'),
-              auditTools: process.env.BRAIN_CHAT_AUDIT_TOOLS !== '0',
-              maxTurns: Number(process.env.BRAIN_CHAT_MAX_TURNS) || 100,
-              pathToClaudeCodeExecutable: resolveClaudeCodeExecutablePath() || undefined,
-              agentDefinitions: tenantAgents,
-              abortSignal: chatAbortSignal,
-              onTextChunk: (t) => {
-                if (!t) return;
-                assistantBufRun = appendAssistantStreamChunk(assistantBufRun, t);
-                emit({ text: t });
-              },
-              onTool: ({ tool, detail }) => {
-                emit({ tool, toolDetail: detail || '' });
-              },
-              onSegmentAgent: (agentId) => {
-                if (agentId) emit({ segmentAgent: String(agentId) });
-              },
-              onSegmentAgentStart: ({ id, agent }) => {
-                if (agent) {
-                  emit({
-                    segmentAgentStart: { id: String(id || ''), agent: String(agent) },
-                  });
-                }
-              },
-              onSegmentAgentEnd: ({ id, agent, ok }) => {
-                if (agent) {
-                  emit({
-                    segmentAgentEnd: {
-                      id: String(id || ''),
-                      agent: String(agent),
-                      ok: ok !== false,
-                    },
-                  });
-                }
-              },
-              onInitSession: (sid) => mergeAgentSdkSessionIntoSession(req, conversationId, sid),
-              onPostToolUse: ({ toolName, toolInput }) => {
-                appendSdkPostToolTouchesToPending(chatWorkspaceDir, pendingWorkspaceTouches, toolName, toolInput);
-              },
-            });
-            mergePendingWorkspaceTouchesIntoSession(req, conversationId, pendingWorkspaceTouches);
-            if (!assistantSavedRun) {
-              // Prefer the fully streamed buffer (includes intermediate "let me check…" narration
-              // between tool calls) over the SDK's collapsed `finalText`, so the saved transcript
-              // matches what the user just watched stream in — no transient context gets overwritten.
-              let content = (assistantBufRun || out.finalText || '').trim();
-              if (!content && out.errors && out.errors.length) content = out.errors.join('\n');
-              if (!content && out.hadError) content = '[Assistant finished with errors]';
-              const b = out.sdkBilling;
-              const billing =
-                b &&
-                (b.totalCostUsd != null ||
-                  (b.usage && Object.keys(b.usage).length > 0) ||
-                  (b.modelUsage && Object.keys(b.modelUsage).length > 0))
-                  ? { ...b, userMessageId: userMsg.id }
-                  : null;
-              const saved = appendAssistantToSessionRun(content || '', Boolean(out.hadError), billing, freshSess.model || sess.model);
-              if (saved && billing) {
-                const last = saved.messages[saved.messages.length - 1];
+          }
+          const out = await runner.runAgentSdkQuery({
+            prompt: promptText,
+            systemPrompt,
+            resume: useResume ? freshSess.agentSdkSessionId : undefined,
+            cwd: chatWorkspaceDir,
+            env: chatEnv,
+            model: freshSess.model || sess.model,
+            tools: toolsOpt,
+            allowedTools,
+            permissionMode: perm.permissionMode,
+            allowDangerouslySkipPermissions: perm.allowDangerouslySkipPermissions,
+            enableMcpBrainDb: process.env.BRAIN_CHAT_MCP_DB === '1',
+            dbDir: chatDataDir,
+            auditLogPath: path.join(chatDataDir, 'chat-tool-audit.log'),
+            auditTools: process.env.BRAIN_CHAT_AUDIT_TOOLS !== '0',
+            maxTurns: Number(process.env.BRAIN_CHAT_MAX_TURNS) || 100,
+            pathToClaudeCodeExecutable: resolveClaudeCodeExecutablePath() || undefined,
+            agentDefinitions: tenantAgents,
+            abortSignal: chatAbortSignal,
+            onTextChunk: (t) => {
+              if (!t) return;
+              assistantBufRun = appendAssistantStreamChunk(assistantBufRun, t);
+              emit({ text: t });
+            },
+            onTool: ({ tool, detail }) => {
+              emit({ tool, toolDetail: detail || '' });
+            },
+            onSegmentAgent: (agentId) => {
+              if (agentId) emit({ segmentAgent: String(agentId) });
+            },
+            onSegmentAgentStart: ({ id, agent }) => {
+              if (agent) {
                 emit({
-                  sdkBilling: last && last.sdkBilling ? last.sdkBilling : billing,
-                  sdkUsageSessionTotals: saved.sdkUsageSessionTotals || null,
+                  segmentAgentStart: { id: String(id || ''), agent: String(agent) },
                 });
               }
-              if (!out.hadError) {
-                if (planPhase === 'plan') {
-                  let planTodos = parseBrainPlanTodosFromAssistantText(content || '');
-                  const planMarkdown = readBrainChatPlanMarkdown(chatWorkspaceDir);
-                  if (!planTodos.length && planMarkdown) planTodos = todosFromMarkdownFallback(planMarkdown);
-                  const planInboxFile = writeChatPlanMarkdownToOwnersInbox(chatWorkspaceDir, conversationId, {
-                    planTodos,
-                    planMarkdown,
+            },
+            onSegmentAgentEnd: ({ id, agent, ok }) => {
+              if (agent) {
+                emit({
+                  segmentAgentEnd: {
+                    id: String(id || ''),
+                    agent: String(agent),
+                    ok: ok !== false,
+                  },
+                });
+              }
+            },
+            onInitSession: (sid) => mergeAgentSdkSessionIntoSession(req, conversationId, sid),
+            onPostToolUse: ({ toolName, toolInput }) => {
+              appendSdkPostToolTouchesToPending(chatWorkspaceDir, pendingWorkspaceTouches, toolName, toolInput);
+            },
+          });
+          mergePendingWorkspaceTouchesIntoSession(req, conversationId, pendingWorkspaceTouches);
+          if (!assistantSavedRun) {
+            // Prefer the fully streamed buffer (includes intermediate "let me check…" narration
+            // between tool calls) over the SDK's collapsed `finalText`, so the saved transcript
+            // matches what the user just watched stream in — no transient context gets overwritten.
+            let content = (assistantBufRun || out.finalText || '').trim();
+            if (!content && out.errors && out.errors.length) content = out.errors.join('\n');
+            if (!content && out.hadError) content = '[Assistant finished with errors]';
+            const b = out.sdkBilling;
+            const billing =
+              b &&
+              (b.totalCostUsd != null ||
+                (b.usage && Object.keys(b.usage).length > 0) ||
+                (b.modelUsage && Object.keys(b.modelUsage).length > 0))
+                ? { ...b, userMessageId: userMsg.id }
+                : null;
+            const saved = appendAssistantToSessionRun(content || '', Boolean(out.hadError), billing, freshSess.model || sess.model);
+            if (saved && billing) {
+              const last = saved.messages[saved.messages.length - 1];
+              emit({
+                sdkBilling: last && last.sdkBilling ? last.sdkBilling : billing,
+                sdkUsageSessionTotals: saved.sdkUsageSessionTotals || null,
+              });
+            }
+            if (!out.hadError) {
+              if (planPhase === 'plan') {
+                let planTodos = parseBrainPlanTodosFromAssistantText(content || '');
+                const planMarkdown = readBrainChatPlanMarkdown(chatWorkspaceDir);
+                if (!planTodos.length && planMarkdown) planTodos = todosFromMarkdownFallback(planMarkdown);
+                const planInboxFile = writeChatPlanMarkdownToOwnersInbox(chatWorkspaceDir, conversationId, {
+                  planTodos,
+                  planMarkdown,
+                  assistantContent: content || '',
+                  sessionTitle: freshSess.title || sess.title || 'Chat',
+                });
+                persistChatPlanToSession(req, conversationId, {
+                  planTodos,
+                  planMarkdown,
+                  lastPhase: 'plan',
+                  planInboxFile,
+                });
+                if (planInboxFile && planInboxFile.touchKind) {
+                  mergePendingWorkspaceTouchesIntoSession(req, conversationId, [
+                    { path: `owners-inbox/${String(planInboxFile.name)}`, kind: planInboxFile.touchKind },
+                  ]);
+                }
+                const mdOut =
+                  planMarkdown.length > 12000 ? `${planMarkdown.slice(0, 12000)}\n…` : planMarkdown;
+                emit({
+                  phase: 'plan',
+                  planTodos,
+                  planMarkdown: mdOut,
+                  planInboxFile,
+                });
+              }
+              if (planPhase === 'execute' && chatPlanExecuteTodos && chatPlanExecuteTodos.length) {
+                persistChatPlanToSession(req, conversationId, {
+                  planTodos: chatPlanExecuteTodos,
+                  lastPhase: 'execute',
+                });
+                emit({
+                  phase: 'execute',
+                  planTodos: chatPlanExecuteTodos,
+                });
+              }
+              if (!planPhase && /```brain_plan/i.test(content || '')) {
+                const planTodosChat = parseBrainPlanTodosFromAssistantText(content || '', hadPendingPlan);
+                if (planTodosChat.length) {
+                  const mdChat = readBrainChatPlanMarkdown(chatWorkspaceDir);
+                  const planInboxFileChat = writeChatPlanMarkdownToOwnersInbox(chatWorkspaceDir, conversationId, {
+                    planTodos: planTodosChat,
+                    planMarkdown: mdChat,
                     assistantContent: content || '',
                     sessionTitle: freshSess.title || sess.title || 'Chat',
                   });
                   persistChatPlanToSession(req, conversationId, {
-                    planTodos,
-                    planMarkdown,
+                    planTodos: planTodosChat,
+                    planMarkdown: mdChat,
                     lastPhase: 'plan',
-                    planInboxFile,
+                    planInboxFile: planInboxFileChat,
                   });
-                  if (planInboxFile && planInboxFile.touchKind) {
+                  if (planInboxFileChat && planInboxFileChat.touchKind) {
                     mergePendingWorkspaceTouchesIntoSession(req, conversationId, [
-                      { path: `owners-inbox/${String(planInboxFile.name)}`, kind: planInboxFile.touchKind },
+                      { path: `owners-inbox/${String(planInboxFileChat.name)}`, kind: planInboxFileChat.touchKind },
                     ]);
                   }
                   const mdOut =
-                    planMarkdown.length > 12000 ? `${planMarkdown.slice(0, 12000)}\n…` : planMarkdown;
+                    mdChat.length > 12000 ? `${mdChat.slice(0, 12000)}\n…` : mdChat;
                   emit({
                     phase: 'plan',
-                    planTodos,
+                    planTodos: planTodosChat,
                     planMarkdown: mdOut,
-                    planInboxFile,
+                    planInboxFile: planInboxFileChat,
                   });
-                }
-                if (planPhase === 'execute' && chatPlanExecuteTodos && chatPlanExecuteTodos.length) {
-                  persistChatPlanToSession(req, conversationId, {
-                    planTodos: chatPlanExecuteTodos,
-                    lastPhase: 'execute',
-                  });
-                  emit({
-                    phase: 'execute',
-                    planTodos: chatPlanExecuteTodos,
-                  });
-                }
-                if (!planPhase && /```brain_plan/i.test(content || '')) {
-                  const planTodosChat = parseBrainPlanTodosFromAssistantText(content || '', hadPendingPlan);
-                  if (planTodosChat.length) {
-                    const mdChat = readBrainChatPlanMarkdown(chatWorkspaceDir);
-                    const planInboxFileChat = writeChatPlanMarkdownToOwnersInbox(chatWorkspaceDir, conversationId, {
-                      planTodos: planTodosChat,
-                      planMarkdown: mdChat,
-                      assistantContent: content || '',
-                      sessionTitle: freshSess.title || sess.title || 'Chat',
-                    });
-                    persistChatPlanToSession(req, conversationId, {
-                      planTodos: planTodosChat,
-                      planMarkdown: mdChat,
-                      lastPhase: 'plan',
-                      planInboxFile: planInboxFileChat,
-                    });
-                    if (planInboxFileChat && planInboxFileChat.touchKind) {
-                      mergePendingWorkspaceTouchesIntoSession(req, conversationId, [
-                        { path: `owners-inbox/${String(planInboxFileChat.name)}`, kind: planInboxFileChat.touchKind },
-                      ]);
-                    }
-                    const mdOut =
-                      mdChat.length > 12000 ? `${mdChat.slice(0, 12000)}\n…` : mdChat;
-                    emit({
-                      phase: 'plan',
-                      planTodos: planTodosChat,
-                      planMarkdown: mdOut,
-                      planInboxFile: planInboxFileChat,
-                    });
-                  }
                 }
               }
             }
-            if (out.sessionId) mergeAgentSdkSessionIntoSession(req, conversationId, out.sessionId);
-          } catch (err) {
-            mergePendingWorkspaceTouchesIntoSession(req, conversationId, pendingWorkspaceTouches);
-            const errText = err && err.message ? err.message : String(err);
-            console.error('[chat-sdk]', err);
-            emit({ error: errText });
-            appendAssistantToSessionRun(`[Error] ${errText}`, true, null, sess.model);
-            throw err;
           }
-          return;
-        }
-
-        const freshForCli = readChatSession(req, conversationId) || freshSess0;
-        const transcript = formatTranscriptFromMessages(freshForCli.messages, CHAT_MAX_TRANSCRIPT_CHARS);
-        const fullPrompt = `${systemPrompt}\n\n---\n\n${transcript}`;
-
-        try {
-          normalizeWorkspaceConfigDbPaths(workspaceDirForRequest(req), tenantDataDirForRequest(req));
+          if (out.sessionId) mergeAgentSdkSessionIntoSession(req, conversationId, out.sessionId);
         } catch (err) {
-          console.warn('[chat] config.json normalize:', err.message);
-        }
-
-        const procRun = spawn(CLAUDE_BIN, ['-p', '--dangerously-skip-permissions'], {
-          env: envForClaudeChat({
-            tenantDataDir: multiUserMode() ? tenantDataDirForRequest(req) : null,
-            model: freshForCli.model || sess.model,
-          }),
-          cwd: workspaceDirForRequest(req),
-          stdio: ['pipe', 'pipe', 'pipe'],
-        });
-        chatRunRegistry.setProc(conversationId, procRun);
-
-        await new Promise((resolve) => {
-          procRun.on('error', (err) => {
-            const tried = CLAUDE_BIN === 'claude' ? '`claude` on PATH' : CLAUDE_BIN;
-            const errText =
-              `Failed to start the assistant runtime (${err.message}). Tried: ${tried}. ` +
-              'The server operator must install the assistant CLI on PATH or set the executable path and chat backend per repository documentation.';
-            emit({ error: errText });
-            appendAssistantToSessionRun(`[Error] ${errText}`, true, null, freshForCli.model || sess.model);
-            resolve();
-          });
-
-          procRun.stdout.on('data', (chunk) => {
-            const t = chunk.toString();
-            assistantBufRun = appendAssistantStreamChunk(assistantBufRun, t);
-            emit({ text: t });
-          });
-
-          procRun.stderr.on('data', (chunk) => {
-            emit({ error: chunk.toString() });
-          });
-
-          procRun.on('close', (code) => {
-            if (!assistantSavedRun) {
-              let content = assistantBufRun;
-              if (!String(content).trim() && code !== 0 && code !== null) {
-                content = `[Process exited with code ${code}]`;
-              }
-              const errFlag = code !== 0 && code !== null && !String(assistantBufRun).trim();
-              appendAssistantToSessionRun(content, errFlag, null, freshForCli.model || sess.model);
-            }
-            resolve();
-          });
-        });
-
-        try {
-          procRun.stdin.write(fullPrompt);
-          procRun.stdin.end();
-        } catch (e) {
-          console.warn('[chat] stdin write failed', e.message);
+          mergePendingWorkspaceTouchesIntoSession(req, conversationId, pendingWorkspaceTouches);
+          const errText = err && err.message ? err.message : String(err);
+          console.error('[chat-sdk]', err);
+          emit({ error: errText });
+          appendAssistantToSessionRun(`[Error] ${errText}`, true, null, sess.model);
+          throw err;
         }
       }
 
@@ -2339,7 +2250,6 @@ module.exports = function registerChatRoutes(app, ctx) {
     let streamEnded = false;
     let assistantBuf = '';
     let assistantSaved = false;
-    let proc = null;
     const chatAbort = new AbortController();
   
     function clearHeartbeat() {
@@ -2443,9 +2353,6 @@ module.exports = function registerChatRoutes(app, ctx) {
       try {
         chatAbort.abort();
       } catch (_) {}
-      if (proc && proc.exitCode === null && !proc.killed) {
-        try { proc.kill(); } catch (_) {}
-      }
     });
     // Client-disconnect mid-stream triggers EPIPE on the response socket; the
     // default Node behavior is to treat the unhandled 'error' as fatal. We
@@ -2456,32 +2363,31 @@ module.exports = function registerChatRoutes(app, ctx) {
       console.warn('[chat] response socket error:', err && err.message ? err.message : err);
     });
   
-    if (BRAIN_CHAT_BACKEND === 'sdk') {
-      (async () => {
-        let pendingWorkspaceTouches = [];
-        try {
-          const runner = await import(pathToFileURL(path.join(__dirname, '..', '..', 'chat-sdk-runner.mjs')).href);
-          const freshSess = readChatSession(req, conversationId) || sess;
-          const useResume = Boolean(freshSess.agentSdkSessionId && process.env.BRAIN_CHAT_RESUME !== '0');
-          let promptText = useResume
-            ? lastUserContent(freshSess.messages)
-            : formatTranscriptFromMessages(freshSess.messages, CHAT_MAX_TRANSCRIPT_CHARS);
-          if (useResume && !String(promptText || '').trim()) {
-            promptText = formatTranscriptFromMessages(freshSess.messages, CHAT_MAX_TRANSCRIPT_CHARS);
-          }
-          if (planPhase === 'execute' && chatPlanExecuteTodos && chatPlanExecuteTodos.length) {
-            const block =
-              '[Approved plan — execute in order]\n```json\n' +
-              JSON.stringify(chatPlanExecuteTodos, null, 2) +
-              '\n```';
-            promptText = `${block}\n\n${promptText}`;
-          }
-          const allowedRaw = (process.env.BRAIN_CHAT_ALLOWED_TOOLS || '').trim();
-          const allowedTools = allowedRaw ? allowedRaw.split(',').map((t) => t.trim()).filter(Boolean) : undefined;
-          const chatEnv = envForClaudeChat({
-            tenantDataDir: multiUserMode() ? tenantDataDirForRequest(req) : null,
-            model: sess.model,
-          });
+    (async () => {
+      let pendingWorkspaceTouches = [];
+      try {
+        const runner = await import(pathToFileURL(path.join(__dirname, '..', '..', 'chat-sdk-runner.mjs')).href);
+        const freshSess = readChatSession(req, conversationId) || sess;
+        const useResume = Boolean(freshSess.agentSdkSessionId && process.env.BRAIN_CHAT_RESUME !== '0');
+        let promptText = useResume
+          ? lastUserContent(freshSess.messages)
+          : formatTranscriptFromMessages(freshSess.messages, CHAT_MAX_TRANSCRIPT_CHARS);
+        if (useResume && !String(promptText || '').trim()) {
+          promptText = formatTranscriptFromMessages(freshSess.messages, CHAT_MAX_TRANSCRIPT_CHARS);
+        }
+        if (planPhase === 'execute' && chatPlanExecuteTodos && chatPlanExecuteTodos.length) {
+          const block =
+            '[Approved plan — execute in order]\n```json\n' +
+            JSON.stringify(chatPlanExecuteTodos, null, 2) +
+            '\n```';
+          promptText = `${block}\n\n${promptText}`;
+        }
+        const allowedRaw = (process.env.BRAIN_CHAT_ALLOWED_TOOLS || '').trim();
+        const allowedTools = allowedRaw ? allowedRaw.split(',').map((t) => t.trim()).filter(Boolean) : undefined;
+        const chatEnv = envForClaudeChat({
+          tenantDataDir: tenantDataDirForRequest(req),
+          model: sess.model,
+        });
           const perm = runner.parsePermissionOptions(process.env.BRAIN_CHAT_PERMISSION_MODE);
           const chatDataDir = tenantDataDirForRequest(req);
           const chatWorkspaceDir = workspaceDirForRequest(req);
@@ -2739,64 +2645,6 @@ module.exports = function registerChatRoutes(app, ctx) {
         } finally {
           endSSE();
         }
-      })();
-      return;
-    }
-  
-    const transcript = formatTranscriptFromMessages(sess.messages, CHAT_MAX_TRANSCRIPT_CHARS);
-    const fullPrompt = `${systemPrompt}\n\n---\n\n${transcript}`;
-
-    try {
-      normalizeWorkspaceConfigDbPaths(workspaceDirForRequest(req), tenantDataDirForRequest(req));
-    } catch (err) {
-      console.warn('[chat] config.json normalize:', err.message);
-    }
-
-    proc = spawn(CLAUDE_BIN, ['-p', '--dangerously-skip-permissions'], {
-      env: envForClaudeChat({
-        tenantDataDir: multiUserMode() ? tenantDataDirForRequest(req) : null,
-        model: sess.model,
-      }),
-      cwd: workspaceDirForRequest(req),
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-  
-    proc.on('error', (err) => {
-      const tried = CLAUDE_BIN === 'claude' ? '`claude` on PATH' : CLAUDE_BIN;
-      const errText =
-        `Failed to start the assistant runtime (${err.message}). Tried: ${tried}. ` +
-        'The server operator must install the assistant CLI on PATH or set the executable path and chat backend per repository documentation.';
-      try {
-        res.write(`data: ${JSON.stringify({ error: errText })}\n\n`);
-      } catch (_) {}
-      appendAssistantToSession(`[Error] ${errText}`, true, null, sess.model);
-      endSSE();
-    });
-  
-    proc.stdout.on('data', chunk => {
-      const t = chunk.toString();
-      assistantBuf = appendAssistantStreamChunk(assistantBuf, t);
-      try {
-        res.write(`data: ${JSON.stringify({ text: t })}\n\n`);
-      } catch (_) {}
-    });
-  
-    proc.stderr.on('data', chunk => {
-      try {
-        res.write(`data: ${JSON.stringify({ error: chunk.toString() })}\n\n`);
-      } catch (_) {}
-    });
-  
-    proc.on('close', (code) => {
-      if (!assistantSaved) {
-        let content = assistantBuf;
-        if (!String(content).trim() && code !== 0 && code !== null) {
-          content = `[Process exited with code ${code}]`;
-        }
-        const errFlag = code !== 0 && code !== null && !String(assistantBuf).trim();
-        appendAssistantToSession(content, errFlag, null, sess.model);
-      }
-      endSSE();
-    });
+    })();
   });
 };

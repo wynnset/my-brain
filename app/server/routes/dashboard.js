@@ -3,7 +3,6 @@
 const fs = require('fs');
 const path = require('path');
 const Database = require('better-sqlite3');
-const session = require('../lib/session.js');
 
 function registerDashboardRoutes(app, ctx) {
   const {
@@ -12,7 +11,6 @@ function registerDashboardRoutes(app, ctx) {
     dashboardResolve,
     tenantDataDirForRequest,
     workspaceDirForRequest,
-    dashboardManifestOpts,
     q,
     q1,
   } = ctx;
@@ -35,9 +33,9 @@ function registerDashboardRoutes(app, ctx) {
 
       let activeWeek = null;
       let weekGoals = [];
-      const showLaunchpadHome =
-        !session.multiUserMode() ||
-        r.enabledPages.some((p) => p.slug === 'career' || p.template === 'career');
+      const showLaunchpadHome = r.enabledPages.some(
+        (p) => p.slug === 'career' || p.template === 'career',
+      );
       if (showLaunchpadHome) {
         activeWeek = q1(launchpad, `SELECT * FROM weeks WHERE status = 'active' LIMIT 1`);
         weekGoals = activeWeek
@@ -74,7 +72,7 @@ function registerDashboardRoutes(app, ctx) {
     try {
       const ws = workspaceDirForRequest(req);
       const dataDir = tenantDataDirForRequest(req);
-      const page = dashManifest.findEnabledPageBySlug(ws, dataDir, dashboardManifestOpts(), req.params.slug);
+      const page = dashManifest.findEnabledPageBySlug(ws, dataDir, req.params.slug);
       if (!page || page.template !== 'datatable' || !page.sql) {
         return res.status(404).json({ error: 'Page not found or not a datatable view' });
       }
@@ -122,7 +120,6 @@ function registerDashboardRoutes(app, ctx) {
       const hit = dashManifest.findEnabledSection(
         ws,
         dataDir,
-        dashboardManifestOpts(),
         req.params.pageSlug,
         req.params.sectionId,
       );
@@ -175,7 +172,6 @@ function registerDashboardRoutes(app, ctx) {
       const hit = dashManifest.findEnabledTodosSection(
         ws,
         dataDir,
-        dashboardManifestOpts(),
         req.params.pageSlug,
         req.params.sectionId,
       );
@@ -220,7 +216,6 @@ function registerDashboardRoutes(app, ctx) {
       const hit = dashManifest.findEnabledRichSection(
         ws,
         dataDir,
-        dashboardManifestOpts(),
         req.params.pageSlug,
         req.params.sectionId,
       );

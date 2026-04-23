@@ -11,7 +11,7 @@ const ORCH_BRIEF_LEGACY = 'LARRY.md';
  * @param {string} repoRootDir parent of app/
  */
 function createOrchestratorBrief(dataDir, repoRootDir) {
-  function orchestratorBriefRoots() {
+  function migrationRoots() {
     const roots = [dataDir, repoRootDir];
     const seen = new Set();
     const out = [];
@@ -25,8 +25,9 @@ function createOrchestratorBrief(dataDir, repoRootDir) {
     return out;
   }
 
+  /** Rename any legacy LARRY.md left at repo root to CYRUS.md (harmless no-op once clean). */
   function ensureOrchestratorBriefMigrated() {
-    for (const root of orchestratorBriefRoots()) {
+    for (const root of migrationRoots()) {
       const cur = path.join(root, ORCH_BRIEF_FILE);
       const legacy = path.join(root, ORCH_BRIEF_LEGACY);
       if (!fs.existsSync(cur) && fs.existsSync(legacy)) {
@@ -40,27 +41,7 @@ function createOrchestratorBrief(dataDir, repoRootDir) {
     }
   }
 
-  /** First existing orchestrator brief on disk (prefers CYRUS.md, then legacy LARRY.md). */
-  function resolveOrchestratorBriefPath() {
-    for (const root of orchestratorBriefRoots()) {
-      const c = path.join(root, ORCH_BRIEF_FILE);
-      if (fs.existsSync(c)) return c;
-    }
-    for (const root of orchestratorBriefRoots()) {
-      const l = path.join(root, ORCH_BRIEF_LEGACY);
-      if (fs.existsSync(l)) return l;
-    }
-    return null;
-  }
-
-  /** Target path for writes / new file (same as resolved file if one exists, else DATA_DIR). */
-  function orchestratorBriefWritePath() {
-    const found = resolveOrchestratorBriefPath();
-    if (found) return found;
-    return path.join(dataDir, ORCH_BRIEF_FILE);
-  }
-
-  /** Orchestrator brief only under tenant workspace (multi-user); no repo-root fallback. */
+  /** Orchestrator brief only under tenant workspace; no repo-root fallback. */
   function resolveOrchestratorBriefPathInWorkspace(workspaceDir) {
     for (const file of [ORCH_BRIEF_FILE, ORCH_BRIEF_LEGACY]) {
       const c = path.join(workspaceDir, file);
@@ -84,8 +65,6 @@ function createOrchestratorBrief(dataDir, repoRootDir) {
     ORCH_BRIEF_FILE,
     ORCH_BRIEF_LEGACY,
     ensureOrchestratorBriefMigrated,
-    resolveOrchestratorBriefPath,
-    orchestratorBriefWritePath,
     resolveOrchestratorBriefPathInWorkspace,
     orchestratorBriefWritePathForWorkspace,
     isOrchestratorChatAgent,

@@ -172,8 +172,7 @@ document.addEventListener('alpine:init', function() {
      * Mirrors `/api/chat/limits` for the signed-in tenant. Populated on first
      * chat-panel open and refreshed after every 402 response from POST /api/chat.
      * `exceeded` drives the prominent "out of credits" banner + disables the
-     * composer submit button. `null` means the feature is inactive (single-tenant
-     * mode) or the payload has not loaded yet.
+     * composer submit button. `null` means the payload has not loaded yet.
      * @type {null | { enabled: boolean, exceeded: boolean, exceededKind: 'daily'|'monthly'|null, resetsAt: string|null, dailyLimitUsd: number, monthlyLimitUsd: number, daySpendUsd: number, monthSpendUsd: number, dayResetsAt: string, monthResetsAt: string, accountCreatedAt: string }}
      */
     chatCreditLimit: null,
@@ -667,10 +666,10 @@ document.addEventListener('alpine:init', function() {
     //
     // Thin computed helpers used by the progress bars + history table on the
     // Usage page. They all degrade gracefully when `chatCreditLimit` is null
-    // (e.g. single-tenant mode) so the surrounding Alpine template can hide
+    // (limits not yet loaded) so the surrounding Alpine template can hide
     // the whole block via `x-show="chatCreditLimitIsActive()"`.
 
-    /** True when the multi-user credit-limit feature is active for this tenant. */
+    /** True when the credit-limit feature is active for this tenant. */
     chatCreditLimitIsActive() {
       var c = this.chatCreditLimit;
       return !!(c && c.enabled !== false);
@@ -891,13 +890,12 @@ document.addEventListener('alpine:init', function() {
     },
 
     /**
-     * One-line stats for the home footer. When the multi-user credit-limit
-     * feature is enabled, formats as:
+     * One-line stats for the home footer. When credit limits are configured,
+     * formats as:
      *   "Today $1.23 / $10.00  •  April $7.45 / $10.00"
      * so the caps are visible at a glance. Falls back to the simpler
-     * month-to-date phrasing (from `/api/chat/usage-summary`) when limits are
-     * not in play (single-tenant mode or when the limits snapshot hasn't
-     * loaded yet).
+     * month-to-date phrasing (from `/api/chat/usage-summary`) when the limits
+     * snapshot hasn't loaded yet.
      */
     homeUsageFooterMain() {
       var limits = this.chatCreditLimit;

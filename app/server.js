@@ -11,7 +11,6 @@ const tenancy = require('./server/tenancy/tenancy-utils.js');
 const registryDb = require('./server/tenancy/registry-db.js');
 const tenantDbMod = require('./server/tenancy/tenant-db.js');
 const dashManifest = require('./server/dashboard/dashboard-manifest.js');
-const { runLegacyVolumeMigrationIfNeeded } = require('./server/migrate/volume-migrate.js');
 const { safeTenantSqliteBase } = require('./server/lib/tenant-sqlite.js');
 const { q, q1 } = require('./server/lib/db-query.js');
 const { createOrchestratorBrief } = require('./server/lib/orchestrator-brief.js');
@@ -21,7 +20,7 @@ const { createDashboardAuthMiddleware } = require('./server/middleware/dashboard
 const { createRequireTenantBrainMiddleware } = require('./server/middleware/dashboard-tenant-brain.js');
 const { registerPublicRoutes, registerProtectedRoutes } = require('./server/routes/index.js');
 
-/** Repo root `.env` — set ANTHROPIC_API_KEY, BRAIN_CHAT_BACKEND, etc. without shell exports. */
+/** Repo root `.env` — set ANTHROPIC_API_KEY, SESSION_SECRET, etc. without shell exports. */
 (function loadDotenv() {
   try {
     const envPath = path.join(__dirname, '..', '.env');
@@ -37,87 +36,19 @@ const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '..');
 const DB_DIR = process.env.DB_DIR || path.join(__dirname, '..', 'data');
 const REPO_ROOT_DIR = path.join(__dirname, '..');
 
-if (session.multiUserMode()) {
-  if (!process.env.SESSION_SECRET || String(process.env.SESSION_SECRET).length < 32) {
-    console.error('BRAIN_MULTI_USER=1 requires SESSION_SECRET (at least 32 characters).');
-    process.exit(1);
-  }
-  try {
-    registryDb.ensureRegistrySchema(tenancy.registryDbPath());
-  } catch (e) {
-    console.error('[registry]', e.message);
-    process.exit(1);
-  }
-  try {
-    const mig = runLegacyVolumeMigrationIfNeeded();
-    if (mig.migrated) console.log('[migrate] legacy volume → users/', mig.tenantId);
-    if (mig.message && !mig.migrated) console.log('[migrate]', mig.message);
-  } catch (e) {
-    console.error('[migrate]', e.message);
-    process.exit(1);
-  }
+if (!process.env.SESSION_SECRET || String(process.env.SESSION_SECRET).length < 32) {
+  console.error('SESSION_SECRET (at least 32 characters) is required.');
+  process.exit(1);
+}
+try {
+  registryDb.ensureRegistrySchema(tenancy.registryDbPath());
+} catch (e) {
+  console.error('[registry]', e.message);
+  process.exit(1);
 }
 
 const orchestrator = createOrchestratorBrief(DATA_DIR, REPO_ROOT_DIR);
 orchestrator.ensureOrchestratorBriefMigrated();
-
-// ─── Open databases (legacy single-tenant only; multi-user opens per request) ─
-let brain;
-let launchpad;
-let finance;
-let wynnset;
-function openDbReadonlyAt(dir, filename) {
-  const p = path.join(dir, filename);
-  if (!fs.existsSync(p)) {
-    console.warn(`Database missing (ok for first boot): ${p}`);
-    return null;
-  }
-  try {
-    return new Database(p, { readonly: true });
-  } catch (err) {
-    console.error(`Failed to open database ${p}:`, err.message);
-    return null;
-  }
-}
-
-function openDbReadonly(filename) {
-  return openDbReadonlyAt(DB_DIR, filename);
-}
-
-/** Ensure optional markdown column exists (dashboard edits / richer notes). */
-function migrateBrainActionItemsDetails() {
-  if (session.multiUserMode()) return;
-  const p = path.join(DB_DIR, 'brain.db');
-  if (!fs.existsSync(p)) return;
-  let rw;
-  try {
-    rw = new Database(p);
-    const names = new Set(rw.prepare(`PRAGMA table_info(action_items)`).all().map((c) => c.name));
-    if (!names.has('details')) {
-      rw.exec(`ALTER TABLE action_items ADD COLUMN details TEXT`);
-      console.log('brain.db: added column action_items.details');
-    }
-  } catch (err) {
-    console.warn('brain.db migration (action_items.details):', err.message);
-  } finally {
-    if (rw) try { rw.close(); } catch (_) {}
-  }
-}
-migrateBrainActionItemsDetails();
-
-if (!session.multiUserMode()) {
-  brain = openDbReadonly('brain.db');
-  launchpad = openDbReadonly('launchpad.db');
-  finance = openDbReadonly('finance.db');
-  wynnset = openDbReadonly('wynnset.db');
-} else {
-  brain = launchpad = finance = wynnset = null;
-}
-const dbsReady = () => brain && launchpad && finance && wynnset;
-if (!session.multiUserMode()) {
-  if (dbsReady()) console.log('All databases opened successfully.');
-  else console.warn('Some databases missing — upload *.db to DB_DIR, then restart.');
-}
 
 const migratedBrainDetailsDirs = new Set();
 function ensureTenantBrainDetailsMigrated(dataDir) {
@@ -128,30 +59,19 @@ function ensureTenantBrainDetailsMigrated(dataDir) {
 }
 
 function tenantDataDirForRequest(req) {
-  if (session.multiUserMode()) {
-    if (!req.tenant) throw new Error('Tenant required');
-    return req.tenant.dataDir;
-  }
-  return DB_DIR;
+  if (!req.tenant) throw new Error('Tenant required');
+  return req.tenant.dataDir;
 }
 
 function workspaceDirForRequest(req) {
-  if (session.multiUserMode()) {
-    if (!req.tenant) throw new Error('Tenant required');
-    return req.tenant.workspaceDir;
-  }
-  return DATA_DIR;
-}
-
-function dashboardManifestOpts() {
-  return { multiUser: session.multiUserMode() };
+  if (!req.tenant) throw new Error('Tenant required');
+  return req.tenant.workspaceDir;
 }
 
 function dashboardResolve(req) {
   return dashManifest.resolveDashboardManifest(
     workspaceDirForRequest(req),
     tenantDataDirForRequest(req),
-    dashboardManifestOpts(),
   );
 }
 
@@ -163,46 +83,34 @@ function templatesEnabledForRequest(req) {
   return dashManifest.enabledTemplates(
     workspaceDirForRequest(req),
     tenantDataDirForRequest(req),
-    dashboardManifestOpts(),
   );
 }
 
-/** Multi-user: only `brain.db` is required; other domain DBs are created when needed. */
+/** Only `brain.db` is required; other domain DBs are created when needed. */
 function tenantDataDirReady(dataDir) {
   return fs.existsSync(path.join(dataDir, 'brain.db'));
 }
 
-/** Run handler with open tenant DBs; closes handles in multi-user mode when done. */
+/** Run handler with open tenant DBs; closes handles when done. */
 function withTenantDatabases(req, res, sendJson) {
   const dataDir = tenantDataDirForRequest(req);
-  if (session.multiUserMode()) {
-    ensureTenantBrainDetailsMigrated(dataDir);
-    if (!tenantDataDirReady(dataDir)) {
-      return res.status(503).json({
-        error: 'Database files missing for this account',
-        hint: 'Ensure brain.db exists under the tenant data directory.',
-      });
-    }
-    const dbs = tenantDbMod.openTenantDatabases(dataDir);
-    try {
-      sendJson(dbs);
-    } finally {
-      dbs.close();
-    }
-  } else {
-    if (!dbsReady()) {
-      return res.status(503).json({
-        error: 'Database files missing on server',
-        hint: 'Upload brain.db, launchpad.db, finance.db, wynnset.db to the volume under DB_DIR, then restart the machine.',
-      });
-    }
-    sendJson({ brain, launchpad, finance, wynnset });
+  ensureTenantBrainDetailsMigrated(dataDir);
+  if (!tenantDataDirReady(dataDir)) {
+    return res.status(503).json({
+      error: 'Database files missing for this account',
+      hint: 'Ensure brain.db exists under the tenant data directory.',
+    });
+  }
+  const dbs = tenantDbMod.openTenantDatabases(dataDir);
+  try {
+    sendJson(dbs);
+  } finally {
+    dbs.close();
   }
 }
 
 let registryReadonlyDb = null;
 function getRegistryReadonly() {
-  if (!session.multiUserMode()) return null;
   if (!registryReadonlyDb) {
     const p = tenancy.registryDbPath();
     if (!fs.existsSync(p)) return null;
@@ -215,11 +123,9 @@ function getRegistryReadonly() {
  * Run `fn(db)` against a short-lived read-write handle to registry.db. Used by
  * server-side paths (credit limits, admin updates) that mutate tenant counters
  * we never want to expose through the dashboard DB API.
- * Returns whatever `fn` returns, or `null` if multi-user mode is off / the file
- * does not exist yet.
+ * Returns whatever `fn` returns, or `null` if the registry file does not exist yet.
  */
 function withRegistryReadWrite(fn) {
-  if (!session.multiUserMode()) return null;
   const p = tenancy.registryDbPath();
   if (!fs.existsSync(p)) return null;
   const db = registryDb.openRegistryReadWrite(p);
@@ -261,9 +167,6 @@ process.on('unhandledRejection', (reason) => {
 
 // ─── Graceful shutdown ────────────────────────────────────────────────────────
 process.on('SIGINT', () => {
-  [brain, launchpad, finance, wynnset].forEach((db) => {
-    if (db) try { db.close(); } catch (_) {}
-  });
   if (registryReadonlyDb) try { registryReadonlyDb.close(); } catch (_) {}
   console.log('\nDatabases closed. Goodbye.');
   process.exit(0);
@@ -293,7 +196,6 @@ app.use(createTryAttachTenantFromApiToken({ getRegistryReadonly, tenancy }));
     safeTenantSqliteBase,
     tenantDataDirForRequest,
     workspaceDirForRequest,
-    dashboardManifestOpts,
     dashboardResolve,
     dashboardPagesForRequest,
     templatesEnabledForRequest,
@@ -303,14 +205,13 @@ app.use(createTryAttachTenantFromApiToken({ getRegistryReadonly, tenancy }));
     q,
     q1,
     orchestrator,
-    multiUserMode: session.multiUserMode,
     appendAssistantStreamChunk,
   };
 
   registerPublicRoutes(app, ctx);
 
   app.use(createDashboardAuthMiddleware({ tenancy }));
-  app.use(createRequireTenantBrainMiddleware({ tenantDataDirReady, dbsReady }));
+  app.use(createRequireTenantBrainMiddleware({ tenantDataDirReady }));
 
   registerProtectedRoutes(app, ctx);
 
@@ -319,11 +220,7 @@ app.use(createTryAttachTenantFromApiToken({ getRegistryReadonly, tenancy }));
 
   const server = app.listen(PORT, async () => {
     console.log(`Cyrus dashboard running at http://localhost:${PORT}`);
-    if (session.multiUserMode()) {
-      console.log(`Multi-tenant volume root: ${tenancy.volumeRoot()}`);
-    } else {
-      console.log(`Data directory: ${DATA_DIR}`);
-    }
+    console.log(`Multi-tenant volume root: ${tenancy.volumeRoot()}`);
     try {
       const { default: open } = await import('open');
       await open(`http://localhost:${PORT}`);

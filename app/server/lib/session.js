@@ -6,38 +6,25 @@ const tenancy = require('../tenancy/tenancy-utils.js');
 const SESS_COOKIE = 'brain_sess';
 const SESS_MAX_AGE_SEC = 60 * 60 * 24 * 14; // 14 days
 
-function multiUserMode() {
-  return tenancy.isMultiUser();
-}
-
 function dashboardAuthEnabled() {
-  if (multiUserMode()) {
-    return Boolean(process.env.SESSION_SECRET && String(process.env.SESSION_SECRET).length >= 32);
-  }
-  return Boolean(process.env.DASHBOARD_PASSWORD);
+  return Boolean(process.env.SESSION_SECRET && String(process.env.SESSION_SECRET).length >= 32);
 }
 
-function sessionSigningKeyLegacy() {
-  return crypto.createHmac('sha256', 'brain-dashboard-sess-v1')
-    .update(String(process.env.DASHBOARD_PASSWORD || ''))
-    .digest();
-}
-
-function sessionSigningKeyMulti() {
+function sessionSigningKey() {
   return crypto.createHmac('sha256', 'brain-dashboard-sess-multi-v1')
     .update(String(process.env.SESSION_SECRET || ''))
     .digest();
 }
 
 function signSessionPayload(obj) {
-  const key = multiUserMode() ? sessionSigningKeyMulti() : sessionSigningKeyLegacy();
+  const key = sessionSigningKey();
   const payload = Buffer.from(JSON.stringify(obj), 'utf8').toString('base64url');
   const sig = crypto.createHmac('sha256', key).update(payload).digest('base64url');
   return `${payload}.${sig}`;
 }
 
-function verifySessionPayload(payloadB64, sig, useMultiKey) {
-  const key = useMultiKey ? sessionSigningKeyMulti() : sessionSigningKeyLegacy();
+function verifySessionPayload(payloadB64, sig) {
+  const key = sessionSigningKey();
   const expected = crypto.createHmac('sha256', key).update(payloadB64).digest('base64url');
   try {
     if (sig.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected)))
@@ -53,10 +40,8 @@ function verifySessionPayload(payloadB64, sig, useMultiKey) {
   }
   if (!payload.exp || typeof payload.exp !== 'number') return null;
   if (Math.floor(Date.now() / 1000) > payload.exp) return null;
-  if (multiUserMode()) {
-    if (!payload.sub || typeof payload.sub !== 'string') return null;
-    if (!tenancy.TENANT_USER_ID_RE.test(payload.sub)) return null;
-  }
+  if (!payload.sub || typeof payload.sub !== 'string') return null;
+  if (!tenancy.TENANT_USER_ID_RE.test(payload.sub)) return null;
   return payload;
 }
 
@@ -69,7 +54,7 @@ function parseSessionFromCookie(cookieHeader) {
   if (dot < 0) return null;
   const payloadB64 = raw.slice(0, dot);
   const sig = raw.slice(dot + 1);
-  return verifySessionPayload(payloadB64, sig, multiUserMode());
+  return verifySessionPayload(payloadB64, sig);
 }
 
 function verifySessionCookie(cookieHeader) {
@@ -99,7 +84,6 @@ function clearSessionCookie(res) {
 module.exports = {
   SESS_COOKIE,
   SESS_MAX_AGE_SEC,
-  multiUserMode,
   dashboardAuthEnabled,
   signSessionPayload,
   parseSessionFromCookie,

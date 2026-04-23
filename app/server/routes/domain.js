@@ -15,7 +15,6 @@ function registerDomainRoutes(app, ctx) {
     withTenantDatabases,
     tenantDataDirForRequest,
     workspaceDirForRequest,
-    dashboardManifestOpts,
     q,
     q1,
   } = ctx;
@@ -227,7 +226,7 @@ function registerDomainRoutes(app, ctx) {
     const slug = String(req.params.slug || '').trim().toLowerCase();
     const ws = workspaceDirForRequest(req);
     const dataDir = tenantDataDirForRequest(req);
-    const page = dashManifest.findEnabledPageBySlug(ws, dataDir, dashboardManifestOpts(), slug);
+    const page = dashManifest.findEnabledPageBySlug(ws, dataDir, slug);
     if (!page || page.template !== 'action_domain' || !page.actionDomain) {
       return res.status(404).json({
         error:

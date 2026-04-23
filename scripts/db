@@ -7,9 +7,8 @@
 #   db script <dbname> <filepath.sql>  — run a .sql file
 #
 # Routing (first match wins):
-#   1. $BRAIN_DATA_DIR/<name>.db exists  → direct sqlite3 (multi-tenant container)
-#   2. /data/<name>.db exists            → direct sqlite3 (legacy flat container)
-#   3. $BRAIN_APP_URL set                → POST to BRAIN_APP_URL/api/db (local dev)
+#   1. $BRAIN_DATA_DIR/<name>.db exists  → direct sqlite3 (inside container)
+#   2. $BRAIN_APP_URL set                → POST to BRAIN_APP_URL/api/db (local dev)
 #
 # The agent never has to guess paths. The server injects BRAIN_DATA_DIR with the
 # tenant's container-side data dir (e.g. /data/users/<uuid>/data) before
@@ -17,7 +16,7 @@
 #
 # Local setup (add to ~/.zshrc) when running outside the container:
 #   export BRAIN_APP_URL="https://my-brain-dashboard.fly.dev"
-#   export BRAIN_API_TOKEN="<token from fly secrets>"
+#   export BRAIN_API_TOKEN="<token from registry users.api_token>"
 
 set -e
 
@@ -30,13 +29,10 @@ if [ -z "$MODE" ] || [ -z "$DBNAME" ]; then
   exit 1
 fi
 
-# Resolve the DB file. Prefer the tenant data dir injected by the server; fall
-# back to the legacy flat /data layout for older single-tenant containers.
+# Resolve the DB file from the tenant data dir injected by the server.
 DB_FILE=""
 if [ -n "$BRAIN_DATA_DIR" ] && [ -f "${BRAIN_DATA_DIR}/${DBNAME}.db" ]; then
   DB_FILE="${BRAIN_DATA_DIR}/${DBNAME}.db"
-elif [ -f "/data/${DBNAME}.db" ]; then
-  DB_FILE="/data/${DBNAME}.db"
 fi
 
 if [ -n "$DB_FILE" ]; then
@@ -70,7 +66,7 @@ fi
 
 # ── Running locally: call the API ───────────────────────────────────────────
 if [ -z "$BRAIN_APP_URL" ]; then
-  echo "Error: BRAIN_APP_URL is not set and no local DB at /data/${DBNAME}.db." >&2
+  echo "Error: BRAIN_APP_URL is not set and BRAIN_DATA_DIR points to no ${DBNAME}.db." >&2
   echo "       Set BRAIN_APP_URL (e.g. https://my-brain-dashboard.fly.dev) and BRAIN_API_TOKEN," >&2
   echo "       or run inside the container where BRAIN_DATA_DIR is injected by the server." >&2
   exit 1

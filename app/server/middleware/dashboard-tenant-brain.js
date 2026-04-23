@@ -1,7 +1,5 @@
 'use strict';
 
-const session = require('../lib/session.js');
-
 function pathNeedsTenantBrain(url) {
   const p = url.split('?')[0];
   if (p.startsWith('/api/dashboard-page/')) return true;
@@ -17,22 +15,13 @@ function pathNeedsTenantBrain(url) {
 }
 
 function createRequireTenantBrainMiddleware(ctx) {
-  const { tenantDataDirReady, dbsReady } = ctx;
+  const { tenantDataDirReady } = ctx;
   return function requireTenantBrainMiddleware(req, res, next) {
     if (!pathNeedsTenantBrain(req.originalUrl)) return next();
-    if (session.multiUserMode()) {
-      if (!req.tenant || !tenantDataDirReady(req.tenant.dataDir)) {
-        return res.status(503).json({
-          error: 'Database files missing on server',
-          hint: 'Ensure brain.db exists for this account under the tenant data directory.',
-        });
-      }
-      return next();
-    }
-    if (!dbsReady()) {
+    if (!req.tenant || !tenantDataDirReady(req.tenant.dataDir)) {
       return res.status(503).json({
         error: 'Database files missing on server',
-        hint: 'Upload brain.db, launchpad.db, finance.db, wynnset.db to the volume under DB_DIR, then restart the machine.',
+        hint: 'Ensure brain.db exists for this account under the tenant data directory.',
       });
     }
     next();

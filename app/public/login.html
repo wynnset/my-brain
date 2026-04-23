@@ -18,9 +18,9 @@
     <h1 class="text-lg font-semibold text-slate-800 dark:text-slate-100 mb-1">Cyrus</h1>
     <p id="hint" class="text-sm text-slate-500 dark:text-slate-400 mb-5">Checking sign-in…</p>
     <form id="f" class="space-y-4 hidden">
-      <div id="loginWrap" class="hidden">
+      <div>
         <label for="login" class="block text-xs font-medium text-slate-600 dark:text-slate-300 mb-1">Login</label>
-        <input id="login" name="login" type="text" autocomplete="username"
+        <input id="login" name="login" type="text" autocomplete="username" required
           class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 px-3 py-2 text-slate-900 dark:text-slate-100 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none" />
       </div>
       <div>
@@ -36,23 +36,10 @@
     </form>
   </div>
   <script>
-    (async function () {
+    (function () {
       var hint = document.getElementById('hint');
       var form = document.getElementById('f');
-      var loginWrap = document.getElementById('loginWrap');
-      var multi = false;
-      try {
-        var st = await fetch('/api/auth-status', { credentials: 'include' });
-        var d = await st.json().catch(function () { return {}; });
-        multi = !!d.multiUser;
-      } catch (e) {}
-      hint.textContent = multi
-        ? 'Enter your login and password to continue.'
-        : 'Enter the dashboard password to continue.';
-      if (multi) {
-        loginWrap.classList.remove('hidden');
-        document.getElementById('login').required = true;
-      }
+      hint.textContent = 'Enter your login and password to continue.';
       form.classList.remove('hidden');
 
       document.getElementById('f').addEventListener('submit', async function (e) {
@@ -62,9 +49,10 @@
         err.classList.add('hidden');
         btn.disabled = true;
         try {
-          var body = multi
-            ? { login: document.getElementById('login').value.trim(), password: document.getElementById('p').value }
-            : { password: document.getElementById('p').value };
+          var body = {
+            login: document.getElementById('login').value.trim(),
+            password: document.getElementById('p').value,
+          };
           var res = await fetch('/api/login', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },

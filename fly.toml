@@ -17,7 +17,10 @@ primary_region = 'yyz'
   # SESSION_SECRET (32+ chars) is required — set via `fly secrets set SESSION_SECRET='…'`.
 
 [[mounts]]
-  source = 'brain_data'
+  # Forked from the original `brain_data` (zone 3d14, capacity-exhausted) on
+  # 2026-04-23 via `fly volumes fork --require-unique-zone`. New volume lives
+  # in zone 4b4f (vol_vwnewwkdw65ww39v).
+  source = 'brain_data_v2'
   destination = '/data'
   # 60 days is the Fly maximum; well within the 10 GB/mo free snapshot allowance for this volume.
   snapshot_retention = 60

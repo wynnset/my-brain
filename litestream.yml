@@ -1,0 +1,42 @@
+# Litestream replicates each SQLite DB on /data to Tigris (Fly object storage)
+# in near-real-time. Env vars are injected by `fly storage create` (BUCKET_NAME,
+# AWS_ENDPOINT_URL_S3, AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY).
+#
+# Multi-tenant: the `dir` block auto-discovers every *.db under /data/users
+# (recursive + watch) so new tenants created after deploy get backed up
+# without any redeploy or config change.
+
+# Global snapshot policy: take a full snapshot every hour, keep 7 days of them.
+# Litestream keeps incremental WAL segments between snapshots → restore to
+# any point in time within the retention window.
+snapshot:
+  interval: 1h
+  retention: 168h
+
+# `exec` lets Litestream act as the parent process and supervise the app.
+# When the machine receives SIGTERM (Fly auto-stop, deploy, scale-down),
+# Litestream propagates it to the child, waits for the WAL to flush, ships
+# the final segments to Tigris, then exits. Clean handoff.
+exec: "su-exec node node server.js"
+
+dbs:
+  # Global registry (auth, tenant list). Single fixed path.
+  - path: /data/registry.db
+    replica:
+      url: s3://${BUCKET_NAME}/registry/registry.db
+      endpoint: ${AWS_ENDPOINT_URL_S3}
+      region: ${AWS_REGION}
+      force-path-style: true
+
+  # All tenant DBs. Litestream watches /data/users recursively for any *.db
+  # file and replicates it to s3://<bucket>/tenants/<relative-path>.
+  # New tenants provisioned via brain-add-user.cjs are picked up automatically.
+  - dir: /data/users
+    pattern: "*.db"
+    recursive: true
+    watch: true
+    replica:
+      url: s3://${BUCKET_NAME}/tenants
+      endpoint: ${AWS_ENDPOINT_URL_S3}
+      region: ${AWS_REGION}
+      force-path-style: true

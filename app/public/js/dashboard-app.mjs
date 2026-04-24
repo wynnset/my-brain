@@ -702,7 +702,7 @@ document.addEventListener('alpine:init', function() {
       return 'bg-emerald-500 dark:bg-emerald-400';
     },
 
-    /** "$1.23 / $10.00 used" line above each progress bar. */
+    /** "$1.23 / $10.00" line above each progress bar. */
     chatCreditLimitSpendLine(kind) {
       var c = this.chatCreditLimit;
       if (!c) return '';
@@ -712,13 +712,7 @@ document.addEventListener('alpine:init', function() {
       if (!Number.isFinite(capNum) || capNum <= 0) {
         return this._fmtCreditUsd(spend) + ' used   \u2022   No limit';
       }
-      var remaining = capNum - (Number(spend) || 0);
-      if (!Number.isFinite(remaining) || remaining < 0) remaining = 0;
-      return (
-        this._fmtCreditUsd(spend) + ' / ' + this._fmtCreditUsd(cap)
-        + '   \u2022   '
-        + this._fmtCreditUsd(remaining) + ' remaining'
-      );
+      return this._fmtCreditUsd(spend) + ' / ' + this._fmtCreditUsd(cap);
     },
 
     /** "Resets at …" caption beneath each bar (uses visitor locale). */
@@ -818,7 +812,7 @@ document.addEventListener('alpine:init', function() {
           style: 'currency',
           currency: 'USD',
           minimumFractionDigits: 2,
-          maximumFractionDigits: 6,
+          maximumFractionDigits: 2,
         }).format(Number(v));
       } catch (_) {
         return '$' + String(v);

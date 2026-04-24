@@ -2807,7 +2807,7 @@ document.addEventListener('alpine:init', function() {
 
     async openFileFromHash(dir, name) {
       await this.loadPage('files', false);
-      this.fileSections.forEach(function(sec) { sec.open = sec.dir === dir; });
+      this.fileSections.forEach(function(sec) { if (sec.dir === dir) sec.open = true; });
       this.openFileRow(dir, name);
       var self = this;
       this.$nextTick(function() { self.refreshIcons(); });
@@ -3976,8 +3976,13 @@ document.addEventListener('alpine:init', function() {
     },
 
     async loadFiles() {
-      this.filesLoading = true;
       this.filesLoadError = null;
+      // Only the initial load replaces the list with a skeleton; background refreshes keep the list
+      // so folder expand state and scroll position stay intact.
+      var showListSkeleton = !this.pageReady.files;
+      if (showListSkeleton) this.filesLoading = true;
+      var scrollEl = this.$refs.filesListScroll;
+      var savedScroll = scrollEl && typeof scrollEl.scrollTop === 'number' ? scrollEl.scrollTop : 0;
       try {
         var res = await fetchWithAuth('/api/files');
         if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -3989,21 +3994,30 @@ document.addEventListener('alpine:init', function() {
       } finally {
         this.filesLoading = false;
         var self = this;
-        this.$nextTick(function() { self.refreshIcons(); });
+        this.$nextTick(function() {
+          // Only re-apply when the list was unmounted (initial load); on background refresh the
+          // list stayed mounted, so restoring would overwrite any scroll during the request.
+          if (showListSkeleton && scrollEl && scrollEl.isConnected) scrollEl.scrollTop = savedScroll;
+          self.refreshIcons();
+        });
       }
     },
 
     rebuildFileSections() {
       var LABELS = { 'root': 'Root', 'owners-inbox': 'Owners Inbox', 'team-inbox': 'Team Inbox', 'team': 'Team', 'docs': 'Docs' };
       var data = this.filesData;
+      var openByDir = Object.create(null);
+      (this.fileSections || []).forEach(function(sec) {
+        if (sec && sec.dir != null) openByDir[sec.dir] = sec.open;
+      });
       this.fileSections = [];
       var self = this;
       if (data.root && data.root.length) {
-        this.fileSections.push({ dir: 'root', label: LABELS.root, files: data.root, open: false });
+        this.fileSections.push({ dir: 'root', label: LABELS.root, files: data.root, open: openByDir.root === true });
       }
       ['owners-inbox', 'team-inbox', 'team', 'docs'].forEach(function(dir) {
         if (!Object.prototype.hasOwnProperty.call(data, dir)) return;
-        self.fileSections.push({ dir: dir, label: LABELS[dir] || dir, files: data[dir], open: false });
+        self.fileSections.push({ dir: dir, label: LABELS[dir] || dir, files: data[dir], open: openByDir[dir] === true });
       });
     },
 

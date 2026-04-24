@@ -1104,7 +1104,7 @@ tailwind.config = {
             <button type="button" x-show="filesFilterActive()" @click="clearFilesFilters()" class="text-xs font-medium px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700/50 self-end sm:mb-0.5">Clear</button>
           </div>
         </div>
-        <div class="flex-1 min-h-0 lg:overflow-y-auto lg:pr-1 -mr-1">
+        <div class="flex-1 min-h-0 lg:overflow-y-auto lg:pr-1 -mr-1" x-ref="filesListScroll">
           <template x-if="filesLoadError">
             <div class="text-red-500 text-sm p-4" x-text="filesLoadError"></div>
           </template>

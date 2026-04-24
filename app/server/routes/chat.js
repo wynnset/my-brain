@@ -117,10 +117,7 @@ module.exports = function registerChatRoutes(app, ctx) {
       if (incoming && !isAllowedChatModelId(incoming)) {
         return { ok: false, error: 'Invalid model' };
       }
-      if (incoming && stored && incoming !== stored) {
-        return { ok: false, error: `Model must match conversation (${stored})` };
-      }
-      const model = stored || incoming || getDefaultChatModelId();
+      const model = incoming || stored || getDefaultChatModelId();
       return { ok: true, model };
     }
 
@@ -1540,17 +1537,34 @@ module.exports = function registerChatRoutes(app, ctx) {
     const id = req.params.id;
     const sess = readChatSession(req, id);
     if (!sess) return res.status(404).json({ error: 'Conversation not found' });
-    const raw = req.body && req.body.title != null ? String(req.body.title) : '';
-    const title = raw.trim().slice(0, 200);
-    if (!title) return res.status(400).json({ error: 'Title cannot be empty' });
-    sess.title = title;
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const wantsTitle = body.title != null;
+    const wantsModel = body.model != null;
+    if (!wantsTitle && !wantsModel) {
+      return res.status(400).json({ error: 'Provide title and/or model' });
+    }
+    /** @type {{ ok: true, title?: string, model?: string }} */
+    const out = { ok: true };
+    if (wantsTitle) {
+      const raw = String(body.title);
+      const title = raw.trim().slice(0, 200);
+      if (!title) return res.status(400).json({ error: 'Title cannot be empty' });
+      sess.title = title;
+      out.title = sess.title;
+    }
+    if (wantsModel) {
+      const mid = String(body.model).trim().toLowerCase();
+      if (!isAllowedChatModelId(mid)) return res.status(400).json({ error: 'Invalid model' });
+      sess.model = mid;
+      out.model = sess.model;
+    }
     sess.updatedAt = new Date().toISOString();
     try {
       persistChatSession(req, id, sess);
     } catch (err) {
       return res.status(500).json({ error: err.message || 'Could not save conversation' });
     }
-    res.json({ ok: true, title: sess.title });
+    res.json(out);
   });
 
   /**

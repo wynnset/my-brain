@@ -4418,7 +4418,7 @@ document.addEventListener('alpine:init', function() {
     },
 
     toggleChatModelPicker() {
-      if (this.chatMessages.length > 0) return;
+      if (this.chatModelPickerDisabled()) return;
       this.closeChatAgentProfile();
       this.chatModelPickerOpen = !this.chatModelPickerOpen;
       var self = this;
@@ -4437,7 +4437,7 @@ document.addEventListener('alpine:init', function() {
     },
 
     selectChatModelFromPicker(mid) {
-      if (this.chatMessages.length > 0) return;
+      if (this.chatModelPickerDisabled()) return;
       var next = this.ensureChatModelFromCatalog(mid);
       var cur = this.ensureChatModelFromCatalog(this.chatModel);
       this.chatModelPickerOpen = false;
@@ -4449,6 +4449,39 @@ document.addEventListener('alpine:init', function() {
         return;
       }
       this.chatModel = next;
+      var convId = this.chatConversationId;
+      if (convId) {
+        fetchWithAuth('/api/chat/conversations/' + encodeURIComponent(convId), {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: next }),
+        })
+          .then(function (r) {
+            if (r.ok) return r.json();
+            return r
+              .json()
+              .then(function (ej) {
+                throw new Error((ej && ej.error) ? ej.error : 'Could not update model');
+              })
+              .catch(function () {
+                throw new Error('Could not update model');
+              });
+          })
+          .then(function (d) {
+            var list = self.chatConversations || [];
+            var saved = d && d.model ? d.model : next;
+            for (var i = 0; i < list.length; i++) {
+              if (list[i] && list[i].id === convId) {
+                list[i].model = saved;
+                break;
+              }
+            }
+          })
+          .catch(function (e) {
+            self.chatModel = cur;
+            alert(e && e.message ? e.message : String(e));
+          });
+      }
       this.$nextTick(function () {
         self.refreshIcons();
       });
@@ -4645,6 +4678,12 @@ document.addEventListener('alpine:init', function() {
       var cost = entry.costHint ? String(entry.costHint) : '';
       if (ctx && cost) return ctx + ' · ' + cost;
       return ctx || cost;
+    },
+
+    /** True while a turn is in flight — avoid changing model mid-stream or with queued sends. */
+    chatModelPickerDisabled() {
+      var q = this.chatOutboundQueue || [];
+      return Boolean(this.chatStreaming || this.chatOutboundInFlight || q.length > 0);
     },
 
     isActiveChatModelPick(mid) {

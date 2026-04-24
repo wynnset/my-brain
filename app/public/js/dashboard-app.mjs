@@ -197,10 +197,11 @@ document.addEventListener('alpine:init', function() {
      */
     chatWorkPanels: [],
     /**
-     * True when stream-driven content arrived while the user was scrolled up,
-     * so we suppressed the auto-follow. Reveals a "New replies below" pill
-     * that jumps back to the latest on click. Reset when the user scrolls
-     * near the bottom or we force-scroll on user-driven actions.
+     * True when *assistant message* text arrived while the user was scrolled
+     * up, so we suppressed the auto-follow. (Work / tool / "thinking" activity
+     * does not set this.) Reveals a "New replies below" pill that jumps back
+     * to the latest on click. Reset when the user scrolls near the bottom or
+     * we force-scroll on user-driven actions.
      */
     chatShowNewRepliesButton: false,
     /**
@@ -1068,7 +1069,7 @@ document.addEventListener('alpine:init', function() {
       this._appendWorkPanel(bucket, aid, true);
       bucket.uiTick = Date.now();
       if (this.chatConversationId === bucket.convId) this.chatUiTick = bucket.uiTick;
-      this.$nextTick(function() { this.scrollChatToBottom(); }.bind(this));
+      this.$nextTick(function() { this.scrollChatToBottom({ suppressNewRepliesPill: true }); }.bind(this));
     },
 
     /**
@@ -1164,7 +1165,7 @@ document.addEventListener('alpine:init', function() {
       this._appendWorkPanel(bucket, aid, true, delegationId || null);
       bucket.uiTick = Date.now();
       if (this.chatConversationId === bucket.convId) this.chatUiTick = bucket.uiTick;
-      this.$nextTick(function () { this.scrollChatToBottom(); }.bind(this));
+      this.$nextTick(function () { this.scrollChatToBottom({ suppressNewRepliesPill: true }); }.bind(this));
     },
 
     /**
@@ -1217,7 +1218,7 @@ document.addEventListener('alpine:init', function() {
         text: text,
       });
       if (p.lines.length > 120) p.lines.shift();
-      this.scrollChatToBottom();
+      this.scrollChatToBottom({ suppressNewRepliesPill: true });
     },
 
     /** One live log line for connect/waiting; copy refreshes at least every 5s (see formatChatWaitingStatusLine). */
@@ -1239,7 +1240,7 @@ document.addEventListener('alpine:init', function() {
         _startedText: startedText,
       });
       if (p.lines.length > 120) p.lines.shift();
-      this.scrollChatToBottom();
+      this.scrollChatToBottom({ suppressNewRepliesPill: true });
     },
 
     /** True while streaming past the long-wait threshold — bumps with chatUiTick every second. */
@@ -1294,7 +1295,7 @@ document.addEventListener('alpine:init', function() {
       if (changed) {
         bucket.uiTick = Date.now();
         if (this.chatConversationId === bucket.convId) this.chatUiTick = bucket.uiTick;
-        this.scrollChatToBottom();
+        this.scrollChatToBottom({ suppressNewRepliesPill: true });
       }
     },
 
@@ -1397,19 +1398,24 @@ document.addEventListener('alpine:init', function() {
      * Scroll the chat transcript to the newest content. By default this only
      * follows when the user was already pinned near the bottom so that
      * stream-driven appends do not yank them away from earlier messages they
-     * are reading. Pass `{ force: true }` for user-initiated actions (send,
-     * jump-to-latest, open conversation, expand panel) that should always
-     * land on the latest content.
+     * are reading. The "New replies below" affordance is only for assistant
+     * *message* growth (or full reload after a turn), not for work/activity
+     * UI — use `suppressNewRepliesPill: true` for the latter. Pass
+     * `{ force: true }` for user-initiated actions (send, jump-to-latest, open
+     * conversation, expand panel) that should always land on the latest content.
      *
      * The pinned state is tracked by a scroll listener on each container
      * (see `handleChatScroll`) rather than re-checked at call-time, because
      * Alpine re-renders between the caller and `$nextTick` would otherwise
      * make freshly-appended content look like an upward scroll.
      *
-     * @param {{ force?: boolean }} [opts]
+     * @param {{ force?: boolean, suppressNewRepliesPill?: boolean }} [opts]
+     * `suppressNewRepliesPill` — for non-reply height changes (work panels, tool
+     * lines, waiting); do not show "New replies below" for these.
      */
     scrollChatToBottom(opts) {
       var force = !!(opts && opts.force);
+      var suppressPill = !!(opts && opts.suppressNewRepliesPill);
       var self = this;
       this.$nextTick(function() {
         var d = self.$refs.chatScrollDesktop;
@@ -1433,7 +1439,7 @@ document.addEventListener('alpine:init', function() {
         }
         if (force) {
           self.chatShowNewRepliesButton = false;
-        } else if (anyUnpinnedVisible) {
+        } else if (anyUnpinnedVisible && !suppressPill) {
           self.chatShowNewRepliesButton = true;
         }
       });
@@ -1901,6 +1907,7 @@ document.addEventListener('alpine:init', function() {
           buf += decoder.decode(result.value, { stream: true });
           var lines = buf.split('\n');
           buf = lines.pop();
+          var hadAssistantStreamText = false;
           for (var i = 0; i < lines.length; i++) {
             var line = lines[i];
             if (!line.startsWith('data: ')) continue;
@@ -1938,6 +1945,7 @@ document.addEventListener('alpine:init', function() {
                 self.appendChatWaitingStatusLine(pickChatWorkStartedLine(), bucket);
               }
               if (msg.text) {
+                hadAssistantStreamText = true;
                 self.clearAllWorkPanelWaitingSlots(bucket);
                 bucket.streamDraft = appendAssistantStreamChunk(bucket.streamDraft || '', msg.text);
                 if (self.chatConversationId === convId) self.chatStreamDraft = bucket.streamDraft;
@@ -1997,7 +2005,7 @@ document.addEventListener('alpine:init', function() {
               }
             } catch (_) {}
           }
-          self.scrollChatToBottom();
+          self.scrollChatToBottom({ suppressNewRepliesPill: !hadAssistantStreamText });
           if (streamOk) break;
         }
         bucket.streamDraft = '';

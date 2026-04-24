@@ -165,13 +165,6 @@ process.on('unhandledRejection', (reason) => {
   console.error('[server] unhandledRejection:', reason);
 });
 
-// ─── Graceful shutdown ────────────────────────────────────────────────────────
-process.on('SIGINT', () => {
-  if (registryReadonlyDb) try { registryReadonlyDb.close(); } catch (_) {}
-  console.log('\nDatabases closed. Goodbye.');
-  process.exit(0);
-});
-
 // ─── Core middleware (static is mounted after auth, below) ───────────────────
 app.use(express.json());
 app.use(createTryAttachTenantFromApiToken({ getRegistryReadonly, tenancy }));
@@ -214,6 +207,19 @@ app.use(createTryAttachTenantFromApiToken({ getRegistryReadonly, tenancy }));
   app.use(createRequireTenantBrainMiddleware({ tenantDataDirReady }));
 
   registerProtectedRoutes(app, ctx);
+
+  function shutdownGracefully(signal) {
+    try {
+      if (typeof ctx.chatShutdownFlush === 'function') ctx.chatShutdownFlush();
+    } catch (e) {
+      console.warn('[server] chat shutdown flush failed:', e && e.message ? e.message : e);
+    }
+    if (registryReadonlyDb) try { registryReadonlyDb.close(); } catch (_) {}
+    console.log(`\n[${signal}] Databases closed. Goodbye.`);
+    process.exit(0);
+  }
+  process.on('SIGINT', () => shutdownGracefully('SIGINT'));
+  process.on('SIGTERM', () => shutdownGracefully('SIGTERM'));
 
   // ─── Static (dashboard + assets) — after auth gate ─────────────────────────
   app.use(express.static(path.join(__dirname, 'public'), { index: 'dashboard.html' }));

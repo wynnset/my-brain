@@ -156,6 +156,8 @@ function createChatRunRegistry(opts = {}) {
       maxRunTimer: null,
       evictTimer: null,
       streamEnded: false,
+      /** @type {null | (() => void)} Best-effort persist of streamed assistant text (see chat routes). */
+      partialFlush: null,
     };
     runs.set(convId, run);
 
@@ -284,12 +286,45 @@ function createChatRunRegistry(opts = {}) {
     if (r) r.proc = proc;
   }
 
+  /**
+   * @param {string} convId
+   * @param {null | (() => void)} fn
+   */
+  function setPartialFlush(convId, fn) {
+    const run = runs.get(convId);
+    if (run && run.status === 'running' && !run.streamEnded) run.partialFlush = typeof fn === 'function' ? fn : null;
+  }
+
+  /**
+   * @param {string} convId
+   */
+  function clearPartialFlush(convId) {
+    const run = runs.get(convId);
+    if (run) run.partialFlush = null;
+  }
+
+  function flushAllPartialsSync() {
+    for (const run of runs.values()) {
+      if (run.status !== 'running' || run.streamEnded) continue;
+      if (typeof run.partialFlush !== 'function') continue;
+      try {
+        run.partialFlush();
+      } catch (e) {
+        const m = e && e.message ? e.message : String(e);
+        console.warn('[chat-run-registry] partialFlush failed:', m);
+      }
+    }
+  }
+
   return {
     start,
     attach,
     abort,
     summary,
     setProc,
+    setPartialFlush,
+    clearPartialFlush,
+    flushAllPartialsSync,
     RunAlreadyActiveError,
   };
 }

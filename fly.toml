@@ -28,10 +28,12 @@ primary_region = 'yyz'
 [http_service]
   internal_port = 8080
   force_https = true
-  auto_stop_machines = 'stop'
+  # Keep at least one machine up so long agent runs are not killed by Fly idle
+  # autostop after the browser disconnects (SSE does not count as inbound traffic).
+  auto_stop_machines = 'off'
   auto_start_machines = true
-  min_machines_running = 0
+  min_machines_running = 1
 
 [[vm]]
-  size = 'shared-cpu-1x'
-  memory = '512mb'
+  size = 'shared-cpu-2x'
+  memory = '2gb'

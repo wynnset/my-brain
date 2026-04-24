@@ -43,6 +43,8 @@ module.exports = function registerChatRoutes(app, ctx) {
   const CHAT_MAX_PINS = 5;
   /** SSE keepalive while the model runs; UI copy rotates on its own — this only needs to beat proxy timeouts. */
   const CHAT_HEARTBEAT_MS = Number(process.env.BRAIN_CHAT_HEARTBEAT_MS) || 5000;
+  /** Throttle for writing in-progress assistant text to the session JSON (registry / multi-tab path). */
+  const CHAT_PARTIAL_FLUSH_MS = Number(process.env.BRAIN_CHAT_PARTIAL_FLUSH_MS) || 750;
   const CHAT_MAX_TRANSCRIPT_CHARS = Number(process.env.BRAIN_CHAT_MAX_TRANSCRIPT_CHARS) || 100000;
   const CHAT_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -1905,12 +1907,11 @@ module.exports = function registerChatRoutes(app, ctx) {
 
         let assistantBufRun = '';
         let assistantSavedRun = false;
+        /** When set, last message in session is a draft assistant turn updated by `flushPartialAssistantToSession`. */
+        let partialDraftMsgId = null;
+        let lastPartialFlushAt = 0;
 
-        function appendAssistantToSessionRun(content, errFlag, billing, assistantModelId) {
-          if (assistantSavedRun) return null;
-          assistantSavedRun = true;
-          const fresh = readChatSession(req, conversationId);
-          if (!fresh) return null;
+        function resolveTurnModelForRun(fresh, assistantModelId) {
           const fromArg =
             assistantModelId != null && String(assistantModelId).trim() && isAllowedChatModelId(String(assistantModelId).trim().toLowerCase())
               ? String(assistantModelId).trim().toLowerCase()
@@ -1919,40 +1920,129 @@ module.exports = function registerChatRoutes(app, ctx) {
             fresh.model != null && String(fresh.model).trim() && isAllowedChatModelId(String(fresh.model).trim().toLowerCase())
               ? String(fresh.model).trim().toLowerCase()
               : '';
-          const turnModel = fromSession || fromArg || inferRecordedModelFromMessages(fresh.messages) || getDefaultChatModelId();
+          return fromSession || fromArg || inferRecordedModelFromMessages(fresh.messages) || getDefaultChatModelId();
+        }
+
+        function flushPartialAssistantToSession() {
+          if (assistantSavedRun) return;
+          const text = String(assistantBufRun || '').trim();
+          if (!text) return;
+          const fresh = readChatSession(req, conversationId);
+          if (!fresh) return;
+          const turnModel = resolveTurnModelForRun(fresh, sess.model);
           fresh.model = turnModel;
+          const nowIso = new Date().toISOString();
+          if (partialDraftMsgId) {
+            const d = fresh.messages.find((m) => m && m.id === partialDraftMsgId && m.role === 'assistant');
+            if (d) {
+              d.content = text;
+              d.updatedAt = nowIso;
+              d.model = turnModel;
+            } else {
+              partialDraftMsgId = null;
+            }
+          }
+          if (!partialDraftMsgId) {
+            const id = crypto.randomUUID();
+            partialDraftMsgId = id;
+            fresh.messages.push({
+              id,
+              role: 'assistant',
+              content: text,
+              createdAt: nowIso,
+              updatedAt: nowIso,
+              model: turnModel,
+              streamIncomplete: true,
+            });
+          }
+          fresh.updatedAt = nowIso;
+          try {
+            persistChatSession(req, conversationId, fresh);
+          } catch (e) {
+            console.warn('[chat] partial assistant persist failed', e.message);
+          }
+        }
+
+        function maybeThrottleFlushPartial() {
+          const now = Date.now();
+          if (now - lastPartialFlushAt < CHAT_PARTIAL_FLUSH_MS) return;
+          lastPartialFlushAt = now;
+          flushPartialAssistantToSession();
+        }
+
+        /**
+         * @param {Record<string, unknown>} msg
+         * @param {null | { userMessageId?: string, totalCostUsd?: number | null, usage?: Record<string, number> | null, modelUsage?: Record<string, Record<string, number>> | null, numTurns?: number, resultSubtype?: string }} billing
+         * @param {Record<string, unknown>} fresh
+         */
+        function applyBillingToAssistantMsgRun(msg, billing, fresh) {
+          if (!billing) return;
+          const hasUsd = billing.totalCostUsd != null && Number.isFinite(billing.totalCostUsd);
+          const hasUsage = billing.usage && typeof billing.usage === 'object' && Object.keys(billing.usage).length > 0;
+          const hasModelUsage =
+            billing.modelUsage && typeof billing.modelUsage === 'object' && Object.keys(billing.modelUsage).length > 0;
+          if (hasUsd || hasUsage || hasModelUsage) {
+            msg.sdkBilling = {
+              userMessageId: billing.userMessageId,
+              totalCostUsd: hasUsd ? billing.totalCostUsd : null,
+              usage: hasUsage ? billing.usage : null,
+              modelUsage: hasModelUsage ? billing.modelUsage : null,
+            };
+            if (typeof billing.numTurns === 'number') msg.sdkBilling.numTurns = billing.numTurns;
+            if (billing.resultSubtype) msg.sdkBilling.resultSubtype = billing.resultSubtype;
+          }
+          mergeSdkBillingIntoSessionTotals(fresh, billing);
+          if (billing.totalCostUsd != null && Number.isFinite(billing.totalCostUsd) && billing.totalCostUsd > 0) {
+            recordChatSpend(req, billing.totalCostUsd);
+          }
+        }
+
+        function appendAssistantToSessionRun(content, errFlag, billing, assistantModelId) {
+          if (assistantSavedRun) return null;
+          assistantSavedRun = true;
+          const fresh = readChatSession(req, conversationId);
+          if (!fresh) return null;
+          const turnModel = resolveTurnModelForRun(fresh, assistantModelId);
+          fresh.model = turnModel;
+          const nowIso = new Date().toISOString();
+
+          let draft = null;
+          if (partialDraftMsgId) {
+            draft = fresh.messages.find((m) => m && m.id === partialDraftMsgId && m.role === 'assistant') || null;
+          }
+          if (draft) {
+            draft.content = content || '';
+            draft.model = turnModel;
+            if (errFlag) draft.error = true;
+            else delete draft.error;
+            delete draft.streamIncomplete;
+            draft.updatedAt = nowIso;
+            applyBillingToAssistantMsgRun(draft, billing, fresh);
+            fresh.updatedAt = nowIso;
+            try {
+              persistChatSession(req, conversationId, fresh);
+              partialDraftMsgId = null;
+              return fresh;
+            } catch (e) {
+              console.warn('[chat] could not save assistant message', e.message);
+              return null;
+            }
+          }
+
           const msg = {
             id: crypto.randomUUID(),
             role: 'assistant',
             content: content || '',
-            createdAt: new Date().toISOString(),
+            createdAt: nowIso,
             model: turnModel,
           };
           if (errFlag) msg.error = true;
-          if (billing) {
-            const hasUsd = billing.totalCostUsd != null && Number.isFinite(billing.totalCostUsd);
-            const hasUsage = billing.usage && typeof billing.usage === 'object' && Object.keys(billing.usage).length > 0;
-            const hasModelUsage =
-              billing.modelUsage && typeof billing.modelUsage === 'object' && Object.keys(billing.modelUsage).length > 0;
-            if (hasUsd || hasUsage || hasModelUsage) {
-              msg.sdkBilling = {
-                userMessageId: billing.userMessageId,
-                totalCostUsd: hasUsd ? billing.totalCostUsd : null,
-                usage: hasUsage ? billing.usage : null,
-                modelUsage: hasModelUsage ? billing.modelUsage : null,
-              };
-              if (typeof billing.numTurns === 'number') msg.sdkBilling.numTurns = billing.numTurns;
-              if (billing.resultSubtype) msg.sdkBilling.resultSubtype = billing.resultSubtype;
-            }
-            mergeSdkBillingIntoSessionTotals(fresh, billing);
-            if (billing.totalCostUsd != null && Number.isFinite(billing.totalCostUsd) && billing.totalCostUsd > 0) {
-              recordChatSpend(req, billing.totalCostUsd);
-            }
-          }
+          applyBillingToAssistantMsgRun(msg, billing, fresh);
           fresh.messages.push(msg);
           fresh.updatedAt = msg.createdAt;
           try {
             persistChatSession(req, conversationId, fresh);
+            partialDraftMsgId = null;
             return fresh;
           } catch (e) {
             console.warn('[chat] could not save assistant message', e.message);
@@ -1961,6 +2051,7 @@ module.exports = function registerChatRoutes(app, ctx) {
         }
 
         let pendingWorkspaceTouches = [];
+        chatRunRegistry.setPartialFlush(conversationId, flushPartialAssistantToSession);
         try {
           const runner = await import(pathToFileURL(path.join(__dirname, '..', '..', 'chat-sdk-runner.mjs')).href);
           const freshSess = readChatSession(req, conversationId) || freshSess0;
@@ -2055,6 +2146,7 @@ module.exports = function registerChatRoutes(app, ctx) {
               if (!t) return;
               assistantBufRun = appendAssistantStreamChunk(assistantBufRun, t);
               emit({ text: t });
+              maybeThrottleFlushPartial();
             },
             onTool: ({ tool, detail }) => {
               emit({ tool, toolDetail: detail || '' });
@@ -2189,8 +2281,15 @@ module.exports = function registerChatRoutes(app, ctx) {
           const errText = err && err.message ? err.message : String(err);
           console.error('[chat-sdk]', err);
           emit({ error: errText });
-          appendAssistantToSessionRun(`[Error] ${errText}`, true, null, sess.model);
+          try {
+            flushPartialAssistantToSession();
+          } catch (_) {}
+          const partial = String(assistantBufRun || '').trim();
+          const combined = partial ? `${partial}\n\n[Error] ${errText}` : `[Error] ${errText}`;
+          appendAssistantToSessionRun(combined, true, null, sess.model);
           throw err;
+        } finally {
+          chatRunRegistry.clearPartialFlush(conversationId);
         }
       }
 
@@ -2647,4 +2746,8 @@ module.exports = function registerChatRoutes(app, ctx) {
         }
     })();
   });
+
+  ctx.chatShutdownFlush = () => {
+    chatRunRegistry.flushAllPartialsSync();
+  };
 };

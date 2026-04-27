@@ -4912,6 +4912,7 @@ document.addEventListener('alpine:init', function() {
     /**
      * Sends one user turn (optional team-inbox file upload, then chat stream).
      * Serializes with the outbound queue: when this turn finishes, the next queued item runs automatically.
+     * opts.fromOutboundQueue: if true, do not clear the composer; the user may be drafting the next message.
      */
     async runChatTurn(prompt, files, opts) {
       var self = this;
@@ -4970,8 +4971,12 @@ document.addEventListener('alpine:init', function() {
         bucket.messages.push({ id: optimisticId, role: 'user', content: prompt });
         if (this.chatConversationId === convId) this.chatMessages = bucket.messages;
 
-        this.chatPrompt = '';
-        this.chatFiles = [];
+        // Direct sends clear the composer here; a turn drained from the outbound
+        // queue must not, because the user may already be typing their next message.
+        if (!opts.fromOutboundQueue) {
+          this.chatPrompt = '';
+          this.chatFiles = [];
+        }
         bucket.streaming = true;
         if (this.chatConversationId === convId) this.chatStreaming = true;
 
@@ -5014,7 +5019,7 @@ document.addEventListener('alpine:init', function() {
             if (this.chatConversationId === convId) this.chatOutboundQueue = bucket.outboundQueue;
             bucket.messages = bucket.messages.filter(function(m) { return m.id !== optimisticId; });
             if (this.chatConversationId === convId) this.chatMessages = bucket.messages;
-            this.chatPrompt = prompt;
+            if (!opts.fromOutboundQueue) this.chatPrompt = prompt;
             this.$nextTick(function() {
               self.syncChatComposerHeights();
             });
@@ -5031,7 +5036,7 @@ document.addEventListener('alpine:init', function() {
             }
             bucket.messages = bucket.messages.filter(function(m) { return m.id !== optimisticId; });
             if (this.chatConversationId === convId) this.chatMessages = bucket.messages;
-            this.chatPrompt = prompt;
+            if (!opts.fromOutboundQueue) this.chatPrompt = prompt;
             this.$nextTick(function() {
               self.syncChatComposerHeights();
             });
@@ -5040,7 +5045,7 @@ document.addEventListener('alpine:init', function() {
           if (!res.ok) {
             bucket.messages = bucket.messages.filter(function(m) { return m.id !== optimisticId; });
             if (this.chatConversationId === convId) this.chatMessages = bucket.messages;
-            this.chatPrompt = prompt;
+            if (!opts.fromOutboundQueue) this.chatPrompt = prompt;
             this.$nextTick(function() {
               self.syncChatComposerHeights();
             });
@@ -5069,7 +5074,7 @@ document.addEventListener('alpine:init', function() {
               bucket.messages = bucket.messages.filter(function(m) { return m.id !== optimisticId; });
               if (self.chatConversationId === convId) self.chatMessages = bucket.messages;
             }
-            self.chatPrompt = prompt;
+            if (!opts.fromOutboundQueue) self.chatPrompt = prompt;
             self.$nextTick(function() {
               self.syncChatComposerHeights();
             });
@@ -5113,7 +5118,10 @@ document.addEventListener('alpine:init', function() {
           if (self.chatConversationId === convId) self.chatOutboundQueue = bucket.outboundQueue;
           self.$nextTick(function() {
             self
-              .runChatTurn(next.prompt, next.files || [], { planPhase: next.planPhase || null })
+              .runChatTurn(next.prompt, next.files || [], {
+                planPhase: next.planPhase || null,
+                fromOutboundQueue: true,
+              })
               .catch(function(e) {
                 console.warn('[chat] queued turn', e);
               });

@@ -219,6 +219,8 @@ document.addEventListener('alpine:init', function() {
     chatAbortController: null,
     chatRetryPrompt: '',
     chatFiles: [],
+    /** Popover listing attached files (paperclip); only used when chatFiles.length > 0. */
+    chatAttachmentsMenuOpen: false,
     chatDragActive: false,
     /** When true, the next chat turn uses server plan phase (read-only tools + JSON checklist). */
     chatPlanMode: false,
@@ -4797,7 +4799,14 @@ document.addEventListener('alpine:init', function() {
       var raw = typeof item.prompt === 'string' ? item.prompt : '';
       var t = raw.replace(/\s+/g, ' ').trim();
       if (!t) {
-        if (item.files && item.files.length) return '(' + item.files.length + ' attached file(s))';
+        if (item.files && item.files.length) {
+          var names = item.files
+            .map(function(f) {
+              return f && f.name ? String(f.name) : '?';
+            })
+            .join(', ');
+          return '(' + item.files.length + ' file' + (item.files.length === 1 ? '' : 's') + ': ' + names + ')';
+        }
         return '(empty)';
       }
       return t;
@@ -4829,6 +4838,81 @@ document.addEventListener('alpine:init', function() {
       if (!b.outboundQueue.length) this.chatQueuePreviewOpen = false;
     },
 
+    /**
+     * Builds the user message sent to the API and shown in the thread, including
+     * explicit file names so the model and user see what was attached (files are
+     * uploaded separately to team-inbox).
+     */
+    buildChatPromptWithAttachments(trimmedUserText, files) {
+      files = files || [];
+      var nameLine = files.length
+        ? files
+            .map(function(f) {
+              return f && f.name ? String(f.name) : 'file';
+            })
+            .join(', ')
+        : '';
+      var hasText = Boolean(trimmedUserText && String(trimmedUserText).length);
+      if (!files.length) {
+        return hasText ? String(trimmedUserText) : '';
+      }
+      if (!hasText) {
+        return 'I attached these file(s) in team-inbox: ' + nameLine;
+      }
+      return String(trimmedUserText) + '\n\n(Attached: ' + nameLine + ')';
+    },
+
+    closeChatAttachmentsMenu() {
+      this.chatAttachmentsMenuOpen = false;
+    },
+
+    /** Window escape: close attach menu if open (does not steal Esc from other dialogs if menu closed). */
+    onEscapeCloseChatAttachmentsMenu() {
+      if (this.chatAttachmentsMenuOpen) this.closeChatAttachmentsMenu();
+    },
+
+    /**
+     * @param {boolean} mobile - use `chatFileInputMobile` ref instead of desktop
+     */
+    onChatAttachmentButtonClick(mobile) {
+      if (!this.chatFiles || !this.chatFiles.length) {
+        this.chatAttachmentsMenuOpen = false;
+        var ref = mobile ? 'chatFileInputMobile' : 'chatFileInputDesktop';
+        var self = this;
+        this.$nextTick(function() {
+          try {
+            if (self.$refs[ref]) self.$refs[ref].click();
+          } catch (_) {}
+        });
+        return;
+      }
+      this.chatAttachmentsMenuOpen = !this.chatAttachmentsMenuOpen;
+      var self = this;
+      this.$nextTick(function() {
+        self.refreshIcons();
+      });
+    },
+
+    addMoreChatAttachments(mobile) {
+      var ref = mobile ? 'chatFileInputMobile' : 'chatFileInputDesktop';
+      var self = this;
+      this.$nextTick(function() {
+        try {
+          if (self.$refs[ref]) self.$refs[ref].click();
+        } catch (_) {}
+      });
+    },
+
+    removeChatFileAt(index) {
+      if (!this.chatFiles || index < 0 || index >= this.chatFiles.length) return;
+      this.chatFiles.splice(index, 1);
+      if (!this.chatFiles.length) this.chatAttachmentsMenuOpen = false;
+      var self = this;
+      this.$nextTick(function() {
+        self.refreshIcons();
+      });
+    },
+
     async submitChat() {
       var files = this.chatFiles && this.chatFiles.length ? this.chatFiles.slice() : [];
       if (!this.chatPrompt.trim() && !files.length) return;
@@ -4838,7 +4922,9 @@ document.addEventListener('alpine:init', function() {
         this.refreshChatCreditLimit().catch(function () {});
         return;
       }
-      var prompt = this.chatPrompt.trim() || '(See attached file(s).)';
+      var prompt = this.buildChatPromptWithAttachments(this.chatPrompt.trim(), files);
+      if (!prompt) return;
+      this.chatAttachmentsMenuOpen = false;
       var planPhase = this.chatPlanAwaitingExecute ? 'execute' : this.chatPlanMode ? 'plan' : null;
       try {
         await this.ensureChatConversation();

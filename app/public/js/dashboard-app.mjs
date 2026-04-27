@@ -205,6 +205,12 @@ document.addEventListener('alpine:init', function() {
      */
     chatShowNewRepliesButton: false,
     /**
+     * Per conversation id (string key): quick-switch strip shows a dot when that
+     * pinned chat received assistant output while you were elsewhere or the window
+     * was not focused. Cleared when you open the chat or refocus while viewing it.
+     */
+    chatPinnedUnread: {},
+    /**
      * Sticky "pinned near bottom" flags updated on scroll events — used to
      * decide whether stream-driven appends should auto-follow to the newest
      * content. Kept separately for desktop and mobile because both scroll
@@ -367,6 +373,11 @@ document.addEventListener('alpine:init', function() {
       } catch (_) {}
       self.pollOwnersInbox();
       self._ownersInboxPollTimer = setInterval(function() { self.pollOwnersInbox(); }, 30000);
+      self._onChatFocusOrVisibilityForPinned = function() {
+        self.clearChatPinnedUnreadIfViewingAndFocused();
+      };
+      document.addEventListener('visibilitychange', self._onChatFocusOrVisibilityForPinned);
+      window.addEventListener('focus', self._onChatFocusOrVisibilityForPinned);
     },
 
     ownersInboxFileHash(name) {
@@ -1519,6 +1530,57 @@ document.addEventListener('alpine:init', function() {
       } catch (_) {}
     },
 
+    chatWindowObscured() {
+      try {
+        if (document.hidden) return true;
+        if (typeof document.hasFocus === 'function' && !document.hasFocus()) return true;
+        return false;
+      } catch (_) {
+        return false;
+      }
+    },
+
+    /** @param {string} convId */
+    isConversationPinned(convId) {
+      if (!convId) return false;
+      var id = String(convId);
+      var list = this.chatConversations || [];
+      for (var i = 0; i < list.length; i++) {
+        if (list[i] && String(list[i].id) === id && list[i].pinned) return true;
+      }
+      return false;
+    },
+
+    /**
+     * @param {string} convId
+     * @param {boolean} on
+     */
+    setChatPinnedUnread(convId, on) {
+      if (!convId) return;
+      var key = String(convId);
+      var next = Object.assign({}, this.chatPinnedUnread || {});
+      if (on) next[key] = true;
+      else delete next[key];
+      this.chatPinnedUnread = next;
+    },
+
+    /**
+     * Assistant text arrived on the SSE stream: mark pinned conv if the user is not
+     * looking at it (other tab/chat) or the page is in the background.
+     */
+    maybeMarkPinnedUnreadForStreamAssistantText(convId) {
+      if (!this.isConversationPinned(convId)) return;
+      if (this.chatConversationId === convId && !this.chatWindowObscured()) return;
+      this.setChatPinnedUnread(convId, true);
+    },
+
+    clearChatPinnedUnreadIfViewingAndFocused() {
+      var id = this.chatConversationId;
+      if (!id) return;
+      if (this.chatWindowObscured()) return;
+      this.setChatPinnedUnread(id, false);
+    },
+
     /** Pinned conversations ordered as the server returned them (pinnedAt desc, newest-pin first). */
     pinnedChatConversations() {
       var list = this.chatConversations || [];
@@ -1621,6 +1683,7 @@ document.addEventListener('alpine:init', function() {
           }
           return;
         }
+        if (!nextPinned) this.setChatPinnedUnread(id, false);
         await this.loadConversationList();
         var self = this;
         this.$nextTick(function () { self.refreshIcons(); });
@@ -1758,6 +1821,7 @@ document.addEventListener('alpine:init', function() {
       if (prev) this.snapshotRootChatIntoBucket(prev);
 
       this.chatConversationId = newConvId;
+      if (newConvId) this.setChatPinnedUnread(newConvId, false);
       if (!newConvId) {
         this.restoreRootFromChatBucket(null);
         return;
@@ -2007,7 +2071,12 @@ document.addEventListener('alpine:init', function() {
               }
             } catch (_) {}
           }
-          self.scrollChatToBottom({ suppressNewRepliesPill: !hadAssistantStreamText });
+          if (hadAssistantStreamText) {
+            self.maybeMarkPinnedUnreadForStreamAssistantText(convId);
+          }
+          if (self.chatConversationId === convId) {
+            self.scrollChatToBottom({ suppressNewRepliesPill: !hadAssistantStreamText });
+          }
           if (streamOk) break;
         }
         bucket.streamDraft = '';
@@ -2043,7 +2112,9 @@ document.addEventListener('alpine:init', function() {
         bucket.workingStartedAt = null;
         if (self.chatConversationId === convId) self.chatWorkingStartedAt = null;
         self.finalizeChatWorkPanels(bucket);
-        self.scrollChatToBottom();
+        if (self.chatConversationId === convId) {
+          self.scrollChatToBottom();
+        }
         self.$nextTick(function() {
           self.refreshIcons();
         });
@@ -5066,7 +5137,9 @@ document.addEventListener('alpine:init', function() {
         bucket.streaming = true;
         if (this.chatConversationId === convId) this.chatStreaming = true;
 
-        this.scrollChatToBottom({ force: true });
+        if (this.chatConversationId === convId) {
+          this.scrollChatToBottom({ force: true });
+        }
         this.$nextTick(function() {
           self.refreshIcons();
           self.syncChatComposerHeights();
@@ -5191,7 +5264,9 @@ document.addEventListener('alpine:init', function() {
           self.chatWorkingStartedAt = null;
           self._chatElapsedTimer = null;
         }
-        self.scrollChatToBottom();
+        if (self.chatConversationId === convId) {
+          self.scrollChatToBottom();
+        }
         self.refreshChatCreditLimit().catch(function () {});
         self.$nextTick(function() {
           self.refreshIcons();

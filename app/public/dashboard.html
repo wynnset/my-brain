@@ -1412,6 +1412,7 @@ tailwind.config = {
                 :title="p.title">
                 <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-indigo-100 dark:bg-indigo-950/55 text-[10px] font-bold leading-none text-indigo-700 dark:text-indigo-200" x-text="workPanelAvatarLetter(p.agent)"></span>
                 <span class="min-w-0 flex-1 truncate text-xs font-medium" x-text="p.title"></span>
+                <span x-show="chatPinnedUnread && chatPinnedUnread[p.id]" x-cloak class="shrink-0 inline-block h-2 w-2 rounded-full bg-emerald-500" title="New activity while you were away" aria-label="New activity"></span>
                 <span x-show="p.active" x-cloak class="shrink-0 inline-block h-2.5 w-2.5 rounded-full border-2 border-indigo-500 border-t-transparent animate-spin" title="Generating…" aria-hidden="true"></span>
                 <span x-show="chatConversationId === p.id && !p.active" x-cloak class="shrink-0 inline-block h-2 w-2 rounded-full bg-indigo-500" aria-hidden="true"></span>
               </button>
@@ -1795,6 +1796,7 @@ tailwind.config = {
             :title="p.title">
             <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-indigo-100 dark:bg-indigo-950/55 text-[11px] font-bold leading-none text-indigo-700 dark:text-indigo-200" x-text="workPanelAvatarLetter(p.agent)"></span>
             <span class="min-w-0 flex-1 truncate text-sm font-medium" x-text="p.title"></span>
+            <span x-show="chatPinnedUnread && chatPinnedUnread[p.id]" x-cloak class="shrink-0 inline-block h-2 w-2 rounded-full bg-emerald-500" title="New activity while you were away" aria-label="New activity"></span>
             <span x-show="p.active" x-cloak class="shrink-0 inline-block h-3 w-3 rounded-full border-2 border-indigo-500 border-t-transparent animate-spin" title="Generating…" aria-hidden="true"></span>
             <span x-show="chatConversationId === p.id && !p.active" x-cloak class="shrink-0 inline-block h-2 w-2 rounded-full bg-indigo-500" aria-hidden="true"></span>
           </button>

@@ -1070,77 +1070,236 @@ tailwind.config = {
     <div class="flex flex-col lg:flex-row lg:items-stretch lg:gap-0 lg:min-h-[calc(100vh-8rem)] min-w-0">
       <!-- File list (sidebar on lg+); width resizable on desktop -->
       <div class="flex flex-col min-h-0 w-full shrink-0 lg:min-w-0 lg:pr-4 lg:border-r border-slate-200 dark:border-slate-700" :style="filesListAsideStyle()">
-        <div class="mb-6 flex items-center justify-between gap-3 shrink-0">
-          <div class="min-w-0">
-            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Files</h1>
-            <p class="text-sm text-slate-500 dark:text-slate-400 mt-0.5 hidden sm:block">Browse, view, edit, and download files</p>
-          </div>
-          <label class="cursor-pointer shrink-0 px-4 py-2 text-sm font-medium bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors">
-            Upload
-            <input type="file" multiple class="hidden" @change="handleFileInput($event)" />
-          </label>
-        </div>
-        <div class="mb-4 space-y-2 shrink-0" x-show="fileSections.length && !filesLoading" x-cloak>
-          <p class="text-xs font-medium text-slate-600 dark:text-slate-300">Filter by tag</p>
-          <div class="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-end">
-            <div class="flex-1 min-w-[8rem]">
-              <label class="block text-[11px] text-slate-500 dark:text-slate-400 mb-0.5">Creator</label>
-              <select x-model="filesFilterCreator" class="w-full text-xs rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 px-2 py-1.5 text-slate-800 dark:text-slate-100">
-                <option value="">All</option>
-                <template x-for="opt in fileFilterCreatorOptions()" :key="'fc-'+opt">
-                  <option :value="opt" x-text="chatAgentDisplayName(opt)"></option>
-                </template>
-              </select>
-            </div>
-            <div class="flex-1 min-w-[8rem]">
-              <label class="block text-[11px] text-slate-500 dark:text-slate-400 mb-0.5">Domain</label>
-              <select x-model="filesFilterDomain" class="w-full text-xs rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 px-2 py-1.5 text-slate-800 dark:text-slate-100">
-                <option value="">All</option>
-                <template x-for="opt in fileFilterDomainOptions()" :key="'fd-'+opt">
-                  <option :value="opt" x-text="opt"></option>
-                </template>
-              </select>
-            </div>
-            <button type="button" x-show="filesFilterActive()" @click="clearFilesFilters()" class="text-xs font-medium px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700/50 self-end sm:mb-0.5">Clear</button>
-          </div>
-        </div>
-        <div class="flex-1 min-h-0 lg:overflow-y-auto lg:pr-1 -mr-1" x-ref="filesListScroll">
-          <template x-if="filesLoadError">
-            <div class="text-red-500 text-sm p-4" x-text="filesLoadError"></div>
-          </template>
-          <template x-if="!filesLoadError && filesLoading">
-            <div class="skeleton h-32 rounded-xl"></div>
-          </template>
-          <template x-if="!filesLoading && !filesLoadError && !fileSections.length">
-            <div class="text-slate-400 dark:text-slate-500 text-sm p-4">No files found.</div>
-          </template>
-          <template x-if="!filesLoading && !filesLoadError && filesFilterActive() && fileSections.length && filesTotalCountAll() > 0 && filesFilteredTotalCount() === 0">
-            <div class="text-amber-800 dark:text-amber-200/90 text-sm px-4 py-3 rounded-lg bg-amber-50 dark:bg-amber-900/25 border border-amber-200/80 dark:border-amber-800/50 mb-2">No files match the selected creator or domain.</div>
-          </template>
-          <template x-for="sec in fileSections" :key="sec.dir">
-            <div class="mb-4" x-show="!filesFilterActive() || !sec.files.length || filteredSectionFiles(sec).length > 0">
-              <button type="button" @click="sec.open = !sec.open" class="w-full flex items-center gap-2 px-1 py-2 rounded-lg text-left hover:bg-slate-100/80 dark:hover:bg-slate-700/50 transition-colors -mx-1">
-                <svg class="w-4 h-4 text-slate-400 shrink-0 transition-transform duration-200" :class="sec.open ? 'rotate-90' : ''" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
-                <h3 class="text-sm font-semibold text-slate-600 dark:text-slate-300 uppercase tracking-wide flex-1 min-w-0 truncate" x-text="sec.label"></h3>
-                <span class="text-xs text-slate-400 dark:text-slate-500 tabular-nums shrink-0" x-text="sectionFileCountLabel(sec)"></span>
+
+        <!-- Header row -->
+        <div class="mb-4 flex items-center justify-between gap-2 shrink-0">
+          <h1 class="text-xl font-bold text-slate-900 dark:text-white leading-tight">Files</h1>
+          <div class="flex items-center gap-1.5 shrink-0">
+            <!-- View options -->
+            <div class="relative" @click.outside="filesViewOptionsOpen = false">
+              <button type="button" @click="filesViewOptionsOpen = !filesViewOptionsOpen"
+                class="icon-btn inline-flex items-center justify-center w-9 h-9 rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700/60 transition-colors"
+                :class="filesViewOptionsOpen ? 'ring-2 ring-blue-500/30' : ''"
+                title="View options" aria-label="View options">
+                <i data-lucide="sliders-horizontal" class="w-4 h-4"></i>
               </button>
-              <div x-show="sec.open" x-cloak class="mt-1 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 divide-y divide-slate-100 dark:divide-slate-700 overflow-hidden">
-                <template x-if="!sec.files.length">
-                  <div class="px-4 py-6 text-sm text-slate-400 dark:text-slate-500 text-center">No files yet.</div>
-                </template>
-                <template x-for="f in filteredSectionFiles(sec)" :key="sec.dir + '/' + f.name">
-                  <div role="button" tabindex="0" @click="openFileRow(sec.dir, f.name)" @keydown.enter.prevent="openFileRow(sec.dir, f.name)" @keydown.space.prevent="openFileRow(sec.dir, f.name)" class="px-4 py-3 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700/40 active:bg-slate-100 dark:active:bg-slate-700/60 transition-colors">
-                    <div class="min-w-0">
-                      <span class="text-sm font-medium text-slate-800 dark:text-slate-100 truncate block" x-text="f.name"></span>
-                      <span class="text-xs text-slate-500 dark:text-slate-400 mt-0.5 block" x-text="fileTypeLabel(f.name)"></span>
-                      <span class="text-xs text-slate-400 dark:text-slate-500 mt-0.5 block" x-text="fileMetaLine(f)"></span>
-                      <span class="text-xs text-emerald-700/90 dark:text-emerald-400/90 mt-1 block truncate" x-show="fileMetaTags(f)" x-text="fileMetaTags(f)"></span>
+              <div x-show="filesViewOptionsOpen" x-cloak x-transition.opacity.duration.150ms
+                class="absolute right-0 top-full mt-1.5 z-30 w-56 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 shadow-lg p-3">
+                <p class="text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">Show on each file</p>
+                <label class="flex items-center gap-2 px-1.5 py-1.5 rounded-md hover:bg-slate-50 dark:hover:bg-slate-700/40 cursor-pointer">
+                  <input type="checkbox" x-model="filesViewOptions.type" class="rounded border-slate-300 dark:border-slate-600 text-blue-600 focus:ring-blue-500/30">
+                  <span class="text-sm text-slate-700 dark:text-slate-200">File type</span>
+                </label>
+                <label class="flex items-center gap-2 px-1.5 py-1.5 rounded-md hover:bg-slate-50 dark:hover:bg-slate-700/40 cursor-pointer">
+                  <input type="checkbox" x-model="filesViewOptions.size" class="rounded border-slate-300 dark:border-slate-600 text-blue-600 focus:ring-blue-500/30">
+                  <span class="text-sm text-slate-700 dark:text-slate-200">Size</span>
+                </label>
+                <label class="flex items-center gap-2 px-1.5 py-1.5 rounded-md hover:bg-slate-50 dark:hover:bg-slate-700/40 cursor-pointer">
+                  <input type="checkbox" x-model="filesViewOptions.date" class="rounded border-slate-300 dark:border-slate-600 text-blue-600 focus:ring-blue-500/30">
+                  <span class="text-sm text-slate-700 dark:text-slate-200">Modified date</span>
+                </label>
+                <label class="flex items-center gap-2 px-1.5 py-1.5 rounded-md hover:bg-slate-50 dark:hover:bg-slate-700/40 cursor-pointer">
+                  <input type="checkbox" x-model="filesViewOptions.tags" class="rounded border-slate-300 dark:border-slate-600 text-blue-600 focus:ring-blue-500/30">
+                  <span class="text-sm text-slate-700 dark:text-slate-200">Tags</span>
+                </label>
+              </div>
+            </div>
+            <!-- Upload -->
+            <label class="cursor-pointer inline-flex items-center gap-1.5 px-3 h-9 text-sm font-medium bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors">
+              <i data-lucide="upload" class="w-3.5 h-3.5"></i>
+              Upload
+              <input type="file" multiple class="hidden" @change="handleFileInput($event)" />
+            </label>
+          </div>
+        </div>
+
+        <!-- Search, sort, and tag filters -->
+        <div class="mb-3 shrink-0" x-show="fileSections.length && !filesLoading" x-cloak>
+          <div class="flex gap-1.5 flex-wrap items-end">
+            <!-- Search -->
+            <div class="flex-1 min-w-[12rem] relative">
+              <i data-lucide="search" class="absolute left-2.5 top-1/2 -translate-y-1/2 w-3 h-3 text-slate-400 pointer-events-none"></i>
+              <input
+                type="search"
+                x-model="filesSearchQuery"
+                placeholder="Search files…"
+                class="w-full pl-7 pr-7 py-1.5 text-xs rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 dark:focus:border-blue-400 transition-colors"
+              />
+              <button type="button" x-show="filesSearchQuery" x-cloak @click="filesSearchQuery = ''" class="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200" aria-label="Clear search">
+                <i data-lucide="x" class="w-3 h-3"></i>
+              </button>
+            </div>
+            <!-- Sort -->
+            <div class="relative flex-1 min-w-[7rem]">
+              <select x-model="filesSort" class="w-full appearance-none text-xs rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 pl-2 pr-6 py-1.5 text-slate-700 dark:text-slate-200" title="Sort files by">
+                <option value="name">Sort: Name</option>
+                <option value="date">Sort: Date</option>
+                <option value="type">Sort: Type</option>
+                <option value="creator">Sort: Creator</option>
+                <option value="category">Sort: Category</option>
+              </select>
+              <i data-lucide="chevron-down" class="absolute right-1.5 top-1/2 -translate-y-1/2 w-3 h-3 text-slate-400 pointer-events-none"></i>
+            </div>
+            <!-- Creator + domain filters (hidden while searching) -->
+            <template x-if="!filesSearchActive()">
+              <div class="contents">
+                <div class="relative flex-1 min-w-[7rem]">
+                  <select x-model="filesFilterCreator" class="w-full appearance-none text-xs rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 pl-2 pr-6 py-1.5 text-slate-700 dark:text-slate-200">
+                    <option value="">All creators</option>
+                    <template x-for="opt in fileFilterCreatorOptions()" :key="'fc-'+opt">
+                      <option :value="opt" x-text="chatAgentDisplayName(opt)"></option>
+                    </template>
+                  </select>
+                  <i data-lucide="chevron-down" class="absolute right-1.5 top-1/2 -translate-y-1/2 w-3 h-3 text-slate-400 pointer-events-none"></i>
+                </div>
+                <div class="relative flex-1 min-w-[7rem]">
+                  <select x-model="filesFilterDomain" class="w-full appearance-none text-xs rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 pl-2 pr-6 py-1.5 text-slate-700 dark:text-slate-200">
+                    <option value="">All domains</option>
+                    <template x-for="opt in fileFilterDomainOptions()" :key="'fd-'+opt">
+                      <option :value="opt" x-text="opt"></option>
+                    </template>
+                  </select>
+                  <i data-lucide="chevron-down" class="absolute right-1.5 top-1/2 -translate-y-1/2 w-3 h-3 text-slate-400 pointer-events-none"></i>
+                </div>
+              </div>
+            </template>
+            <button type="button" x-show="filesFilterCreator || filesFilterDomain" x-cloak @click="clearFilesFilters()" class="text-xs font-medium px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700/50 shrink-0">Clear</button>
+          </div>
+        </div>
+
+        <!-- File list scroll area -->
+        <div class="flex-1 min-h-0 lg:overflow-y-auto lg:pr-1 -mr-1" x-ref="filesListScroll">
+
+          <!-- Error -->
+          <template x-if="filesLoadError">
+            <div class="text-red-500 text-sm p-3 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200/80 dark:border-red-800/50" x-text="filesLoadError"></div>
+          </template>
+
+          <!-- Loading skeleton -->
+          <template x-if="!filesLoadError && filesLoading">
+            <div class="space-y-1.5">
+              <div class="skeleton h-7 rounded-md"></div>
+              <div class="skeleton h-7 rounded-md"></div>
+              <div class="skeleton h-7 rounded-md"></div>
+              <div class="skeleton h-7 rounded-md"></div>
+              <div class="skeleton h-7 rounded-md"></div>
+            </div>
+          </template>
+
+          <!-- Empty state -->
+          <template x-if="!filesLoading && !filesLoadError && !fileSections.length">
+            <div class="text-slate-400 dark:text-slate-500 text-sm p-6 text-center">No files found.</div>
+          </template>
+
+          <!-- ── SEARCH RESULTS ── -->
+          <template x-if="!filesLoading && !filesLoadError && filesSearchActive()">
+            <div>
+              <template x-if="filesSearchResultsFlat().length === 0">
+                <div class="text-amber-800 dark:text-amber-200/90 text-sm px-4 py-3 rounded-lg bg-amber-50 dark:bg-amber-900/25 border border-amber-200/80 dark:border-amber-800/50">
+                  No files match "<span x-text="filesSearchQuery"></span>".
+                </div>
+              </template>
+              <template x-if="filesSearchResultsFlat().length > 0">
+                <div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden">
+                  <template x-for="f in filesSearchResultsFlat()" :key="f.key">
+                    <div role="button" tabindex="0" @click="openFileRow(f.sectionDir, f.relPath)" @keydown.enter.prevent="openFileRow(f.sectionDir, f.relPath)" @keydown.space.prevent="openFileRow(f.sectionDir, f.relPath)"
+                      class="group flex items-center gap-3 pl-2.5 pr-3 py-2 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700/40 active:bg-slate-100 dark:active:bg-slate-700/60 transition-colors border-b border-slate-100 dark:border-slate-700/60 last:border-b-0"
+                      :class="viewerPath && viewerPath.dir === f.sectionDir && viewerPath.name === f.relPath ? 'bg-blue-50 dark:bg-blue-900/30 border-l-2 border-blue-500' : 'border-l-2 border-transparent'">
+                      <span class="inline-flex items-center justify-center w-4 h-4 shrink-0">
+                        <i :data-lucide="fileIconName(f.name)" :class="fileIconColorClass(f.name)" class="w-4 h-4"></i>
+                      </span>
+                      <div class="min-w-0 flex-1 leading-tight">
+                        <div class="flex items-center gap-2 min-w-0">
+                          <span class="text-sm font-medium text-slate-800 dark:text-slate-100 truncate" x-text="f.name"></span>
+                          <span x-show="fileHasInlineMeta(f)" x-cloak class="text-[11px] text-slate-400 dark:text-slate-500 tabular-nums shrink-0 ml-auto" x-text="fileMetaInlineString(f)"></span>
+                        </div>
+                        <div class="text-[11px] text-slate-400 dark:text-slate-500 truncate" x-text="f.sectionLabel + (f.relPath !== f.name ? ' / ' + f.relPath.slice(0, f.relPath.lastIndexOf('/')) : '')"></div>
+                        <div class="text-[11px] text-emerald-700/90 dark:text-emerald-400/90 truncate" x-show="filesViewOptions.tags && fileMetaTags(f)" x-text="fileMetaTags(f)"></div>
+                      </div>
                     </div>
+                  </template>
+                </div>
+              </template>
+            </div>
+          </template>
+
+          <!-- ── UNIFIED TREE VIEW ── -->
+          <template x-if="!filesLoading && !filesLoadError && !filesSearchActive() && fileSections.length">
+            <div>
+              <!-- No tag-filter results banner -->
+              <template x-if="(filesFilterCreator || filesFilterDomain) && filesTotalCountAll() > 0 && filesFilteredTotalCount() === 0">
+                <div class="text-amber-800 dark:text-amber-200/90 text-sm px-4 py-3 rounded-lg bg-amber-50 dark:bg-amber-900/25 border border-amber-200/80 dark:border-amber-800/50 mb-2">No files match the selected filters.</div>
+              </template>
+
+              <div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden">
+                <template x-for="row in filesFlatTreeList()" :key="row.key">
+                  <div>
+
+                    <!-- Section header (depth 0; chevron on the RIGHT) -->
+                    <template x-if="row.type === 'section'">
+                      <button type="button"
+                        @click="toggleSection(fileSections.find(function(s) { return s.dir === row.sectionDir; }))"
+                        class="w-full flex items-center gap-3 pr-2.5 py-2 text-left hover:bg-slate-50 dark:hover:bg-slate-700/40 transition-colors border-b border-slate-100 dark:border-slate-700/60"
+                        :style="'padding-left: ' + (10 + row.depth * 14) + 'px'">
+                        <span class="inline-flex items-center justify-center w-4 h-4 shrink-0">
+                          <i x-show="!row.open" data-lucide="folder" class="w-4 h-4 text-amber-500/90 dark:text-amber-400/80"></i>
+                          <i x-show="row.open" data-lucide="folder-open" class="w-4 h-4 text-amber-500/90 dark:text-amber-400/80"></i>
+                        </span>
+                        <span class="text-sm font-medium text-slate-800 dark:text-slate-100 flex-1 min-w-0 truncate" x-text="row.name"></span>
+                        <span class="text-[11px] text-slate-400 dark:text-slate-500 tabular-nums shrink-0" x-text="row.count + ((filesFilterCreator || filesFilterDomain) && row.count !== row.totalCount ? ' / ' + row.totalCount : '')"></span>
+                        <svg class="w-3 h-3 text-slate-400 shrink-0 transition-transform duration-150" :class="row.open ? 'rotate-90' : ''"
+                          xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5" aria-hidden="true">
+                          <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/>
+                        </svg>
+                      </button>
+                    </template>
+
+                    <!-- Subfolder row (chevron on the RIGHT) -->
+                    <template x-if="row.type === 'dir'">
+                      <button type="button" @click="toggleFolderInSection(row.sectionDir, row.relPath)"
+                        class="w-full flex items-center gap-3 pr-2.5 py-2 text-left hover:bg-slate-50 dark:hover:bg-slate-700/40 transition-colors"
+                        :style="'padding-left: ' + (10 + row.depth * 14) + 'px'">
+                        <span class="inline-flex items-center justify-center w-4 h-4 shrink-0">
+                          <i x-show="!row.open" data-lucide="folder" class="w-4 h-4 text-amber-500/90 dark:text-amber-400/80"></i>
+                          <i x-show="row.open" data-lucide="folder-open" class="w-4 h-4 text-amber-500/90 dark:text-amber-400/80"></i>
+                        </span>
+                        <span class="text-sm font-medium text-slate-800 dark:text-slate-100 flex-1 min-w-0 truncate" x-text="row.name"></span>
+                        <span class="text-[11px] text-slate-400 dark:text-slate-500 tabular-nums shrink-0" x-text="row.visibleChildCount"></span>
+                        <svg class="w-3 h-3 text-slate-400 shrink-0 transition-transform duration-150" :class="row.open ? 'rotate-90' : ''"
+                          xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5" aria-hidden="true">
+                          <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/>
+                        </svg>
+                      </button>
+                    </template>
+
+                    <!-- File row (no chevron — same icon column as folders) -->
+                    <template x-if="row.type === 'file'">
+                      <div role="button" tabindex="0"
+                        @click="openFileRow(row.sectionDir, row.relPath)"
+                        @keydown.enter.prevent="openFileRow(row.sectionDir, row.relPath)"
+                        @keydown.space.prevent="openFileRow(row.sectionDir, row.relPath)"
+                        class="flex items-center gap-3 pr-3 py-2 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700/40 active:bg-slate-100 dark:active:bg-slate-700/60 transition-colors"
+                        :class="viewerPath && viewerPath.dir === row.sectionDir && viewerPath.name === row.relPath ? 'bg-blue-50 dark:bg-blue-900/30 border-l-2 border-blue-500' : 'border-l-2 border-transparent'"
+                        :style="'padding-left: ' + (10 + row.depth * 14) + 'px'">
+                        <span class="inline-flex items-center justify-center w-4 h-4 shrink-0">
+                          <i :data-lucide="fileIconName(row.name)" :class="fileIconColorClass(row.name)" class="w-4 h-4"></i>
+                        </span>
+                        <div class="min-w-0 flex-1 leading-tight">
+                          <div class="flex items-center gap-2 min-w-0">
+                            <span class="text-sm font-medium text-slate-800 dark:text-slate-100 truncate" x-text="row.name"></span>
+                            <span x-show="fileHasInlineMeta(row)" x-cloak class="text-[11px] text-slate-400 dark:text-slate-500 tabular-nums shrink-0 ml-auto" x-text="fileMetaInlineString(row)"></span>
+                          </div>
+                          <div class="text-[11px] text-emerald-700/90 dark:text-emerald-400/90 truncate" x-show="filesViewOptions.tags && fileMetaTags(row)" x-text="fileMetaTags(row)"></div>
+                        </div>
+                      </div>
+                    </template>
+
                   </div>
                 </template>
               </div>
             </div>
           </template>
+
         </div>
       </div>
 
@@ -1160,12 +1319,12 @@ tailwind.config = {
           <div class="flex items-center justify-between gap-2 px-4 py-3 border-b border-slate-200 dark:border-slate-700 shrink-0">
             <div class="min-w-0">
             <span class="font-semibold text-slate-800 dark:text-slate-100 text-sm truncate block" x-text="viewerTitle"></span>
-            <span class="text-xs text-slate-500 dark:text-slate-400 mt-0.5 block truncate" x-show="viewerPath && fileMetaEnabled(viewerPath.dir)" x-text="fileMetaTags(findFileEntry(viewerPath.dir, viewerPath.name)) || '—'"></span>
+            <span class="text-xs text-slate-500 dark:text-slate-400 mt-0.5 block truncate" x-show="viewerPath && fileMetaAndArchiveEnabled(viewerPath.dir, viewerPath.name)" x-text="fileMetaTags(findFileEntry(viewerPath.dir, viewerPath.name)) || '—'"></span>
             </div>
             <div class="flex items-center gap-1 shrink-0 flex-wrap justify-end">
               <button type="button" x-show="viewerPath && viewerDisplayMode !== 'download'" @click="triggerFileDownload(viewerPath.dir, viewerPath.name)" class="text-xs font-medium px-2.5 py-1.5 rounded-md bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 transition-colors">Download</button>
-              <button type="button" x-show="viewerPath && fileMetaEnabled(viewerPath.dir)" @click="openFileMetaEditor()" class="text-xs font-medium px-2.5 py-1.5 rounded-md bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 transition-colors">Details</button>
-              <button type="button" x-show="viewerPath && fileMetaEnabled(viewerPath.dir)" @click="archiveFile(viewerPath.dir, viewerPath.name)" class="text-xs font-medium px-2.5 py-1.5 rounded-md bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 transition-colors">Archive</button>
+              <button type="button" x-show="viewerPath && fileMetaAndArchiveEnabled(viewerPath.dir, viewerPath.name)" @click="openFileMetaEditor()" class="text-xs font-medium px-2.5 py-1.5 rounded-md bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 transition-colors">Details</button>
+              <button type="button" x-show="viewerPath && fileMetaAndArchiveEnabled(viewerPath.dir, viewerPath.name)" @click="archiveFile(viewerPath.dir, viewerPath.name)" class="text-xs font-medium px-2.5 py-1.5 rounded-md bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 transition-colors">Archive</button>
               <button type="button" x-show="viewerPath && fileIsEditable(viewerPath.name)" @click="editFromViewer()" class="text-xs font-medium px-2.5 py-1.5 rounded-md bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 transition-colors">Edit</button>
               <button type="button" @click="closeViewer()" class="icon-btn p-1.5 rounded-md text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700" aria-label="Close">
                 <i data-lucide="x" class="w-5 h-5"></i>
@@ -1218,7 +1377,7 @@ tailwind.config = {
           <div class="flex items-center justify-between gap-2 px-4 py-3 border-b border-slate-200 dark:border-slate-700 shrink-0">
             <span class="font-semibold text-slate-800 dark:text-slate-100 text-sm truncate pr-2 min-w-0" x-text="editorTitle"></span>
             <div class="flex items-center gap-1 shrink-0">
-              <button type="button" x-show="editorPath && fileMetaEnabled(editorPath.dir)" @click="openFileMetaEditor()" class="text-xs font-medium px-2.5 py-1.5 rounded-md bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 transition-colors">Details</button>
+              <button type="button" x-show="editorPath && fileMetaAndArchiveEnabled(editorPath.dir, editorPath.name)" @click="openFileMetaEditor()" class="text-xs font-medium px-2.5 py-1.5 rounded-md bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 transition-colors">Details</button>
               <button type="button" @click="editorOpen = false" class="icon-btn p-1.5 rounded-md text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 shrink-0" aria-label="Close">
                 <i data-lucide="x" class="w-5 h-5"></i>
               </button>
@@ -2298,12 +2457,12 @@ tailwind.config = {
     <div class="flex items-center justify-between gap-2 px-4 py-3 border-b border-slate-200 dark:border-slate-700 shrink-0">
       <div class="min-w-0">
         <span class="font-semibold text-slate-800 dark:text-slate-100 text-sm truncate block" x-text="viewerTitle"></span>
-        <span class="text-xs text-slate-500 dark:text-slate-400 mt-0.5 block truncate" x-show="viewerPath && fileMetaEnabled(viewerPath.dir)" x-text="fileMetaTags(findFileEntry(viewerPath.dir, viewerPath.name)) || '—'"></span>
+        <span class="text-xs text-slate-500 dark:text-slate-400 mt-0.5 block truncate" x-show="viewerPath && fileMetaAndArchiveEnabled(viewerPath.dir, viewerPath.name)" x-text="fileMetaTags(findFileEntry(viewerPath.dir, viewerPath.name)) || '—'"></span>
       </div>
       <div class="flex items-center gap-1 shrink-0 flex-wrap justify-end">
         <button type="button" x-show="viewerPath && viewerDisplayMode !== 'download'" @click="triggerFileDownload(viewerPath.dir, viewerPath.name)" class="text-xs font-medium px-2.5 py-1.5 rounded-md bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200">Download</button>
-        <button type="button" x-show="viewerPath && fileMetaEnabled(viewerPath.dir)" @click="openFileMetaEditor()" class="text-xs font-medium px-2.5 py-1.5 rounded-md bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200">Details</button>
-        <button type="button" x-show="viewerPath && fileMetaEnabled(viewerPath.dir)" @click="archiveFile(viewerPath.dir, viewerPath.name)" class="text-xs font-medium px-2.5 py-1.5 rounded-md bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200">Archive</button>
+        <button type="button" x-show="viewerPath && fileMetaAndArchiveEnabled(viewerPath.dir, viewerPath.name)" @click="openFileMetaEditor()" class="text-xs font-medium px-2.5 py-1.5 rounded-md bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200">Details</button>
+        <button type="button" x-show="viewerPath && fileMetaAndArchiveEnabled(viewerPath.dir, viewerPath.name)" @click="archiveFile(viewerPath.dir, viewerPath.name)" class="text-xs font-medium px-2.5 py-1.5 rounded-md bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200">Archive</button>
         <button type="button" x-show="viewerPath && fileIsEditable(viewerPath.name)" @click="editFromViewer()" class="text-xs font-medium px-2.5 py-1.5 rounded-md bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200">Edit</button>
         <button type="button" @click="closeViewer()" class="icon-btn p-1.5 rounded-md text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700" aria-label="Close">
           <i data-lucide="x" class="w-5 h-5"></i>
@@ -2360,7 +2519,7 @@ tailwind.config = {
     <div class="flex items-center justify-between gap-2 px-5 py-3 border-b border-slate-200 dark:border-slate-700">
       <span class="font-semibold text-slate-800 dark:text-slate-100 text-sm truncate min-w-0 pr-2" x-text="editorTitle"></span>
       <div class="flex items-center gap-1 shrink-0">
-        <button type="button" x-show="editorPath && fileMetaEnabled(editorPath.dir)" @click="openFileMetaEditor()" class="text-xs font-medium px-2.5 py-1.5 rounded-md bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200">Details</button>
+        <button type="button" x-show="editorPath && fileMetaAndArchiveEnabled(editorPath.dir, editorPath.name)" @click="openFileMetaEditor()" class="text-xs font-medium px-2.5 py-1.5 rounded-md bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200">Details</button>
         <button type="button" @click="editorOpen = false" class="icon-btn p-1.5 rounded-md text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700" aria-label="Close">
           <i data-lucide="x" class="w-5 h-5"></i>
         </button>

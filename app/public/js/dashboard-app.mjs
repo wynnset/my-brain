@@ -132,6 +132,28 @@ document.addEventListener('alpine:init', function() {
     filesLoadError: null,
     filesFilterCreator: '',
     filesFilterDomain: '',
+    filesSearchQuery: '',
+    /** Sort key for the file list: 'name' | 'date' | 'type' | 'creator' | 'category' */
+    filesSort: (function() {
+      try { return localStorage.getItem('files_sort') || 'date'; } catch (_) { return 'date'; }
+    })(),
+    /** Keyed by `sectionDir + ':' + relPath` → boolean open state for subdirectories. */
+    _folderOpenState: {},
+    /** What to show on each file row; persisted to localStorage. Defaults are minimal: only tags. */
+    filesViewOptions: (function() {
+      try {
+        var saved = JSON.parse(localStorage.getItem('files_view_options') || '{}');
+        return {
+          type: saved.type === true,
+          size: saved.size === true,
+          date: saved.date === true,
+          tags: saved.tags !== false,
+        };
+      } catch (_) {
+        return { type: false, size: false, date: false, tags: true };
+      }
+    })(),
+    filesViewOptionsOpen: false,
     fileMetaEditorOpen: false,
     fileMetaSaving: false,
     fileMetaDraft: { dir: '', name: '', createdBy: '', domain: '', category: '' },
@@ -157,6 +179,12 @@ document.addEventListener('alpine:init', function() {
     chatAgents: [],
     chatAgent: 'cyrus',
     chatPrompt: '',
+    /**
+     * Draft text for the "no conversation yet" composer (before the first send
+     * creates a server session). Mirrors the localStorage key
+     * `brain_chat_draft:__new__` so a refresh restores the in-progress message.
+     */
+    _chatDraftPromptNoConv: '',
     chatConversationId: null,
     chatMessages: [],
     /** From server: cumulative SDK billing for the active conversation (Anthropic / Agent SDK). */
@@ -356,6 +384,32 @@ document.addEventListener('alpine:init', function() {
       if (typeof this.$watch === 'function') {
         this.$watch('chatAgent', function (v) {
           self.ensureChatAgentMeta(v);
+        });
+        // Persist the composer draft per-chat on every keystroke so users can
+        // prepare messages for multiple chats in parallel and have them
+        // restored on refresh. Also keep the no-conv mirror in sync.
+        this.$watch('chatPrompt', function (v) {
+          if (self.chatConversationId == null) {
+            self._chatDraftPromptNoConv = typeof v === 'string' ? v : '';
+          }
+          self.persistChatDraftToStorage();
+        });
+        this.$watch('filesSort', function (v) {
+          try { localStorage.setItem('files_sort', v); } catch (_) {}
+          self.$nextTick(function() { self.refreshIcons(); });
+        });
+        this.$watch('filesViewOptions', function (v) {
+          try { localStorage.setItem('files_view_options', JSON.stringify(v)); } catch (_) {}
+          self.$nextTick(function() { self.refreshIcons(); });
+        });
+        this.$watch('filesSearchQuery', function () {
+          self.$nextTick(function() { self.refreshIcons(); });
+        });
+        this.$watch('filesFilterCreator', function () {
+          self.$nextTick(function() { self.refreshIcons(); });
+        });
+        this.$watch('filesFilterDomain', function () {
+          self.$nextTick(function() { self.refreshIcons(); });
         });
       }
       this._onResizeViewport = function() {
@@ -1395,7 +1449,7 @@ document.addEventListener('alpine:init', function() {
 
     viewerAssetUrl() {
       if (!this.viewerPath) return '';
-      return this.fileDownloadHref(this.viewerPath.dir, this.viewerPath.name);
+      return this.fileApiPath(this.viewerPath.dir, this.viewerPath.name);
     },
 
     _clearChatElapsedTimer(bucket) {
@@ -1731,6 +1785,10 @@ document.addEventListener('alpine:init', function() {
         lastEventSeq: 0,
         streamReaderPromise: null,
         chatAgent: '',
+        // Per-conversation composer draft so users can simultaneously prep
+        // messages for multiple chats and switch between them without losing
+        // text. Persisted to localStorage by `persistChatDraftToStorage`.
+        prompt: '',
       };
       this.chatStreams[convId] = b;
       return b;
@@ -1760,6 +1818,7 @@ document.addEventListener('alpine:init', function() {
       b.showNewRepliesButton = this.chatShowNewRepliesButton;
       b.pinnedDesktop = this._chatPinnedDesktop;
       b.pinnedMobile = this._chatPinnedMobile;
+      b.prompt = this.chatPrompt || '';
     },
 
     /** Point root fields at the given bucket (same object refs as the bucket). */
@@ -1786,6 +1845,7 @@ document.addEventListener('alpine:init', function() {
         this.chatShowNewRepliesButton = false;
         this._chatPinnedDesktop = true;
         this._chatPinnedMobile = true;
+        this.chatPrompt = this._chatDraftPromptNoConv || '';
         return;
       }
       this.chatMessages = b.messages;
@@ -1808,6 +1868,68 @@ document.addEventListener('alpine:init', function() {
       this.chatShowNewRepliesButton = b.showNewRepliesButton;
       this._chatPinnedDesktop = b.pinnedDesktop;
       this._chatPinnedMobile = b.pinnedMobile;
+      this.chatPrompt = b.prompt || '';
+    },
+
+    /** localStorage key for the per-conversation composer draft. */
+    chatDraftStorageKey(convId) {
+      return 'brain_chat_draft:' + (convId ? String(convId) : '__new__');
+    },
+
+    /** Persist the current `chatPrompt` to localStorage under the active conv's key. */
+    persistChatDraftToStorage() {
+      try {
+        var key = this.chatDraftStorageKey(this.chatConversationId);
+        var v = this.chatPrompt;
+        if (typeof v === 'string' && v.length > 0) {
+          localStorage.setItem(key, v);
+        } else {
+          localStorage.removeItem(key);
+        }
+      } catch (_) {}
+    },
+
+    /** Remove the saved draft for `convId` (or the no-conversation draft when null). */
+    removeChatDraftFromStorage(convId) {
+      try {
+        localStorage.removeItem(this.chatDraftStorageKey(convId));
+      } catch (_) {}
+    },
+
+    /**
+     * Pull saved drafts off localStorage into the in-memory buckets so a refresh
+     * restores the composer text for every chat. Stale entries (drafts for
+     * conversations that no longer exist) are pruned to avoid unbounded growth.
+     */
+    hydrateChatDraftsFromStorage() {
+      var knownIds = {};
+      (this.chatConversations || []).forEach(function (c) {
+        if (c && c.id != null) knownIds[String(c.id)] = true;
+      });
+      var prefix = 'brain_chat_draft:';
+      var stale = [];
+      try {
+        for (var i = 0; i < localStorage.length; i++) {
+          var k = localStorage.key(i);
+          if (!k || k.indexOf(prefix) !== 0) continue;
+          var convKey = k.substring(prefix.length);
+          if (convKey !== '__new__' && !knownIds[convKey]) {
+            stale.push(k);
+            continue;
+          }
+          var val = localStorage.getItem(k);
+          if (typeof val !== 'string' || !val) continue;
+          if (convKey === '__new__') {
+            this._chatDraftPromptNoConv = val;
+          } else {
+            var b = this.ensureChatStreamBucket(convKey);
+            b.prompt = val;
+          }
+        }
+      } catch (_) {}
+      stale.forEach(function (k) {
+        try { localStorage.removeItem(k); } catch (_) {}
+      });
     },
 
     /**
@@ -2245,6 +2367,14 @@ document.addEventListener('alpine:init', function() {
         throw new Error(errMsg);
       }
       var d = await r.json();
+      // We're transitioning out of the no-conversation draft state into a real
+      // conversation. The old "__new__" composer draft has been consumed (by
+      // the caller, typically `submitChat`), so wipe it from memory + storage
+      // to avoid resurfacing the same text on a future refresh.
+      if (this.chatConversationId == null) {
+        this._chatDraftPromptNoConv = '';
+        this.removeChatDraftFromStorage(null);
+      }
       if (this.chatConversationId) this.snapshotRootChatIntoBucket(this.chatConversationId);
       var nb = this.ensureChatStreamBucket(d.id);
       nb.messages = [];
@@ -2280,6 +2410,10 @@ document.addEventListener('alpine:init', function() {
 
     async bootstrapChat() {
       await this.loadConversationList();
+      // Pull any saved per-chat composer drafts into the in-memory buckets
+      // before we restore the active conversation, so `restoreRootFromChatBucket`
+      // picks up the right draft text.
+      this.hydrateChatDraftsFromStorage();
       var last = null;
       try { last = localStorage.getItem('brain_last_chat_id'); } catch (_) {}
       if (last) {
@@ -2629,6 +2763,7 @@ document.addEventListener('alpine:init', function() {
           try {
             delete this.chatStreams[String(delId)];
           } catch (_) {}
+          this.removeChatDraftFromStorage(delId);
         }
         this.enterDraftChatState();
         await this.loadConversationList();
@@ -2649,6 +2784,7 @@ document.addEventListener('alpine:init', function() {
         try {
           delete this.chatStreams[String(old)];
         } catch (_) {}
+        this.removeChatDraftFromStorage(old);
       }
       this.enterDraftChatState();
       try {
@@ -2667,6 +2803,7 @@ document.addEventListener('alpine:init', function() {
         try {
           delete this.chatStreams[String(id)];
         } catch (_) {}
+        this.removeChatDraftFromStorage(id);
         if (this.chatConversationId === id) this.enterDraftChatState();
         await this.loadConversationList();
       } catch (_) {}
@@ -2882,7 +3019,16 @@ document.addEventListener('alpine:init', function() {
 
     async openFileFromHash(dir, name) {
       await this.loadPage('files', false);
+      // Expand the section and any intermediate folders
+      var self = this;
       this.fileSections.forEach(function(sec) { if (sec.dir === dir) sec.open = true; });
+      var parts = String(name || '').split('/');
+      if (parts.length > 1) {
+        for (var i = 1; i < parts.length; i++) {
+          var folderKey = dir + ':' + parts.slice(0, i).join('/');
+          self._folderOpenState[folderKey] = true;
+        }
+      }
       this.openFileRow(dir, name);
       var self = this;
       this.$nextTick(function() { self.refreshIcons(); });
@@ -4079,7 +4225,7 @@ document.addEventListener('alpine:init', function() {
     },
 
     rebuildFileSections() {
-      var LABELS = { 'root': 'Root', 'owners-inbox': 'Owners Inbox', 'team-inbox': 'Team Inbox', 'team': 'Team', 'docs': 'Docs' };
+      var LABELS = { 'owners-inbox': 'Owners Inbox', 'team-inbox': 'Team Inbox', 'team': 'Team', 'docs': 'Docs' };
       var data = this.filesData;
       var openByDir = Object.create(null);
       (this.fileSections || []).forEach(function(sec) {
@@ -4087,12 +4233,20 @@ document.addEventListener('alpine:init', function() {
       });
       this.fileSections = [];
       var self = this;
+      // Root-level files: rendered loose (no section header) at the top of the unified tree.
       if (data.root && data.root.length) {
-        this.fileSections.push({ dir: 'root', label: LABELS.root, files: data.root, open: openByDir.root === true });
+        this.fileSections.push({ dir: 'root', label: 'Root', entries: data.root, open: true, loose: true });
       }
       ['owners-inbox', 'team-inbox', 'team', 'docs'].forEach(function(dir) {
         if (!Object.prototype.hasOwnProperty.call(data, dir)) return;
-        self.fileSections.push({ dir: dir, label: LABELS[dir] || dir, files: data[dir], open: openByDir[dir] === true });
+        var hasOpen = Object.prototype.hasOwnProperty.call(openByDir, dir);
+        self.fileSections.push({
+          dir: dir,
+          label: LABELS[dir] || dir,
+          entries: data[dir],
+          // Default Owners Inbox open on first load; preserve user toggles otherwise.
+          open: hasOpen ? openByDir[dir] === true : (dir === 'owners-inbox'),
+        });
       });
     },
 
@@ -4114,94 +4268,388 @@ document.addEventListener('alpine:init', function() {
     },
 
     filesFilterActive() {
-      return !!(String(this.filesFilterCreator || '').trim() || String(this.filesFilterDomain || '').trim());
+      return !!(String(this.filesFilterCreator || '').trim() || String(this.filesFilterDomain || '').trim() || String(this.filesSearchQuery || '').trim());
+    },
+
+    filesSearchActive() {
+      return !!String(this.filesSearchQuery || '').trim();
+    },
+
+    /** Recursively collect all file entries from a nested entries array. */
+    _collectAllFiles(entries, relPrefix) {
+      var results = [];
+      (entries || []).forEach(function(e) {
+        var relPath = relPrefix ? relPrefix + '/' + e.name : e.name;
+        if (e.isDir) {
+          var nested = this._collectAllFiles(e.children || [], relPath);
+          for (var i = 0; i < nested.length; i++) results.push(nested[i]);
+        } else {
+          results.push({ name: e.name, relPath: relPath, size: e.size, modified: e.modified, createdBy: e.createdBy || '', domain: e.domain || '', category: e.category || '', isDir: false });
+        }
+      }.bind(this));
+      return results;
+    },
+
+    /** Count files that pass creator/domain filters, recursively. */
+    _countFilesInEntries(entries, c, d) {
+      var n = 0;
+      (entries || []).forEach(function(e) {
+        if (e.isDir) {
+          n += this._countFilesInEntries(e.children || [], c, d);
+        } else {
+          if (c && String(e.createdBy || '').trim().toLowerCase() !== c) return;
+          if (d && String(e.domain || '').trim().toLowerCase() !== d) return;
+          n++;
+        }
+      }.bind(this));
+      return n;
     },
 
     fileFilterCreatorOptions() {
       var s = new Set();
       this.fileSections.forEach(function(sec) {
-        (sec.files || []).forEach(function(f) {
+        this._collectAllFiles(sec.entries || [], '').forEach(function(f) {
           if (f.createdBy) s.add(String(f.createdBy).trim());
         });
-      });
-      return Array.from(s).sort(function(a, b) {
-        return a.toLowerCase().localeCompare(b.toLowerCase());
-      });
+      }.bind(this));
+      return Array.from(s).sort(function(a, b) { return a.toLowerCase().localeCompare(b.toLowerCase()); });
     },
 
     fileFilterDomainOptions() {
       var s = new Set();
       this.fileSections.forEach(function(sec) {
-        (sec.files || []).forEach(function(f) {
+        this._collectAllFiles(sec.entries || [], '').forEach(function(f) {
           if (f.domain) s.add(String(f.domain).trim());
         });
-      });
-      return Array.from(s).sort(function(a, b) {
-        return a.toLowerCase().localeCompare(b.toLowerCase());
-      });
-    },
-
-    filteredSectionFiles(sec) {
-      var files = sec.files || [];
-      var c = String(this.filesFilterCreator || '').trim().toLowerCase();
-      var d = String(this.filesFilterDomain || '').trim().toLowerCase();
-      if (!c && !d) return files;
-      return files.filter(function(f) {
-        if (c && String(f.createdBy || '').trim().toLowerCase() !== c) return false;
-        if (d && String(f.domain || '').trim().toLowerCase() !== d) return false;
-        return true;
-      });
+      }.bind(this));
+      return Array.from(s).sort(function(a, b) { return a.toLowerCase().localeCompare(b.toLowerCase()); });
     },
 
     sectionFileCountLabel(sec) {
-      var n = this.filteredSectionFiles(sec).length;
-      var t = (sec.files || []).length;
-      if (!this.filesFilterActive() || n === t) return String(n);
-      return n + ' / ' + t;
+      var c = String(this.filesFilterCreator || '').trim().toLowerCase();
+      var d = String(this.filesFilterDomain || '').trim().toLowerCase();
+      var total = this._countFilesInEntries(sec.entries || [], null, null);
+      if (!c && !d) return String(total);
+      var filtered = this._countFilesInEntries(sec.entries || [], c || null, d || null);
+      return filtered === total ? String(total) : filtered + ' / ' + total;
     },
 
     filesTotalCountAll() {
       var n = 0;
-      this.fileSections.forEach(function(sec) { n += (sec.files || []).length; });
+      this.fileSections.forEach(function(sec) { n += this._countFilesInEntries(sec.entries || [], null, null); }.bind(this));
       return n;
     },
 
     filesFilteredTotalCount() {
-      var self = this;
+      var c = String(this.filesFilterCreator || '').trim().toLowerCase();
+      var d = String(this.filesFilterDomain || '').trim().toLowerCase();
       var n = 0;
-      this.fileSections.forEach(function(sec) { n += self.filteredSectionFiles(sec).length; });
+      this.fileSections.forEach(function(sec) { n += this._countFilesInEntries(sec.entries || [], c || null, d || null); }.bind(this));
       return n;
     },
 
     clearFilesFilters() {
       this.filesFilterCreator = '';
       this.filesFilterDomain = '';
+      this.filesSearchQuery = '';
+    },
+
+    /** Flat list of files matching the current search query (across all sections/subdirs). */
+    filesSearchResultsFlat() {
+      var q = String(this.filesSearchQuery || '').trim().toLowerCase();
+      if (!q) return [];
+      var results = [];
+      this.fileSections.forEach(function(sec) {
+        this._collectAllFiles(sec.entries || [], '').forEach(function(f) {
+          if (f.name.toLowerCase().includes(q) || f.relPath.toLowerCase().includes(q)) {
+            results.push({
+              key: 'sr:' + sec.dir + ':' + f.relPath,
+              sectionDir: sec.dir,
+              sectionLabel: sec.label,
+              name: f.name,
+              relPath: f.relPath,
+              size: f.size,
+              modified: f.modified,
+              createdBy: f.createdBy,
+              domain: f.domain,
+              category: f.category,
+            });
+          }
+        });
+      }.bind(this));
+      return this._sortFileItems(results);
+    },
+
+    /** Pre-computed flat visible list for a single section (for normal tree rendering). */
+    filesVisibleFlatListForSection(sec) {
+      var self = this;
+      var c = String(this.filesFilterCreator || '').trim().toLowerCase();
+      var d = String(this.filesFilterDomain || '').trim().toLowerCase();
+      var result = [];
+
+      function countVisible(entries) {
+        var n = 0;
+        (entries || []).forEach(function(e) {
+          if (e.isDir) n += countVisible(e.children || []);
+          else {
+            if (c && String(e.createdBy || '').toLowerCase() !== c) return;
+            if (d && String(e.domain || '').toLowerCase() !== d) return;
+            n++;
+          }
+        });
+        return n;
+      }
+
+      function walk(entries, depth, relPrefix) {
+        self._sortFileItems(entries || []).forEach(function(entry) {
+          var relPath = relPrefix ? relPrefix + '/' + entry.name : entry.name;
+          if (entry.isDir) {
+            var visCount = countVisible(entry.children || []);
+            if (c || d) { if (visCount === 0) return; }
+            var openKey = sec.dir + ':' + relPath;
+            var isOpen = !!self._folderOpenState[openKey];
+            result.push({ type: 'dir', key: 'dir:' + sec.dir + ':' + relPath, name: entry.name, relPath: relPath, depth: depth, open: isOpen, visibleChildCount: visCount, totalChildCount: countVisible(entry.children || []) });
+            if (isOpen) walk(entry.children || [], depth + 1, relPath);
+          } else {
+            if (c && String(entry.createdBy || '').toLowerCase() !== c) return;
+            if (d && String(entry.domain || '').toLowerCase() !== d) return;
+            result.push({ type: 'file', key: 'file:' + sec.dir + ':' + relPath, name: entry.name, relPath: relPath, depth: depth, size: entry.size, modified: entry.modified, createdBy: entry.createdBy || '', domain: entry.domain || '', category: entry.category || '' });
+          }
+        });
+      }
+
+      walk(sec.entries || [], 0, '');
+      return result;
+    },
+
+    /**
+     * Sort an array of file-like objects by the current `filesSort` preference.
+     * Directories are always sorted before files (by name); only files are affected by the sort key.
+     */
+    _sortFileItems(items) {
+      var s = this.filesSort;
+      return (items || []).slice().sort(function(a, b) {
+        var aDir = !!a.isDir, bDir = !!b.isDir;
+        if (aDir && !bDir) return -1;
+        if (!aDir && bDir) return 1;
+        if (aDir && bDir) return a.name.toLowerCase().localeCompare(b.name.toLowerCase());
+        // Both are files — sort by chosen key
+        if (s === 'date') {
+          var td = new Date(b.modified) - new Date(a.modified);
+          return td !== 0 ? td : a.name.toLowerCase().localeCompare(b.name.toLowerCase());
+        }
+        if (s === 'type') {
+          var extA = (a.name.match(/\.([^.]+)$/) || ['', ''])[1].toLowerCase();
+          var extB = (b.name.match(/\.([^.]+)$/) || ['', ''])[1].toLowerCase();
+          var te = extA.localeCompare(extB);
+          return te !== 0 ? te : a.name.toLowerCase().localeCompare(b.name.toLowerCase());
+        }
+        if (s === 'creator') {
+          var tc = String(a.createdBy || '').toLowerCase().localeCompare(String(b.createdBy || '').toLowerCase());
+          return tc !== 0 ? tc : a.name.toLowerCase().localeCompare(b.name.toLowerCase());
+        }
+        if (s === 'category') {
+          var tcat = String(a.category || '').toLowerCase().localeCompare(String(b.category || '').toLowerCase());
+          return tcat !== 0 ? tcat : a.name.toLowerCase().localeCompare(b.name.toLowerCase());
+        }
+        return a.name.toLowerCase().localeCompare(b.name.toLowerCase());
+      });
+    },
+
+    toggleFolderInSection(sectionDir, relPath) {
+      var key = sectionDir + ':' + relPath;
+      this._folderOpenState[key] = !this._folderOpenState[key];
+      // Force reactivity
+      this._folderOpenState = Object.assign({}, this._folderOpenState);
+      var self = this;
+      this.$nextTick(function() { self.refreshIcons(); });
+    },
+
+    isFolderOpenInSection(sectionDir, relPath) {
+      return !!this._folderOpenState[sectionDir + ':' + relPath];
+    },
+
+    /** Toggle a top-level section and refresh the file-type icons that appear when it expands. */
+    toggleSection(sec) {
+      if (!sec) return;
+      sec.open = !sec.open;
+      var self = this;
+      this.$nextTick(function() { self.refreshIcons(); });
+    },
+
+    /**
+     * Single flat row list for the unified tree container.
+     * Yields `{ type: 'section' | 'dir' | 'file', ... }` rows with `depth` for indentation.
+     * Sections are depth 0; their children are depth 1+.
+     */
+    filesFlatTreeList() {
+      var rows = [];
+      var c = String(this.filesFilterCreator || '').trim().toLowerCase();
+      var d = String(this.filesFilterDomain || '').trim().toLowerCase();
+      var self = this;
+      this.fileSections.forEach(function(sec) {
+        var total = self._countFilesInEntries(sec.entries || [], null, null);
+        var visibleCount = self._countFilesInEntries(sec.entries || [], c || null, d || null);
+        if ((c || d) && visibleCount === 0) return;
+        // Loose sections (e.g. root) are flattened: their files appear directly in the list
+        // without a section header — they're not a real folder.
+        if (sec.loose) {
+          self.filesVisibleFlatListForSection(sec).forEach(function(item) {
+            var copy = Object.assign({}, item);
+            // No depth bump — loose files sit at depth 0 alongside section headers.
+            copy.sectionDir = sec.dir;
+            rows.push(copy);
+          });
+          return;
+        }
+        rows.push({
+          type: 'section',
+          key: 'sec:' + sec.dir,
+          sectionDir: sec.dir,
+          name: sec.label,
+          count: visibleCount,
+          totalCount: total,
+          depth: 0,
+          open: !!sec.open,
+        });
+        if (sec.open) {
+          self.filesVisibleFlatListForSection(sec).forEach(function(item) {
+            var copy = Object.assign({}, item);
+            copy.depth = item.depth + 1;
+            copy.sectionDir = sec.dir;
+            rows.push(copy);
+          });
+        }
+      });
+      return rows;
+    },
+
+    /** Return the last path segment (basename) of a relPath. */
+    fileBaseName(relPath) {
+      var parts = String(relPath || '').split('/');
+      return parts[parts.length - 1];
+    },
+
+    /**
+     * Return a Lucide icon name for the file type.
+     * Picks distinctive icons (image, film, music, code, table-2, …) over generic "file-*" variants
+     * so the type is recognizable at a glance.
+     */
+    fileIconName(name) {
+      var n = String(name || '').toLowerCase();
+      if (/\.(md|markdown)$/.test(n)) return 'notebook';
+      if (/\.(txt|log)$/.test(n)) return 'align-left';
+      if (/\.(html|htm)$/.test(n)) return 'code-2';
+      if (/\.(json|js|mjs|cjs|ts|tsx|jsx|sql|xml|yaml|yml|ini|conf|toml|sh|py|rb|go|rs)$/.test(n)) return 'braces';
+      if (/\.pdf$/.test(n)) return 'file-text';
+      if (/\.(csv|tsv|xls|xlsx)$/.test(n)) return 'table-2';
+      if (/\.(doc|docx)$/.test(n)) return 'file-text';
+      if (/\.(png|jpe?g|gif|webp|avif|bmp|ico|svg)$/.test(n)) return 'image';
+      if (/\.(mp4|webm|mov|m4v|ogv|mkv)$/.test(n)) return 'film';
+      if (/\.(mp3|wav|ogg|oga|m4a|aac|flac|opus)$/.test(n)) return 'music';
+      if (/\.(zip|tar|gz|tgz|7z|rar)$/.test(n)) return 'archive';
+      if (/\.(db|sqlite|sqlite3)$/.test(n)) return 'database';
+      return 'file';
+    },
+
+    /** Tailwind text color class for a given file's icon — paired with `fileIconName`. */
+    fileIconColorClass(name) {
+      var n = String(name || '').toLowerCase();
+      if (/\.(md|markdown)$/.test(n)) return 'text-sky-500 dark:text-sky-400';
+      if (/\.(txt|log)$/.test(n)) return 'text-slate-500 dark:text-slate-400';
+      if (/\.(html|htm)$/.test(n)) return 'text-orange-500 dark:text-orange-400';
+      if (/\.(json|js|mjs|cjs|ts|tsx|jsx|xml|yaml|yml|ini|conf|toml|sh|py|rb|go|rs|sql)$/.test(n)) return 'text-amber-500 dark:text-amber-400';
+      if (/\.pdf$/.test(n)) return 'text-rose-500 dark:text-rose-400';
+      if (/\.(csv|tsv|xls|xlsx)$/.test(n)) return 'text-emerald-500 dark:text-emerald-400';
+      if (/\.(doc|docx)$/.test(n)) return 'text-blue-500 dark:text-blue-400';
+      if (/\.(png|jpe?g|gif|webp|avif|bmp|ico|svg)$/.test(n)) return 'text-violet-500 dark:text-violet-400';
+      if (/\.(mp4|webm|mov|m4v|ogv|mkv)$/.test(n)) return 'text-pink-500 dark:text-pink-400';
+      if (/\.(mp3|wav|ogg|oga|m4a|aac|flac|opus)$/.test(n)) return 'text-indigo-500 dark:text-indigo-400';
+      if (/\.(zip|tar|gz|tgz|7z|rar)$/.test(n)) return 'text-amber-600 dark:text-amber-500';
+      if (/\.(db|sqlite|sqlite3)$/.test(n)) return 'text-cyan-500 dark:text-cyan-400';
+      return 'text-slate-400 dark:text-slate-500';
+    },
+
+    /** Compact human-readable byte size. */
+    formatFileSize(bytes) {
+      if (bytes == null) return '';
+      var b = Number(bytes);
+      if (!isFinite(b) || b < 0) return '';
+      if (b < 1024) return b + ' B';
+      if (b < 1024 * 1024) return Math.round(b / 1024) + ' KB';
+      if (b < 1024 * 1024 * 1024) return (b / (1024 * 1024)).toFixed(1) + ' MB';
+      return (b / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
+    },
+
+    /** Short relative date label, e.g. "today", "Mon", "Jan 5", "2024". */
+    fileShortDate(modified) {
+      if (!modified) return '';
+      var d = new Date(modified);
+      if (isNaN(d.getTime())) return '';
+      var now = new Date();
+      var sameDay = d.toDateString() === now.toDateString();
+      if (sameDay) {
+        return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+      }
+      var diffMs = now - d;
+      var sevenDays = 7 * 24 * 60 * 60 * 1000;
+      if (diffMs >= 0 && diffMs < sevenDays) {
+        return d.toLocaleDateString(undefined, { weekday: 'short' });
+      }
+      var sameYear = d.getFullYear() === now.getFullYear();
+      if (sameYear) return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+      return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+    },
+
+    /** Inline metadata string (right side of file row): type · size · date based on view options. */
+    fileMetaInlineString(f) {
+      if (!f) return '';
+      var parts = [];
+      if (this.filesViewOptions.type && f.name) parts.push(this.fileTypeLabel(f.name));
+      if (this.filesViewOptions.size && f.size != null) parts.push(this.formatFileSize(f.size));
+      if (this.filesViewOptions.date && f.modified) parts.push(this.fileShortDate(f.modified));
+      return parts.join(' · ');
+    },
+
+    /** Whether any optional inline-meta info would be shown (used to decide layout). */
+    fileHasInlineMeta(f) {
+      if (!f) return false;
+      if (this.filesViewOptions.type && f.name) return true;
+      if (this.filesViewOptions.size && f.size != null) return true;
+      if (this.filesViewOptions.date && f.modified) return true;
+      return false;
+    },
+
+    /** Build a URL for accessing a file via the API (supports nested relPaths). */
+    fileApiPath(dir, relPath) {
+      if (dir === 'root') {
+        var name = String(relPath || '');
+        // Brief is served via the orchestrator-aware route (handles legacy LARRY.md migration).
+        if (name === 'CYRUS.md') return '/api/cyrus';
+        if (name === 'LARRY.md') return '/api/larry';
+        return '/api/files/root/' + encodeURIComponent(name);
+      }
+      return '/api/files/' + encodeURIComponent(dir) + '/' +
+        String(relPath || '').split('/').map(encodeURIComponent).join('/');
     },
 
     fileTypeLabel(name) {
-      var m = String(name || '').match(/\.([^.]+)$/);
+      var base = this.fileBaseName(name);
+      var m = String(base || '').match(/\.([^.]+)$/);
       var ext = m ? m[1].toLowerCase() : '';
       var map = {
-        md: 'Markdown',
-        markdown: 'Markdown',
+        md: 'Markdown', markdown: 'Markdown',
         pdf: 'PDF',
-        html: 'HTML',
-        htm: 'HTML',
+        html: 'HTML', htm: 'HTML',
         json: 'JSON',
         txt: 'Plain text',
         csv: 'CSV',
         sql: 'SQL',
-        png: 'PNG image',
-        jpg: 'JPEG image',
-        jpeg: 'JPEG image',
-        gif: 'GIF image',
-        webp: 'WebP image',
-        svg: 'SVG image',
+        png: 'PNG image', jpg: 'JPEG image', jpeg: 'JPEG image',
+        gif: 'GIF image', webp: 'WebP image', svg: 'SVG image',
         zip: 'ZIP archive',
-        doc: 'Word document',
-        docx: 'Word document',
-        xls: 'Excel spreadsheet',
-        xlsx: 'Excel spreadsheet',
+        doc: 'Word document', docx: 'Word document',
+        xls: 'Excel spreadsheet', xlsx: 'Excel spreadsheet',
       };
       if (map[ext]) return map[ext];
       if (ext) return ext.toUpperCase() + ' file';
@@ -4213,19 +4661,38 @@ document.addEventListener('alpine:init', function() {
     fileIsImage(name) { return /\.(png|jpe?g|gif|webp|svg|avif|bmp|ico)$/i.test(name); },
     fileIsAudio(name) { return /\.(mp3|wav|ogg|oga|m4a|aac|flac|opus)$/i.test(name); },
     fileIsVideo(name) { return /\.(mp4|webm|ogv|mov|m4v)$/i.test(name); },
-    fileDownloadHref(dir, name) {
-      return dir === 'root' ? '/api/cyrus' : '/api/files/' + encodeURIComponent(dir) + '/' + encodeURIComponent(name);
+    fileDownloadHref(dir, relPath) {
+      return this.fileApiPath(dir, relPath);
+    },
+    /** Meta tagging and archiving are only available for top-level files in meta-enabled dirs. */
+    fileMetaAndArchiveEnabled(dir, relPath) {
+      return ['docs', 'owners-inbox', 'team-inbox'].indexOf(dir) >= 0 && !String(relPath || '').includes('/');
     },
 
-    findFileEntry(dir, name) {
+    findFileEntry(dir, relPath) {
       var sec = this.fileSections.find(function(s) { return s.dir === dir; });
-      if (!sec || !sec.files) return null;
-      return sec.files.find(function(f) { return f.name === name; }) || null;
+      if (!sec) return null;
+      var parts = String(relPath || '').split('/');
+      var entries = sec.entries || [];
+      for (var i = 0; i < parts.length - 1; i++) {
+        var part = parts[i];
+        var dirEntry = null;
+        for (var j = 0; j < entries.length; j++) {
+          if (entries[j].isDir && entries[j].name === part) { dirEntry = entries[j]; break; }
+        }
+        if (!dirEntry) return null;
+        entries = dirEntry.children || [];
+      }
+      var fileName = parts[parts.length - 1];
+      for (var k = 0; k < entries.length; k++) {
+        if (!entries[k].isDir && entries[k].name === fileName) return entries[k];
+      }
+      return null;
     },
 
     openFileMetaEditor() {
       var p = this.viewerPath || this.editorPath;
-      if (!p || !this.fileMetaEnabled(p.dir)) return;
+      if (!p || !this.fileMetaAndArchiveEnabled(p.dir, p.name)) return;
       var f = this.findFileEntry(p.dir, p.name);
       this.fileMetaDraft = {
         dir: p.dir,
@@ -4293,7 +4760,7 @@ document.addEventListener('alpine:init', function() {
     },
 
     async triggerFileDownload(dir, name) {
-      var url = this.fileDownloadHref(dir, name);
+      var url = this.fileApiPath(dir, name);
       try {
         var r = await fetchWithAuth(url);
         if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -4347,7 +4814,7 @@ document.addEventListener('alpine:init', function() {
     openAssetViewer(dir, name, mode) {
       this.editorOpen = false;
       this.viewerPath = { dir: dir, name: name };
-      this.viewerTitle = name;
+      this.viewerTitle = this.fileBaseName(name);
       this.viewerContent = '';
       this.viewerLoadError = '';
       this.viewerDisplayMode = mode;
@@ -4362,7 +4829,7 @@ document.addEventListener('alpine:init', function() {
     showDownloadOnlyPanel(dir, name) {
       this.editorOpen = false;
       this.viewerPath = { dir: dir, name: name };
-      this.viewerTitle = name;
+      this.viewerTitle = this.fileBaseName(name);
       this.viewerContent = '';
       this.viewerLoadError = '';
       this.viewerDisplayMode = 'download';
@@ -4391,10 +4858,10 @@ document.addEventListener('alpine:init', function() {
     },
 
     async viewFile(dir, name) {
-      var url = dir === 'root' ? '/api/cyrus' : '/api/files/' + encodeURIComponent(dir) + '/' + encodeURIComponent(name);
+      var url = this.fileApiPath(dir, name);
       this.editorOpen = false;
       this.viewerPath = { dir: dir, name: name };
-      this.viewerTitle = name;
+      this.viewerTitle = this.fileBaseName(name);
       this.viewerLoadError = '';
       try {
         var r = await fetchWithAuth(url);
@@ -4422,14 +4889,14 @@ document.addEventListener('alpine:init', function() {
     },
 
     async editFile(dir, name) {
-      var url = dir === 'root' ? '/api/cyrus' : '/api/files/' + encodeURIComponent(dir) + '/' + encodeURIComponent(name);
+      var url = this.fileApiPath(dir, name);
       try {
         var r = await fetchWithAuth(url);
         var text = await r.text();
         this.viewerOpen = false;
         this.viewerPath = null;
         this.editorPath = { dir: dir, name: name };
-        this.editorTitle = name;
+        this.editorTitle = this.fileBaseName(name);
         this.editorContent = text;
         this.editorOpen = true;
         var self = this;
@@ -4443,7 +4910,7 @@ document.addEventListener('alpine:init', function() {
       if (!this.editorPath) return;
       this.editorSaving = true;
       var p = this.editorPath;
-      var url = p.dir === 'root' ? '/api/cyrus' : '/api/files/' + encodeURIComponent(p.dir) + '/' + encodeURIComponent(p.name);
+      var url = this.fileApiPath(p.dir, p.name);
       try {
         var r = await fetchWithAuth(url, { method: 'PUT', headers: { 'Content-Type': 'text/plain' }, body: this.editorContent });
         await r.json();

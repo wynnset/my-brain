@@ -17,6 +17,18 @@ function safeBrowseFileName(name) {
   return base;
 }
 
+/** Validates a relative path that may include subdirectory segments (no traversal, no hidden files). */
+function safeBrowseRelPath(relPath) {
+  if (!relPath || typeof relPath !== 'string') return null;
+  const normalized = path.normalize(relPath.trim().replace(/\\/g, '/'));
+  if (path.isAbsolute(normalized)) return null;
+  const parts = normalized.split(path.sep);
+  for (const part of parts) {
+    if (!part || part === '.' || part === '..' || part.startsWith('.')) return null;
+  }
+  return parts.join('/');
+}
+
 function sanitizeMetaString(v) {
   if (v == null) return '';
   const s = String(v).trim();
@@ -48,24 +60,50 @@ function metaFieldsForFile(map, fileName) {
   };
 }
 
-function attachMetaToEntries(dirPath, entries) {
-  const map = readFilesMetaMap(dirPath);
-  return entries.map((e) => {
-    const x = metaFieldsForFile(map, e.name);
-    return { ...e, createdBy: x.createdBy, domain: x.domain, category: x.category };
-  });
-}
-
 /** Tags (createdBy / domain / category), PATCH meta, and archive only apply under these folders. */
 const FILES_META_DIRS = new Set(['owners-inbox', 'team-inbox', 'docs']);
 
-function entriesWithoutMeta(entries) {
-  return entries.map((e) => ({
-    ...e,
-    createdBy: '',
-    domain: '',
-    category: '',
-  }));
+/**
+ * Recursively list entries in a directory.
+ * Returns files and subdirectories; hidden files / archived files are excluded.
+ * @param {string} dirPath  Absolute path to scan.
+ * @param {Object|null} metaMap  Pre-loaded .files-meta.json map (for top-level meta dirs only).
+ */
+function listDirEntries(dirPath, metaMap) {
+  if (!fs.existsSync(dirPath)) return [];
+  let names;
+  try { names = fs.readdirSync(dirPath); } catch (_) { return []; }
+  names = names.filter((n) => !n.startsWith('.') && !n.startsWith('_archived_'));
+
+  const result = [];
+  for (const name of names) {
+    const fullPath = path.join(dirPath, name);
+    let stat;
+    try { stat = fs.statSync(fullPath); } catch (_) { continue; }
+    if (stat.isDirectory()) {
+      result.push({ name, isDir: true, children: listDirEntries(fullPath, null) });
+    } else if (stat.isFile()) {
+      const entry = { name, size: stat.size, modified: stat.mtime, isDir: false };
+      if (metaMap) {
+        const m = metaMap[name] || {};
+        entry.createdBy = typeof m.createdBy === 'string' ? m.createdBy : '';
+        entry.domain    = typeof m.domain    === 'string' ? m.domain    : '';
+        entry.category  = typeof m.category  === 'string' ? m.category  : '';
+      } else {
+        entry.createdBy = '';
+        entry.domain    = '';
+        entry.category  = '';
+      }
+      result.push(entry);
+    }
+  }
+
+  return result.sort((a, b) => {
+    if (a.isDir && !b.isDir) return -1;
+    if (!a.isDir && b.isDir) return 1;
+    if (a.isDir && b.isDir) return a.name.localeCompare(b.name);
+    return new Date(b.modified) - new Date(a.modified);
+  });
 }
 
 const UPLOAD_FILENAME_AGENT_IDS = new Set([
@@ -106,6 +144,29 @@ function buildTeamInboxUploadMeta(filename, body, getHeader, pages) {
 
 const BROWSABLE = ['owners-inbox', 'team-inbox', 'team', 'docs'];
 const EDITABLE_EXTS = ['.md', '.html', '.txt', '.json'];
+
+/** System-managed files at the workspace root that should be hidden from the file browser. */
+const ROOT_DENY_NAMES = new Set(['brain.db', 'config.json', 'dashboard.json']);
+const ROOT_DENY_PREFIXES = ['dashboard.json.', 'config.json.', '.cyrus-', '.larry-'];
+
+function listVisibleRootFiles(wsPath) {
+  if (!fs.existsSync(wsPath)) return [];
+  let names;
+  try { names = fs.readdirSync(wsPath); } catch (_) { return []; }
+  return names
+    .filter((n) => !n.startsWith('.') && !n.startsWith('_'))
+    .filter((n) => !ROOT_DENY_NAMES.has(n))
+    .filter((n) => !ROOT_DENY_PREFIXES.some((p) => n.startsWith(p)))
+    .map((n) => {
+      const full = path.join(wsPath, n);
+      let stat;
+      try { stat = fs.statSync(full); } catch (_) { return null; }
+      if (!stat.isFile()) return null;
+      return { name: n, size: stat.size, modified: stat.mtime, isDir: false, createdBy: '', domain: '', category: '' };
+    })
+    .filter(Boolean)
+    .sort((a, b) => new Date(b.modified) - new Date(a.modified));
+}
 
 function registerFileRoutes(app, ctx) {
   const {
@@ -153,18 +214,6 @@ function registerFileRoutes(app, ctx) {
     return { dirPath, fileName: base, fullPath };
   }
 
-  function listVisibleFilesInDir(dirPath) {
-    if (!fs.existsSync(dirPath)) return [];
-    return fs.readdirSync(dirPath)
-      .filter((name) => !name.startsWith('.') && !name.startsWith('_archived_'))
-      .map((name) => {
-        const stat = fs.statSync(path.join(dirPath, name));
-        if (!stat.isFile()) return null;
-        return { name, size: stat.size, modified: stat.mtime };
-      })
-      .filter(Boolean)
-      .sort((a, b) => b.modified - a.modified);
-  }
 
   app.post('/api/upload', upload.array('files'), (req, res) => {
     if (!req.files?.length) return res.status(400).json({ error: 'No files received' });
@@ -194,15 +243,12 @@ function registerFileRoutes(app, ctx) {
     const result = {};
     for (const dir of BROWSABLE) {
       const dirPath = safeJoin(ws, dir);
-      const listed = listVisibleFilesInDir(dirPath);
-      result[dir] = FILES_META_DIRS.has(dir) ? attachMetaToEntries(dirPath, listed) : entriesWithoutMeta(listed);
+      const metaMap = FILES_META_DIRS.has(dir) ? readFilesMetaMap(dirPath) : null;
+      result[dir] = listDirEntries(dirPath, metaMap);
     }
-    const briefPath = resolveOrchestratorBriefPathInWorkspace(ws);
-    if (briefPath) {
-      const stat = fs.statSync(briefPath);
-      const rootName = path.basename(briefPath);
-      result['root'] = entriesWithoutMeta([{ name: rootName, size: stat.size, modified: stat.mtime }]);
-    }
+    // Root-level files (non-system, non-hidden, top-level only).
+    // The brief (CYRUS.md) is naturally included; legacy LARRY.md surfaces if present.
+    result['root'] = listVisibleRootFiles(ws);
     res.json(result);
   });
 
@@ -260,15 +306,37 @@ function registerFileRoutes(app, ctx) {
     res.json({ ok: true, archivedAs: newName });
   });
 
-  app.get('/api/files/:dir/:name', (req, res) => {
-    const { dir, name } = req.params;
-    if (!BROWSABLE.includes(dir)) return res.status(403).end();
-    let filePath;
-    try {
-      filePath = safeJoin(workspaceDirForRequest(req), dir, name);
-    } catch (_) {
-      return res.status(400).end();
+  /** Resolve a file path for the wildcard GET/PUT routes. Handles 'root' specially. */
+  function resolveWildcardFilePath(req, dir, relPath, { forWrite } = {}) {
+    if (dir === 'root') {
+      const safe = safeBrowseFileName(relPath);
+      if (!safe) return null;
+      // System files at root are off-limits.
+      if (ROOT_DENY_NAMES.has(safe)) return null;
+      if (ROOT_DENY_PREFIXES.some((p) => safe.startsWith(p))) return null;
+      const ws = workspaceDirForRequest(req);
+      // Brief: route to migration-aware path on GET, write target on PUT.
+      if (safe === ORCH_BRIEF_FILE || safe === ORCH_BRIEF_LEGACY) {
+        const briefRead = resolveOrchestratorBriefPathInWorkspace(ws);
+        if (forWrite && orchestrator.orchestratorBriefWritePathForWorkspace) {
+          return orchestrator.orchestratorBriefWritePathForWorkspace(ws);
+        }
+        return briefRead;
+      }
+      try { return safeJoin(ws, safe); } catch (_) { return null; }
     }
+    if (!BROWSABLE.includes(dir)) return null;
+    const safe = safeBrowseRelPath(relPath);
+    if (!safe) return null;
+    try { return safeJoin(workspaceDirForRequest(req), dir, safe); } catch (_) { return null; }
+  }
+
+  // Wildcard routes for file serving/editing — supports nested subdirectories under known dirs,
+  // and top-level files at the workspace root via `dir === 'root'`.
+  // PATCH (meta) and POST (archive) use fixed :dir/:name patterns and remain top-level only.
+  app.get('/api/files/:dir/*', (req, res) => {
+    const filePath = resolveWildcardFilePath(req, req.params.dir, req.params[0]);
+    if (!filePath) return res.status(req.params.dir === 'root' || BROWSABLE.includes(req.params.dir) ? 400 : 403).end();
     if (!fs.existsSync(filePath)) return res.status(404).end();
     try {
       if (!fs.statSync(filePath).isFile()) return res.status(404).end();
@@ -278,17 +346,16 @@ function registerFileRoutes(app, ctx) {
     res.sendFile(filePath);
   });
 
-  app.put('/api/files/:dir/:name', express.text({ type: '*/*', limit: '2mb' }), (req, res) => {
-    const { dir, name } = req.params;
-    if (!BROWSABLE.includes(dir)) return res.status(403).end();
-    if (!EDITABLE_EXTS.includes(path.extname(name)))
-      return res.status(403).json({ error: 'File type not editable' });
-    let putPath;
-    try {
-      putPath = safeJoin(workspaceDirForRequest(req), dir, name);
-    } catch (_) {
-      return res.status(400).json({ error: 'Invalid path' });
+  app.put('/api/files/:dir/*', express.text({ type: '*/*', limit: '2mb' }), (req, res) => {
+    const { dir } = req.params;
+    const relPath = req.params[0];
+    const putPath = resolveWildcardFilePath(req, dir, relPath, { forWrite: true });
+    if (!putPath) {
+      const code = (dir === 'root' || BROWSABLE.includes(dir)) ? 400 : 403;
+      return res.status(code).json({ error: 'Invalid path' });
     }
+    if (!EDITABLE_EXTS.includes(path.extname(putPath)))
+      return res.status(403).json({ error: 'File type not editable' });
     try {
       if (fs.existsSync(putPath) && !fs.statSync(putPath).isFile())
         return res.status(403).json({ error: 'Not a file' });

@@ -23,7 +23,17 @@ primary_region = 'yyz'
   source = 'brain_data_v2'
   destination = '/data'
   # 60 days is the Fly maximum; well within the 10 GB/mo free snapshot allowance for this volume.
+  # Also pinned on the volume directly via `fly volumes update vol_vwnewwkdw65ww39v --snapshot-retention 60`.
   snapshot_retention = 60
+
+# NOTE: flyctl >= 0.4.42 has a deploy-planner bug on single-volume single-machine
+# apps: `fly deploy` insists on creating a new machine and fails with
+# "creating a new machine in group 'app' requires an unattached 'brain_data_v2'
+# volume". Workaround until upstream fixes it:
+#   1) fly deploy --build-only            # build + push the image
+#   2) fly machine update <id> --image <pushed-image-ref> --yes
+# (Removing snapshot_retention from this file does NOT change the behavior;
+# tested 2026-04-28.)
 
 [http_service]
   internal_port = 8080

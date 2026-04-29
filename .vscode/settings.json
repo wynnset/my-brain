@@ -1,9 +1,31 @@
 {
+  // Prevent editors from rewriting Alpine-heavy templates; Prettier is limited via prettier.documentSelectors (no *.html).
+  "files.associations": {
+    "**/app/public/dashboard.html": "plaintext"
+  },
   "editor.formatOnSave": false,
+  "editor.formatOnPaste": false,
+  "editor.formatOnType": false,
+  "html.format.enable": false,
+  "html.format.indentInnerHtml": false,
+  "tidyHtml.formatOnSave": false,
+  "prettier.disableLanguages": ["html", "plaintext"],
+  "prettier.documentSelectors": [
+    "**/*.cjs",
+    "**/*.css",
+    "**/*.js",
+    "**/*.json",
+    "**/*.md",
+    "**/*.mjs",
+    "**/*.ts",
+    "**/*.tsx",
+    "**/*.vue"
+  ],
   "editor.codeActionsOnSave": {
     "source.fixAll": "never",
     "source.fixAll.eslint": "never",
     "source.fixAll.biome": "never",
+    "source.fixAll.prettier": "never",
     "source.organizeImports": "never",
     "source.removeUnusedImports": "never"
   },
@@ -11,6 +33,14 @@
   "eslint.format.enable": false,
   "[html]": {
     "editor.formatOnSave": false,
+    "editor.formatOnPaste": false,
+    "editor.formatOnType": false,
+    "editor.defaultFormatter": null
+  },
+  "[plaintext]": {
+    "editor.formatOnSave": false,
+    "editor.formatOnPaste": false,
+    "editor.formatOnType": false,
     "editor.defaultFormatter": null
   },
   "[javascript]": {

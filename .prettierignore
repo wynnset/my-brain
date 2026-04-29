@@ -1,0 +1,2 @@
+# Large Alpine.js templates: Prettier breaks @click/:class/:key attributes and inline SVG.
+app/public/dashboard.html

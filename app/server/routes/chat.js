@@ -39,8 +39,6 @@ module.exports = function registerChatRoutes(app, ctx) {
 
   // ─── Chat sessions (JSON files under tenant dataDir/chat-sessions) ─────────────
   const CHAT_LIST_LIMIT = 200;
-  /** Hard cap on how many conversations a tenant may pin. Keeps the "stack at top" UX compact. */
-  const CHAT_MAX_PINS = 5;
   /** SSE keepalive while the model runs; UI copy rotates on its own — this only needs to beat proxy timeouts. */
   const CHAT_HEARTBEAT_MS = Number(process.env.BRAIN_CHAT_HEARTBEAT_MS) || 5000;
   /** Throttle for writing in-progress assistant text to the session JSON (registry / multi-tab path). */
@@ -1454,7 +1452,7 @@ module.exports = function registerChatRoutes(app, ctx) {
       if (a.pinned && b.pinned) return String(b.pinnedAt || '').localeCompare(String(a.pinnedAt || ''));
       return String(b.updatedAt).localeCompare(String(a.updatedAt));
     });
-    res.json({ conversations: items.slice(0, CHAT_LIST_LIMIT), maxPins: CHAT_MAX_PINS });
+    res.json({ conversations: items.slice(0, CHAT_LIST_LIMIT) });
   });
   
   app.get('/api/chat/models', (req, res) => {
@@ -1570,8 +1568,6 @@ module.exports = function registerChatRoutes(app, ctx) {
   /**
    * Toggle "pinned" on a conversation so the dashboard can show it in the
    * stacked quick-switch strip above the active chat. Body: `{ pinned: boolean }`.
-   * Enforces a hard cap of `CHAT_MAX_PINS` pins per tenant so the UI strip
-   * stays compact.
    */
   app.post('/api/chat/conversations/:id/pin', (req, res) => {
     const id = req.params.id;
@@ -1580,27 +1576,6 @@ module.exports = function registerChatRoutes(app, ctx) {
     if (!sess) return res.status(404).json({ error: 'Conversation not found' });
     const body = req.body && typeof req.body === 'object' ? req.body : {};
     const pinned = body.pinned === true || body.pinned === 'true';
-    const alreadyPinned = Boolean(sess.pinnedAt);
-
-    if (pinned && !alreadyPinned) {
-      let pinCount = 0;
-      try {
-        const files = fs.readdirSync(chatSessionsDirForRequest(req)).filter((f) => f.endsWith('.json'));
-        for (const f of files) {
-          const otherId = f.replace(/\.json$/, '');
-          if (!CHAT_ID_RE.test(otherId)) continue;
-          if (otherId === id) continue;
-          const other = readChatSession(req, otherId);
-          if (other && other.pinnedAt) pinCount++;
-        }
-      } catch (_) {}
-      if (pinCount >= CHAT_MAX_PINS) {
-        return res.status(400).json({
-          error: `You can pin up to ${CHAT_MAX_PINS} chats. Unpin another chat first.`,
-          maxPins: CHAT_MAX_PINS,
-        });
-      }
-    }
 
     if (pinned) {
       sess.pinnedAt = new Date().toISOString();

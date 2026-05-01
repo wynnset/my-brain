@@ -1834,6 +1834,95 @@ document.addEventListener('alpine:init', function() {
       return 'brain_chat_draft:' + (convId ? String(convId) : '__new__');
     },
 
+    /** Ephemeral persisted queued sends (prompt + phase only — File attachments cannot survive a refresh). */
+    chatOutboundQueueStorageKey(convId) {
+      return 'brain_chat_outbound_q:' + String(convId || '');
+    },
+
+    persistOutboundQueueForConv(convId) {
+      if (!convId) return;
+      try {
+        var b = this.getChatStreamBucket(convId);
+        var raw = (b && b.outboundQueue) || [];
+        var rows = [];
+        for (var i = 0; i < raw.length; i++) {
+          var row = raw[i];
+          if (!row || typeof row.prompt !== 'string') continue;
+          rows.push({
+            id: row.id != null ? String(row.id) : 'q-' + Date.now(),
+            prompt: row.prompt,
+            planPhase: row.planPhase || null,
+          });
+        }
+        var key = this.chatOutboundQueueStorageKey(convId);
+        if (rows.length) sessionStorage.setItem(key, JSON.stringify(rows));
+        else sessionStorage.removeItem(key);
+      } catch (_) {}
+    },
+
+    /**
+     * Rebuild `[{ id, prompt, files, planPhase }]` from sessionStorage after refresh.
+     * @returns {{ id: string, prompt: string, files: [], planPhase: string | null }[]}
+     */
+    hydrateOutboundQueueForConv(convId) {
+      if (!convId) return [];
+      try {
+        var s = sessionStorage.getItem(this.chatOutboundQueueStorageKey(convId));
+        if (!s) return [];
+        var parsed = JSON.parse(s);
+        if (!Array.isArray(parsed)) return [];
+        var out = [];
+        for (var i = 0; i < parsed.length; i++) {
+          var row = parsed[i];
+          if (!row || typeof row.prompt !== 'string' || !row.prompt.trim()) continue;
+          var id =
+            row.id != null && String(row.id).trim()
+              ? String(row.id)
+              : 'q-hydrated-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+          out.push({
+            id: id,
+            prompt: row.prompt,
+            files: [],
+            planPhase:
+              row.planPhase === 'plan' || row.planPhase === 'execute' ? row.planPhase : null,
+          });
+        }
+        return out;
+      } catch (_) {
+        return [];
+      }
+    },
+
+    /**
+     * If the bucket has queued sends and nothing is streaming, run the next (active conv only).
+     * Used after swaps from background completion + on boot when queue was hydrated.
+     */
+    maybeDrainChatOutboundQueueForBucket(convId) {
+      var self = this;
+      var id = convId ? String(convId).trim() : '';
+      if (!id || this.chatConversationId !== id) return;
+      var bucket = this.getChatStreamBucket(id);
+      if (!bucket || bucket.streaming || bucket.outboundInFlight || !bucket.outboundQueue || !bucket.outboundQueue.length) {
+        return;
+      }
+      var next = bucket.outboundQueue.shift();
+      if (this.chatConversationId === id) this.chatOutboundQueue = bucket.outboundQueue;
+      this.persistOutboundQueueForConv(id);
+      bucket.outboundInFlight = true;
+      if (this.chatConversationId === id) this.chatOutboundInFlight = true;
+      this.$nextTick(function() {
+        self
+          .runChatTurn(next.prompt, next.files || [], {
+            planPhase: next.planPhase || null,
+            fromOutboundQueue: true,
+            anchorConvId: id,
+          })
+          .catch(function (e) {
+            console.warn('[chat] queued turn', e);
+          });
+      });
+    },
+
     /** Persist the current `chatPrompt` to localStorage under the active conv's key. */
     persistChatDraftToStorage() {
       try {
@@ -1898,7 +1987,10 @@ document.addEventListener('alpine:init', function() {
      */
     async swapActiveChatConversation(newConvId, sess) {
       var prev = this.chatConversationId;
-      if (prev) this.snapshotRootChatIntoBucket(prev);
+      if (prev) {
+        this.snapshotRootChatIntoBucket(prev);
+        this.persistOutboundQueueForConv(prev);
+      }
 
       this.chatConversationId = newConvId;
       if (newConvId) this.setChatPinnedUnread(newConvId, false);
@@ -1936,6 +2028,9 @@ document.addEventListener('alpine:init', function() {
       b.chatAgent = sess.agent != null ? String(sess.agent) : this.chatAgent;
       if (sess.active) {
         this.ensureBackgroundStreamAttach(newConvId);
+      }
+      if (!sess.active) {
+        this.maybeDrainChatOutboundQueueForBucket(newConvId);
       }
     },
 
@@ -2198,6 +2293,7 @@ document.addEventListener('alpine:init', function() {
         self.$nextTick(function() {
           self.refreshIcons();
         });
+        self.maybeDrainChatOutboundQueueForBucket(convId);
       }
     },
 
@@ -2224,6 +2320,7 @@ document.addEventListener('alpine:init', function() {
         this.hydrateChatWorkspaceTouches(sess);
       }
       if (sess.active) this.ensureBackgroundStreamAttach(convId);
+      if (!sess.active) this.maybeDrainChatOutboundQueueForBucket(convId);
     },
 
     currentChatOutboundBusy() {
@@ -2234,7 +2331,11 @@ document.addEventListener('alpine:init', function() {
 
     /** Local-only chat shell: no server session until the user sends a message. */
     enterDraftChatState() {
-      if (this.chatConversationId) this.snapshotRootChatIntoBucket(this.chatConversationId);
+      if (this.chatConversationId) {
+        var cid = this.chatConversationId;
+        this.snapshotRootChatIntoBucket(cid);
+        this.persistOutboundQueueForConv(cid);
+      }
       this.chatConversationId = null;
       this.restoreRootFromChatBucket(null);
       this.chatTitleEditing = false;
@@ -2381,13 +2482,16 @@ document.addEventListener('alpine:init', function() {
           await this.swapActiveChatConversation(String(sess.id), sess);
           var bb = this.getChatStreamBucket(String(sess.id));
           if (bb) {
-            bb.outboundQueue = [];
+            bb.outboundQueue = this.hydrateOutboundQueueForConv(String(sess.id));
             bb.outboundInFlight = false;
           }
           this.chatOutboundQueue = bb ? bb.outboundQueue : [];
           this.chatOutboundInFlight = false;
           this.hydrateChatPlanFromSession(sess);
           this.hydrateChatWorkspaceTouches(sess);
+          if (!sess.active) {
+            this.maybeDrainChatOutboundQueueForBucket(String(sess.id));
+          }
           return;
         }
         try { localStorage.removeItem('brain_last_chat_id'); } catch (_) {}
@@ -2440,6 +2544,7 @@ document.addEventListener('alpine:init', function() {
       this.hydrateChatPlanFromSession(sess);
       this.hydrateChatWorkspaceTouches(sess);
       if (sess.active) this.ensureBackgroundStreamAttach(this.chatConversationId);
+      if (!sess.active) this.maybeDrainChatOutboundQueueForBucket(this.chatConversationId);
     },
 
     startChatTitleEdit() {
@@ -5331,6 +5436,7 @@ document.addEventListener('alpine:init', function() {
       if (idx < 0) return;
       b.outboundQueue.splice(idx, 1);
       if (this.chatConversationId === b.convId) this.chatOutboundQueue = b.outboundQueue;
+      this.persistOutboundQueueForConv(b.convId);
       if (!b.outboundQueue.length) this.chatQueuePreviewOpen = false;
     },
 
@@ -5446,6 +5552,7 @@ document.addEventListener('alpine:init', function() {
           planPhase: planPhase,
         });
         if (this.chatConversationId === b.convId) this.chatOutboundQueue = b.outboundQueue;
+        this.persistOutboundQueueForConv(convId);
         this.chatPrompt = '';
         this.chatFiles = [];
         var self = this;
@@ -5477,6 +5584,7 @@ document.addEventListener('alpine:init', function() {
           planPhase: 'execute',
         });
         this.chatOutboundQueue = b.outboundQueue;
+        this.persistOutboundQueueForConv(this.chatConversationId);
         this.chatPrompt = '';
         var self = this;
         this.$nextTick(function() {
@@ -5495,16 +5603,22 @@ document.addEventListener('alpine:init', function() {
      * Sends one user turn (optional team-inbox file upload, then chat stream).
      * Serializes with the outbound queue: when this turn finishes, the next queued item runs automatically.
      * opts.fromOutboundQueue: if true, do not clear the composer; the user may be drafting the next message.
+     * opts.anchorConvId: pin this turn to a conversation (queued drains use it so a mid-turn chat swap cannot mis-route the send).
      */
     async runChatTurn(prompt, files, opts) {
       var self = this;
       opts = opts || {};
       var skipQueueDrain = false;
       files = files || [];
-      var convId = this.chatConversationId;
+      var anchored =
+        opts.anchorConvId != null &&
+        opts.anchorConvId !== undefined &&
+        String(opts.anchorConvId).trim().length > 0;
+      var convId = anchored ? String(opts.anchorConvId).trim() : this.chatConversationId;
+      if (!convId) return;
       var bucket = convId ? this.ensureChatStreamBucket(convId) : null;
       if (bucket && !bucket.outboundInFlight) bucket.outboundInFlight = true;
-      if (!this.chatOutboundInFlight) this.chatOutboundInFlight = true;
+      if (!this.chatOutboundInFlight && this.chatConversationId === convId) this.chatOutboundInFlight = true;
       try {
         if (files.length > 0) {
           try {
@@ -5521,15 +5635,18 @@ document.addEventListener('alpine:init', function() {
           }
         }
         this.maybeRequestNotificationPermission();
-        try {
-          await this.ensureChatConversation();
-        } catch (e) {
-          alert('Could not start chat: ' + e.message);
-          skipQueueDrain = true;
-          return;
+        if (!anchored) {
+          try {
+            await this.ensureChatConversation();
+          } catch (e) {
+            alert('Could not start chat: ' + e.message);
+            skipQueueDrain = true;
+            return;
+          }
+          convId = this.chatConversationId;
         }
-        convId = this.chatConversationId;
         bucket = this.ensureChatStreamBucket(convId);
+        if (!bucket) return;
         if (this.chatConversationId === convId) this.restoreRootFromChatBucket(convId);
 
         var optimisticId = 'local-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
@@ -5607,6 +5724,7 @@ document.addEventListener('alpine:init', function() {
             this.$nextTick(function() {
               self.syncChatComposerHeights();
             });
+            this.persistOutboundQueueForConv(convId);
             return;
           }
           if (res.status === 402) {
@@ -5698,23 +5816,29 @@ document.addEventListener('alpine:init', function() {
         });
         if (skipQueueDrain) {
           if (bucket) bucket.outboundInFlight = false;
-          self.chatOutboundInFlight = false;
-        } else if (bucket && bucket.outboundQueue.length) {
+          if (self.chatConversationId === convId) self.chatOutboundInFlight = false;
+        } else if (bucket && bucket.outboundQueue.length && self.chatConversationId === convId) {
           var next = bucket.outboundQueue.shift();
-          if (self.chatConversationId === convId) self.chatOutboundQueue = bucket.outboundQueue;
+          self.chatOutboundQueue = bucket.outboundQueue;
+          self.persistOutboundQueueForConv(convId);
           self.$nextTick(function() {
             self
               .runChatTurn(next.prompt, next.files || [], {
                 planPhase: next.planPhase || null,
                 fromOutboundQueue: true,
+                anchorConvId: convId,
               })
               .catch(function(e) {
                 console.warn('[chat] queued turn', e);
               });
           });
+        } else if (bucket && bucket.outboundQueue.length && self.chatConversationId !== convId) {
+          bucket.outboundInFlight = false;
+          self.persistOutboundQueueForConv(bucket.convId);
         } else {
           if (bucket) bucket.outboundInFlight = false;
-          self.chatOutboundInFlight = false;
+          if (self.chatConversationId === convId) self.chatOutboundInFlight = false;
+          if (bucket) self.persistOutboundQueueForConv(bucket.convId);
         }
       }
     },

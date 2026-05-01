@@ -49,8 +49,9 @@ files or broad searches in one minute will hit it and fail with a 429.
    challenge (Cloudflare, CAPTCHA), an empty shell, or “enable JavaScript”
    boilerplate, you may use **one** extra tools budget for
    `mcp__brainBrowser__browser_fetch` on the same URL (headless Chromium —
-   slower, heavier). Still stay within the spirit of the cap; do not chain
-   browser fetches on unrelated URLs without brief approval.
+   slower, heavier). The same applies when `Bash`+curl (or similar) returns
+   bot HTML or an interstitial you cannot parse. Still stay within the spirit
+   of the cap; do not chain browser fetches on unrelated URLs without brief approval.
 5. **If a 429 fires, do not retry the same call.** Tighten, split, or
    abandon the task and say so in your final message.
 

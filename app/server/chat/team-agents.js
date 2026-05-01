@@ -284,9 +284,33 @@ function parseGlobalToolAllowEnv(raw) {
   return parts.length ? parts : null;
 }
 
+const BROWSER_FETCH_MCP_TOOL = 'mcp__brainBrowser__browser_fetch';
+
+/**
+ * Adds the headless-browser MCP tool to any subagent that already has WebFetch
+ * or WebSearch, so Task delegates can escalate when simple WebFetch fails.
+ * Skips if `BRAIN_CHAT_SUBAGENT_TOOLS` narrows the allowlist and omits this
+ * tool (operators must add `mcp__brainBrowser__browser_fetch` explicitly).
+ *
+ * @param {Record<string, { tools?: string[] }> | undefined} agentDefs
+ * @param {string[] | null} globalToolAllow from {@link parseGlobalToolAllowEnv}
+ */
+function attachBrowserMcpToTeamAgents(agentDefs, globalToolAllow) {
+  if (!agentDefs) return;
+  const narrowed = globalToolAllow && globalToolAllow.length;
+  if (narrowed && !globalToolAllow.includes(BROWSER_FETCH_MCP_TOOL)) return;
+  for (const def of Object.values(agentDefs)) {
+    if (!def || !Array.isArray(def.tools)) continue;
+    const t = def.tools;
+    if (!t.some((x) => x === 'WebFetch' || x === 'WebSearch')) continue;
+    if (!t.includes(BROWSER_FETCH_MCP_TOOL)) t.push(BROWSER_FETCH_MCP_TOOL);
+  }
+}
+
 module.exports = {
   loadTenantAgentDefinitions,
   parseGlobalToolAllowEnv,
+  attachBrowserMcpToTeamAgents,
   parseFrontmatter,
   agentSlugFromFilename,
   DEFAULT_SUBAGENT_TOOLS,

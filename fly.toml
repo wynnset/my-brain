@@ -14,6 +14,9 @@ primary_region = 'yyz'
   DB_DIR = '/data'
   NODE_ENV = 'production'
   PORT = '8080'
+  # Headless Chromium MCP for chat when WebFetch hits bot walls (see mcp-browser-fetch.mjs).
+  BRAIN_CHAT_MCP_BROWSER = '1'
+  # If you set BRAIN_CHAT_ALLOWED_TOOLS, include mcp__brainBrowser__browser_fetch for Cyrus / web agents.
   # SESSION_SECRET (32+ chars) is required — set via `fly secrets set SESSION_SECRET='…'`.
 
 [[mounts]]

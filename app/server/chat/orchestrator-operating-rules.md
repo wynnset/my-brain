@@ -161,6 +161,10 @@ directly or synthesize a subagent's result.
   available, use it. Do not rely on what you already know about how
   something works — fetch the current page and read it. Facts expire;
   fetched pages don't lie about their last-modified date.
+- **When `WebFetch` fails on a page you truly need,** try the MCP tool
+  `mcp__brainBrowser__browser_fetch` on that URL (headless Chromium). Use it
+  only after a failed or useless `WebFetch` — not for search-engine result
+  HTML, and not as the first hop for routine pages.
 - **When the user pushes back, search harder — don't defend.** A user
   correction is a signal that your search was incomplete, not that they
   are wrong. Re-run the search with different terms before holding your

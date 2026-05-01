@@ -1,8 +1,9 @@
-FROM node:20-alpine
+FROM node:20-bookworm-slim
 
-# System tools agents need; su-exec drops root after volume init (Claude CLI disallows
-# --dangerously-skip-permissions when running as root).
-RUN apk add --no-cache bash curl jq sqlite su-exec
+# System tools agents need; gosu drops privileges like su-exec (Alpine) did.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    bash curl jq sqlite3 ca-certificates gosu \
+    && rm -rf /var/lib/apt/lists/*
 
 # Litestream — streams SQLite WAL frames to Tigris (Fly object storage) for
 # near-real-time backup of every per-tenant DB on the volume. Pinned to a
@@ -20,15 +21,22 @@ RUN npm install -g @anthropic-ai/claude-code
 
 WORKDIR /app
 
+# Playwright: skip browser download during npm install; install chromium explicitly below.
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
 # Node dependencies
 COPY app/package.json ./
-RUN npm install --omit=dev
+RUN npm install --omit=dev \
+  && npx playwright install-deps chromium \
+  && npx playwright install chromium \
+  && chown -R node:node /ms-playwright
 
 # App code
 COPY app/server.js ./
 COPY app/server ./server
 COPY app/public ./public
-COPY app/chat-sdk-runner.mjs app/mcp-brain-db.mjs ./
+COPY app/chat-sdk-runner.mjs app/mcp-brain-db.mjs app/mcp-browser-fetch.mjs ./
 # Tracked seeds (not under gitignored data/) so remote Fly builds receive them
 COPY docker-seed/registry.sql ./data/registry.sql
 COPY docker-seed/brain.sql ./docker-seed/brain.sql

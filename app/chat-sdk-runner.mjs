@@ -172,6 +172,7 @@ export function parsePermissionOptions(spec) {
  * @param {string} opts.permissionMode
  * @param {boolean} opts.allowDangerouslySkipPermissions
  * @param {boolean} opts.enableMcpBrainDb
+ * @param {boolean} [opts.enableMcpBrowserFetch] headless Chromium MCP when playwright is installed
  * @param {string} opts.dbDir
  * @param {string} [opts.auditLogPath]
  * @param {boolean} [opts.auditTools]
@@ -204,6 +205,25 @@ export async function runAgentSdkQuery(opts) {
         BRAIN_MCP_DB_DIR: opts.dbDir,
       },
     };
+  }
+  if (opts.enableMcpBrowserFetch) {
+    let browserMcpOk = true;
+    try {
+      await import('playwright');
+    } catch (e) {
+      browserMcpOk = false;
+      const msg = e && typeof e === 'object' && 'message' in e ? String(e.message) : String(e);
+      opts.onLog?.(`[chat-sdk] browser MCP skipped: playwright not available (${msg})`);
+    }
+    if (browserMcpOk) {
+      const script = path.join(__dirname, 'mcp-browser-fetch.mjs');
+      mcpServers.brainBrowser = {
+        type: 'stdio',
+        command: process.execPath,
+        args: [script],
+        env: { ...process.env },
+      };
+    }
   }
 
   const auditPath = opts.auditLogPath || path.join(opts.cwd, 'chat-tool-audit.log');

@@ -17,7 +17,7 @@ snapshot:
 # When the machine receives SIGTERM (Fly auto-stop, deploy, scale-down),
 # Litestream propagates it to the child, waits for the WAL to flush, ships
 # the final segments to Tigris, then exits. Clean handoff.
-exec: "su-exec node node server.js"
+exec: "gosu node node server.js"
 
 dbs:
   # Global registry (auth, tenant list). Single fixed path.

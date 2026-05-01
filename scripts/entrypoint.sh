@@ -21,5 +21,5 @@ if [ -n "${BUCKET_NAME:-}" ] && [ -x /usr/local/bin/litestream ] && [ -f /etc/li
   exec /usr/local/bin/litestream replicate -config /etc/litestream.yml
 else
   echo "[entrypoint] WARNING: Litestream disabled (BUCKET_NAME unset or binary/config missing). Running server without backup."
-  exec su-exec node node server.js
+  exec gosu node node server.js
 fi

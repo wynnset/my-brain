@@ -7,7 +7,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 
 
 function transcribeWithDeepgram(audioBuffer, mimeType, apiKey) {
   return new Promise((resolve, reject) => {
-    const qs = 'model=nova-2&smart_format=true';
+    const qs = 'model=nova-3&smart_format=true';
     const options = {
       hostname: 'api.deepgram.com',
       path: `/v1/listen?${qs}`,

@@ -172,7 +172,7 @@ export function parsePermissionOptions(spec) {
  * @param {string} opts.permissionMode
  * @param {boolean} opts.allowDangerouslySkipPermissions
  * @param {boolean} opts.enableMcpBrainDb
- * @param {boolean} [opts.enableMcpBrowserFetch] headless Chromium MCP when playwright is installed
+ * @param {boolean} [opts.enableMcpBrowserFetch] enables `brain_fetch` MCP (plain HTTP + auto-escalating headless Chromium when Playwright is installed)
  * @param {string} opts.dbDir
  * @param {string} [opts.auditLogPath]
  * @param {boolean} [opts.auditTools]
@@ -207,23 +207,24 @@ export async function runAgentSdkQuery(opts) {
     };
   }
   if (opts.enableMcpBrowserFetch) {
-    let browserMcpOk = true;
+    // brain_fetch can run plain-HTTP fetches without Playwright; the Chromium
+    // escalation path is what needs it. We register the server unconditionally
+    // and let individual fetches fail-soft if browser-mode is unavailable.
+    let playwrightOk = true;
     try {
       await import('playwright');
     } catch (e) {
-      browserMcpOk = false;
+      playwrightOk = false;
       const msg = e && typeof e === 'object' && 'message' in e ? String(e.message) : String(e);
-      opts.onLog?.(`[chat-sdk] browser MCP skipped: playwright not available (${msg})`);
+      opts.onLog?.(`[chat-sdk] brain_fetch: Chromium escalation disabled, playwright not available (${msg})`);
     }
-    if (browserMcpOk) {
-      const script = path.join(__dirname, 'mcp-browser-fetch.mjs');
-      mcpServers.brainBrowser = {
-        type: 'stdio',
-        command: process.execPath,
-        args: [script],
-        env: { ...process.env },
-      };
-    }
+    const script = path.join(__dirname, 'mcp-brain-fetch.mjs');
+    mcpServers.brainFetch = {
+      type: 'stdio',
+      command: process.execPath,
+      args: [script],
+      env: { ...process.env, BRAIN_FETCH_PLAYWRIGHT_OK: playwrightOk ? '1' : '0' },
+    };
   }
 
   const auditPath = opts.auditLogPath || path.join(opts.cwd, 'chat-tool-audit.log');

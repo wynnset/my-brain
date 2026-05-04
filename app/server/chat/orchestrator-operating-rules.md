@@ -161,10 +161,27 @@ directly or synthesize a subagent's result.
   available, use it. Do not rely on what you already know about how
   something works — fetch the current page and read it. Facts expire;
   fetched pages don't lie about their last-modified date.
-- **When `WebFetch` fails on a page you truly need,** try the MCP tool
-  `mcp__brainBrowser__browser_fetch` on that URL (headless Chromium). Use it
-  only after a failed or useless `WebFetch` — not for search-engine result
-  HTML, and not as the first hop for routine pages.
+- **Prefer `mcp__brainFetch__brain_fetch` over `WebFetch` when you need raw
+  page content.** It runs Mozilla Readability on the response (clean article
+  text, far fewer tokens than `WebFetch` summarization re-fed into context),
+  caches by URL within the session, and auto-escalates to headless Chromium
+  when the page looks JS-required or bot-walled — so you don't need to
+  manually retry a failed `WebFetch` with a different tool. `WebFetch` is
+  still fine for "summarize this page" tasks where the SDK's built-in
+  summarization is what you actually want; `brain_fetch` is for "give me the
+  page text so I can reason over it myself."
+- **`brain_fetch` knobs (set per-call when defaults aren't enough):**
+  - `format: "markdown"` — keeps images as `![alt](src)`, links, and
+    headings. Use when you need to enumerate media on a page or follow links.
+  - `format: "html"` — full body HTML preserving classes and inline styles.
+    Use only for styling / DOM-structure questions; expensive on tokens.
+  - `load_resources: "all"` — when escalating to Chromium, load images / CSS
+    / fonts / media. Needed for accurate rendered layout or computed-style
+    questions. Default `"minimal"` blocks them for speed.
+  - `mode: "browser"` — skip the HTTP attempt entirely when you already know
+    a page is JS-rendered (e.g. you're hitting a SPA you've fetched before).
+  - `max_chars` — raise the per-call truncation cap (default ~30k chars) when
+    you genuinely need the full page; the env-configured ceiling still applies.
 - **When the user pushes back, search harder — don't defend.** A user
   correction is a signal that your search was incomplete, not that they
   are wrong. Re-run the search with different terms before holding your

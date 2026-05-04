@@ -284,41 +284,42 @@ function parseGlobalToolAllowEnv(raw) {
   return parts.length ? parts : null;
 }
 
-const BROWSER_FETCH_MCP_TOOL = 'mcp__brainBrowser__browser_fetch';
+const BRAIN_FETCH_MCP_TOOL = 'mcp__brainFetch__brain_fetch';
 
 /**
- * Adds the headless-browser MCP tool so Task subagents can escalate when
- * simple `WebFetch` fails or when they would otherwise rely on `Bash`+curl
- * (which cannot pass Cloudflare the way Chromium can).
+ * Adds the unified `brain_fetch` MCP tool so Task subagents have a cheaper
+ * default than `WebFetch` (Readability extraction, in-memory cache) plus an
+ * auto-escalation path to headless Chromium for JS-required / bot-walled
+ * pages (replaces what `Bash`+curl can't get past).
  *
  * Eligible subagents: any whose allowlist includes `WebFetch`, `WebSearch`,
  * or `Bash` (default team members get Bash; specialists like Gauge often have
  * no `WebFetch` in frontmatter and were previously skipped).
  *
  * Skips if `BRAIN_CHAT_SUBAGENT_TOOLS` narrows the allowlist and omits this
- * tool (operators must add `mcp__brainBrowser__browser_fetch` explicitly).
+ * tool (operators must add `mcp__brainFetch__brain_fetch` explicitly).
  *
  * @param {Record<string, { tools?: string[] }> | undefined} agentDefs
  * @param {string[] | null} globalToolAllow from {@link parseGlobalToolAllowEnv}
  */
-function attachBrowserMcpToTeamAgents(agentDefs, globalToolAllow) {
+function attachBrainFetchMcpToTeamAgents(agentDefs, globalToolAllow) {
   if (!agentDefs) return;
   const narrowed = globalToolAllow && globalToolAllow.length;
-  if (narrowed && !globalToolAllow.includes(BROWSER_FETCH_MCP_TOOL)) return;
+  if (narrowed && !globalToolAllow.includes(BRAIN_FETCH_MCP_TOOL)) return;
   for (const def of Object.values(agentDefs)) {
     if (!def || !Array.isArray(def.tools)) continue;
     const t = def.tools;
     const mayTouchHttp =
       t.includes('Bash') || t.includes('WebFetch') || t.includes('WebSearch');
     if (!mayTouchHttp) continue;
-    if (!t.includes(BROWSER_FETCH_MCP_TOOL)) t.push(BROWSER_FETCH_MCP_TOOL);
+    if (!t.includes(BRAIN_FETCH_MCP_TOOL)) t.push(BRAIN_FETCH_MCP_TOOL);
   }
 }
 
 module.exports = {
   loadTenantAgentDefinitions,
   parseGlobalToolAllowEnv,
-  attachBrowserMcpToTeamAgents,
+  attachBrainFetchMcpToTeamAgents,
   parseFrontmatter,
   agentSlugFromFilename,
   DEFAULT_SUBAGENT_TOOLS,

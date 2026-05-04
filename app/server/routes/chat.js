@@ -10,7 +10,7 @@ const {
 const {
   loadTenantAgentDefinitions,
   parseGlobalToolAllowEnv,
-  attachBrowserMcpToTeamAgents,
+  attachBrainFetchMcpToTeamAgents,
 } = require('../chat/team-agents.js');
 const chatMemory = require('../chat/chat-memory.js');
 const { createChatRunRegistry, RunAlreadyActiveError } = require('../chat/chat-run-registry.js');
@@ -2114,7 +2114,7 @@ module.exports = function registerChatRoutes(app, ctx) {
               console.warn('[chat-sdk] team-agents load failed:', err.message);
             }
             if (process.env.BRAIN_CHAT_MCP_BROWSER === '1') {
-              attachBrowserMcpToTeamAgents(tenantAgents, subagentToolAllow);
+              attachBrainFetchMcpToTeamAgents(tenantAgents, subagentToolAllow);
             }
           }
           const out = await runner.runAgentSdkQuery({
@@ -2547,7 +2547,7 @@ module.exports = function registerChatRoutes(app, ctx) {
               console.warn('[chat-sdk] team-agents load failed:', err.message);
             }
             if (process.env.BRAIN_CHAT_MCP_BROWSER === '1') {
-              attachBrowserMcpToTeamAgents(tenantAgents, subagentToolAllow);
+              attachBrainFetchMcpToTeamAgents(tenantAgents, subagentToolAllow);
             }
           }
           const out = await runner.runAgentSdkQuery({

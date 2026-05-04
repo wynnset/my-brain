@@ -1617,12 +1617,42 @@ document.addEventListener('alpine:init', function() {
       try {
         if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
         if (!document.hidden) return;
-        if (!bucket || !bucket.messages) return;
+        if (!bucket || !bucket.messages || !bucket.convId) return;
         var assistants = bucket.messages.filter(function(m) { return m.role === 'assistant'; });
         var last = assistants[assistants.length - 1];
         var preview = (last && last.content) ? String(last.content).replace(/\s+/g, ' ').trim().slice(0, 120) : 'Reply ready';
         var slug = bucket.chatAgent != null ? this.normalizeChatAgentId(bucket.chatAgent) : this.chatAgent;
-        new Notification(this.chatAgentDisplayName(slug) + ' — Cyrus', { body: preview });
+        var convId = String(bucket.convId);
+        var targetHash = '#/chat/' + encodeURIComponent(convId);
+        var self = this;
+        var n = new Notification(this.chatAgentDisplayName(slug) + ' — Cyrus', {
+          body: preview,
+          tag: 'cyrus-chat-' + convId,
+          data: { convId: convId },
+        });
+        n.onclick = function (ev) {
+          try {
+            if (ev && ev.preventDefault) ev.preventDefault();
+          } catch (_) {}
+          try {
+            n.close();
+          } catch (_) {}
+          try {
+            window.focus();
+          } catch (_) {}
+          if (location.hash !== targetHash) {
+            location.hash = targetHash;
+          } else {
+            try {
+              self.openChat();
+              var slugSet = self.navSlugSet();
+              var okChat = self.page === 'home' || self.page === 'files' || self.page === 'usage' || slugSet[self.page];
+              if (!okChat) self.page = 'home';
+              self.loadPage(self.page, false).catch(function () {});
+            } catch (_) {}
+            self.openConversation(convId).catch(function () {});
+          }
+        };
       } catch (_) {}
     },
 
@@ -3079,12 +3109,24 @@ document.addEventListener('alpine:init', function() {
     },
     onHashChange() {
       var raw = (location.hash || '#/').replace(/^#\/?/, '');
-      if (raw === 'chat') {
+      var chatRoute = raw.match(/^chat(?:\/(.+))?$/);
+      if (chatRoute) {
         this.openChat();
         var slugSet = this.navSlugSet();
         var okChat = this.page === 'home' || this.page === 'files' || this.page === 'usage' || slugSet[this.page];
         if (!okChat) this.page = 'home';
         this.loadPage(this.page, false);
+        var convFromHash = '';
+        if (chatRoute[1]) {
+          try {
+            convFromHash = decodeURIComponent(chatRoute[1]).trim();
+          } catch (_) {
+            convFromHash = String(chatRoute[1] || '').trim();
+          }
+        }
+        if (convFromHash) {
+          this.openConversation(convFromHash).catch(function () {});
+        }
         return;
       }
       var fileMatch = raw.match(/^files\/([^/]+)\/(.+)$/);

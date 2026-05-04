@@ -7,6 +7,7 @@ const { registerFileRoutes } = require('./files.js');
 const { registerOrchestratorRoutes } = require('./orchestrator.js');
 const { registerDashboardRoutes } = require('./dashboard.js');
 const { registerDomainRoutes } = require('./domain.js');
+const { registerVoiceRoutes } = require('./voice.js');
 
 /** Health + auth endpoints (before session gate). */
 function registerPublicRoutes(app, ctx) {
@@ -21,6 +22,7 @@ function registerProtectedRoutes(app, ctx) {
   registerOrchestratorRoutes(app, ctx);
   registerDashboardRoutes(app, ctx);
   registerDomainRoutes(app, ctx);
+  registerVoiceRoutes(app);
 }
 
 module.exports = { registerPublicRoutes, registerProtectedRoutes };

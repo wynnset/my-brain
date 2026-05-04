@@ -1857,6 +1857,17 @@ tailwind.config = {
                 </button>
               </div>
             </div>
+            <button type="button" @click="toggleVoiceRecording()" :disabled="chatStreaming"
+              :title="voiceRecording ? 'Stop recording' : voiceTranscribing ? 'Transcribing…' : 'Voice input'"
+              :aria-label="voiceRecording ? 'Stop recording' : voiceTranscribing ? 'Transcribing audio' : 'Record voice message'"
+              class="icon-btn flex h-10 min-h-[2.5rem] max-h-[2.5rem] w-10 shrink-0 items-center justify-center rounded-lg border transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-2 focus-visible:ring-offset-white disabled:pointer-events-none disabled:opacity-40 dark:focus-visible:ring-offset-slate-800"
+              :class="voiceRecording ? 'border-red-500 bg-red-500 text-white animate-pulse' : voiceTranscribing ? 'border-slate-200 bg-slate-50 text-slate-400 dark:border-slate-600 dark:bg-slate-900/50 dark:text-slate-500' : 'border-slate-200 bg-slate-50 text-slate-500 hover:bg-slate-100 dark:border-slate-600 dark:bg-slate-900/50 dark:text-slate-400 dark:hover:bg-slate-800/80'">
+              <i x-show="!voiceTranscribing" data-lucide="mic" class="h-4 w-4" :class="voiceRecording ? 'fill-current' : ''"></i>
+              <svg x-show="voiceTranscribing" x-cloak class="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+              </svg>
+            </button>
             <button type="button" x-show="!chatStreaming" x-cloak @click="submitChat()"
               :disabled="(!chatPrompt.trim() && !chatFiles.length) || chatIsOverCreditLimit()"
               :title="chatIsOverCreditLimit() ? 'Out of credits — new chats are paused until the next reset.' : 'Send'"
@@ -2239,6 +2250,17 @@ tailwind.config = {
               </button>
             </div>
           </div>
+          <button type="button" @click="toggleVoiceRecording()" :disabled="chatStreaming"
+            :title="voiceRecording ? 'Stop recording' : voiceTranscribing ? 'Transcribing…' : 'Voice input'"
+            :aria-label="voiceRecording ? 'Stop recording' : voiceTranscribing ? 'Transcribing audio' : 'Record voice message'"
+            class="icon-btn flex h-10 min-h-[2.5rem] max-h-[2.5rem] w-10 shrink-0 items-center justify-center rounded-lg border transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-2 focus-visible:ring-offset-white disabled:pointer-events-none disabled:opacity-40 dark:focus-visible:ring-offset-slate-800"
+            :class="voiceRecording ? 'border-red-500 bg-red-500 text-white animate-pulse' : voiceTranscribing ? 'border-slate-200 bg-slate-50 text-slate-400 dark:border-slate-600 dark:bg-slate-900/50 dark:text-slate-500' : 'border-slate-200 bg-slate-50 text-slate-500 hover:bg-slate-100 dark:border-slate-600 dark:bg-slate-900/50 dark:text-slate-400 dark:hover:bg-slate-800/80'">
+            <i x-show="!voiceTranscribing" data-lucide="mic" class="h-4 w-4" :class="voiceRecording ? 'fill-current' : ''"></i>
+            <svg x-show="voiceTranscribing" x-cloak class="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+            </svg>
+          </button>
           <button type="button" x-show="!chatStreaming" x-cloak @click="submitChat()"
             :disabled="(!chatPrompt.trim() && !chatFiles.length) || chatIsOverCreditLimit()"
             :title="chatIsOverCreditLimit() ? 'Out of credits — new chats are paused until the next reset.' : 'Send'"

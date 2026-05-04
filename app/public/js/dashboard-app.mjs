@@ -297,6 +297,10 @@ document.addEventListener('alpine:init', function() {
     chatFiles: [],
     /** Popover listing attached files (paperclip); only used when chatFiles.length > 0. */
     chatAttachmentsMenuOpen: false,
+    voiceRecording: false,
+    voiceTranscribing: false,
+    _voiceMediaRecorder: null,
+    _voiceChunks: [],
     chatDragActive: false,
     /** When true, the next chat turn uses server plan phase (read-only tools + JSON checklist). */
     chatPlanMode: false,
@@ -6109,6 +6113,67 @@ document.addEventListener('alpine:init', function() {
         e.target.value = '';
         var self = this;
         this.$nextTick(function() { self.refreshIcons(); });
+      }
+    },
+
+    async toggleVoiceRecording() {
+      if (this.voiceTranscribing) return;
+      if (this.voiceRecording) {
+        this._stopVoiceRecording();
+      } else {
+        await this._startVoiceRecording();
+      }
+    },
+
+    async _startVoiceRecording() {
+      var self = this;
+      var stream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      } catch {
+        alert('Microphone access denied or unavailable.');
+        return;
+      }
+      self._voiceChunks = [];
+      var mr = new MediaRecorder(stream);
+      mr.ondataavailable = function(e) {
+        if (e.data && e.data.size > 0) self._voiceChunks.push(e.data);
+      };
+      mr.onstop = async function() {
+        stream.getTracks().forEach(function(t) { t.stop(); });
+        var blob = new Blob(self._voiceChunks, { type: mr.mimeType });
+        self._voiceChunks = [];
+        self.voiceRecording = false;
+        self.voiceTranscribing = true;
+        try {
+          var fd = new FormData();
+          fd.append('audio', blob, 'recording.webm');
+          var resp = await fetch('/api/voice/transcribe', { method: 'POST', body: fd });
+          var json = await resp.json();
+          if (!resp.ok) throw new Error(json.error || 'Transcription failed.');
+          if (json.transcript) {
+            self.chatPrompt = (self.chatPrompt ? self.chatPrompt + ' ' : '') + json.transcript;
+            self.$nextTick(function() {
+              var wide = window.innerWidth >= 1024;
+              var el = wide ? self.$refs.chatPromptDesktop : self.$refs.chatPromptMobile;
+              if (el) { self.adjustChatComposerHeight(el); el.focus(); }
+              self.refreshIcons();
+            });
+          }
+        } catch (e) {
+          alert('Transcription failed: ' + (e.message || String(e)));
+        }
+        self.voiceTranscribing = false;
+      };
+      self._voiceMediaRecorder = mr;
+      mr.start();
+      self.voiceRecording = true;
+    },
+
+    _stopVoiceRecording() {
+      if (this._voiceMediaRecorder && this._voiceMediaRecorder.state !== 'inactive') {
+        this._voiceMediaRecorder.stop();
+        this._voiceMediaRecorder = null;
       }
     },
 

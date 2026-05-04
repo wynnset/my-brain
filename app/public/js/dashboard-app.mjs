@@ -38,6 +38,7 @@ import {
   renderChatMarkdown,
   sanitizeBrainHashDir,
   sanitizeBrainHashFileName,
+
   sortItems,
   statCard,
   statusBadge,
@@ -46,6 +47,46 @@ import {
   unwrapBrainFileLinksFromCodeHtml,
   uploadDefaultDomainForAgent
 } from './lib/dashboard-helpers.mjs';
+
+/** Lazy-loaded Quill + Turndown for markdown visual editing (standalone CDN scripts). */
+var QUILL_SNOW_CSS = 'https://cdn.jsdelivr.net/npm/quill@1.3.7/dist/quill.snow.css';
+var QUILL_JS = 'https://cdn.jsdelivr.net/npm/quill@1.3.7/dist/quill.min.js';
+var TURNDOWN_JS = 'https://cdn.jsdelivr.net/npm/turndown@7.2.0/dist/turndown.js';
+var _quillMdEditorLoadPromise = null;
+function ensureQuillMarkdownEditorLoaded() {
+  if (typeof window !== 'undefined' && typeof Quill !== 'undefined' && typeof TurndownService !== 'undefined') {
+    return Promise.resolve();
+  }
+  if (!_quillMdEditorLoadPromise) {
+    _quillMdEditorLoadPromise = new Promise(function(resolve, reject) {
+      if (!document.querySelector('link[data-brain-quill-snow-css]')) {
+        var link = document.createElement('link');
+        link.rel = 'stylesheet';
+        link.href = QUILL_SNOW_CSS;
+        link.setAttribute('data-brain-quill-snow-css', '1');
+        document.head.appendChild(link);
+      }
+      var sQuill = document.createElement('script');
+      sQuill.src = QUILL_JS;
+      sQuill.onload = function() {
+        var sTd = document.createElement('script');
+        sTd.src = TURNDOWN_JS;
+        sTd.onload = function() { resolve(); };
+        sTd.onerror = function() {
+          _quillMdEditorLoadPromise = null;
+          reject(new Error('Could not load HTML converter'));
+        };
+        document.head.appendChild(sTd);
+      };
+      sQuill.onerror = function() {
+        _quillMdEditorLoadPromise = null;
+        reject(new Error('Could not load visual editor'));
+      };
+      document.head.appendChild(sQuill);
+    });
+  }
+  return _quillMdEditorLoadPromise;
+}
 
 document.addEventListener('alpine:init', function() {
   Alpine.data('app', function() { return {
@@ -168,6 +209,11 @@ document.addEventListener('alpine:init', function() {
     editorContent: '',
     editorPath: null,
     editorSaving: false,
+    /** For `.md` only: `text` = raw markdown textarea, `wysiwyg` = Quill visual editor. */
+    editorMdUiMode: (function() {
+      try { return localStorage.getItem('brain_md_editor_mode') === 'wysiwyg' ? 'wysiwyg' : 'text'; } catch (_) { return 'text'; }
+    })(),
+    _quillMdEditor: null,
     dropOverlayVisible: false,
     uploadToast: '',
     uploadToastClass: 'bg-slate-800 dark:bg-slate-700',
@@ -407,9 +453,19 @@ document.addEventListener('alpine:init', function() {
         this.$watch('filesFilterDomain', function () {
           self.$nextTick(function() { self.refreshIcons(); });
         });
+        this.$watch('editorOpen', function (open) {
+          if (!open) self.destroyMarkdownWysiwygEditor();
+        });
       }
       this._onResizeViewport = function() {
-        self.viewportLg = typeof window !== 'undefined' && window.innerWidth >= 1024;
+        var nextLg = typeof window !== 'undefined' && window.innerWidth >= 1024;
+        var prevLg = self.viewportLg;
+        self.viewportLg = nextLg;
+        if (prevLg !== nextLg && self.editorOpen && self.editorIsMarkdown() && self.editorMdUiMode === 'wysiwyg') {
+          self.syncMarkdownFromWysiwyg();
+          self.destroyMarkdownWysiwygEditor();
+          self.$nextTick(function() { self.mountMarkdownWysiwygEditor(); });
+        }
         self.syncChatComposerHeights();
       };
       window.addEventListener('resize', this._onResizeViewport);
@@ -3009,8 +3065,7 @@ document.addEventListener('alpine:init', function() {
         this.viewerContent = '';
         this.viewerDisplayMode = 'text';
         this.viewerLoadError = '';
-        this.editorOpen = false;
-        this.editorPath = null;
+        this.closeFileEditor();
       }
       var closeMobileChat = this.isMobileFullWindowChat();
       this.page = p;
@@ -3071,8 +3126,7 @@ document.addEventListener('alpine:init', function() {
       if (nextPage !== 'files') {
         this.viewerOpen = false;
         this.viewerPath = null;
-        this.editorOpen = false;
-        this.editorPath = null;
+        this.closeFileEditor();
       }
       this.page = nextPage;
       if (this.slugToTemplate(this.page) === 'action_domain') this.ensureActionDomainPageState(this.page);
@@ -4732,6 +4786,147 @@ document.addEventListener('alpine:init', function() {
       return ['docs', 'owners-inbox', 'team-inbox'].indexOf(dir) >= 0 && !String(relPath || '').includes('/');
     },
 
+    /** Browser sections where DELETE is allowed (matches server browsable roots). Orchestrator brief is blocked client + server. */
+    fileIsDeletable(dir, relPath) {
+      var name = String(relPath || '');
+      if (!name || ['owners-inbox', 'team-inbox', 'team', 'docs', 'root'].indexOf(dir) < 0) return false;
+      if (dir === 'root' && (name === 'CYRUS.md' || name === 'LARRY.md')) return false;
+      return true;
+    },
+
+    editorIsMarkdown() {
+      return !!(this.editorPath && /\.md$/i.test(this.editorPath.name));
+    },
+
+    /** Clears Quill from both lg/sm hosts so breakpoints / x-if races cannot leave duplicate toolbars. */
+    destroyMarkdownWysiwygEditor() {
+      var lg = this.$refs.mdWysiwygHostLg;
+      var sm = this.$refs.mdWysiwygHostSm;
+      if (lg) lg.innerHTML = '';
+      if (sm) sm.innerHTML = '';
+      this._quillMdEditor = null;
+    },
+
+    syncMarkdownFromWysiwyg() {
+      if (!this.editorIsMarkdown() || this.editorMdUiMode !== 'wysiwyg' || !this._quillMdEditor) return;
+      if (typeof TurndownService === 'undefined') return;
+      try {
+        var td = new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced', bulletListMarker: '-' });
+        this.editorContent = td.turndown(this._quillMdEditor.root.innerHTML);
+      } catch (_) {}
+    },
+
+    async _markdownToVisualHtml(md) {
+      var raw = typeof md === 'string' ? md : '';
+      if (typeof marked !== 'undefined' && typeof marked.parse === 'function') {
+        try {
+          var out = marked.parse(raw);
+          if (out && typeof out.then === 'function') out = await out;
+          return out || '<p><br></p>';
+        } catch (_) {}
+      }
+      return '<p>' + esc(raw).replace(/\n/g, '<br>') + '</p>';
+    },
+
+    async mountMarkdownWysiwygEditor() {
+      if (!this.editorOpen || !this.editorIsMarkdown() || this.editorMdUiMode !== 'wysiwyg') return;
+      this._quillMdMountGen = (this._quillMdMountGen || 0) + 1;
+      var gen = this._quillMdMountGen;
+      try {
+        await ensureQuillMarkdownEditorLoaded();
+      } catch (err) {
+        if (gen === this._quillMdMountGen) {
+          alert(err && err.message ? err.message : 'Could not load visual editor');
+          this.editorMdUiMode = 'text';
+          try { localStorage.setItem('brain_md_editor_mode', 'text'); } catch (_) {}
+        }
+        return;
+      }
+      if (gen !== this._quillMdMountGen) return;
+      if (!this.editorOpen || !this.editorIsMarkdown() || this.editorMdUiMode !== 'wysiwyg') return;
+      var html = await this._markdownToVisualHtml(this.editorContent);
+      if (gen !== this._quillMdMountGen) return;
+      if (!this.editorOpen || !this.editorIsMarkdown() || this.editorMdUiMode !== 'wysiwyg') return;
+      this.destroyMarkdownWysiwygEditor();
+      if (gen !== this._quillMdMountGen) return;
+      var host = this.viewportLg ? this.$refs.mdWysiwygHostLg : this.$refs.mdWysiwygHostSm;
+      if (!host || typeof Quill === 'undefined') return;
+      host.innerHTML = '';
+      var quill = new Quill(host, {
+        theme: 'snow',
+        modules: {
+          toolbar: [
+            ['bold', 'italic', 'strike'],
+            [{ header: [1, 2, 3, false] }],
+            [{ list: 'ordered' }, { list: 'bullet' }],
+            ['blockquote', 'code-block'],
+            ['link'],
+            ['clean'],
+          ],
+        },
+      });
+      quill.root.classList.add('chat-md-output');
+      quill.clipboard.dangerouslyPasteHTML(html);
+      if (gen !== this._quillMdMountGen || !this.editorOpen || this.editorMdUiMode !== 'wysiwyg') {
+        host.innerHTML = '';
+        this._quillMdEditor = null;
+        return;
+      }
+      this._quillMdEditor = quill;
+      var self = this;
+      this.$nextTick(function() { self.refreshIcons(); });
+    },
+
+    setEditorMdUiMode(mode) {
+      if (mode !== 'text' && mode !== 'wysiwyg') return;
+      if (mode === this.editorMdUiMode) return;
+      if (this.editorMdUiMode === 'wysiwyg' && this._quillMdEditor) {
+        this.syncMarkdownFromWysiwyg();
+        this.destroyMarkdownWysiwygEditor();
+      }
+      this.editorMdUiMode = mode;
+      try { localStorage.setItem('brain_md_editor_mode', mode); } catch (_) {}
+      var self = this;
+      if (mode === 'wysiwyg') {
+        this.$nextTick(function() { self.mountMarkdownWysiwygEditor(); });
+      }
+    },
+
+    /** @param {boolean} [reopenPreview] When true (user cancelled/saved), show the file in the viewer again. */
+    closeFileEditor(reopenPreview) {
+      var dir = this.editorPath && this.editorPath.dir;
+      var name = this.editorPath && this.editorPath.name;
+      this.destroyMarkdownWysiwygEditor();
+      this.editorOpen = false;
+      this.editorPath = null;
+      if (reopenPreview && dir != null && name != null && String(name) !== '' && this.page === 'files') {
+        var self = this;
+        this.$nextTick(function() { self.viewFile(dir, name); });
+      }
+    },
+
+    async deleteFile(dir, name) {
+      if (!this.fileIsDeletable(dir, name)) return;
+      if (!confirm('Permanently delete “' + this.fileBaseName(name) + '”? This cannot be undone.')) return;
+      try {
+        var url = this.fileApiPath(dir, name);
+        var r = await fetchWithAuth(url, { method: 'DELETE' });
+        var errBody = null;
+        try {
+          errBody = await r.json();
+        } catch (_) {}
+        if (!r.ok) {
+          alert((errBody && errBody.error) ? errBody.error : 'Delete failed');
+          return;
+        }
+        this.closeViewer();
+        this.closeFileEditor();
+        await this.loadFiles();
+      } catch (e) {
+        alert('Delete failed: ' + (e && e.message ? e.message : String(e)));
+      }
+    },
+
     findFileEntry(dir, relPath) {
       var sec = this.fileSections.find(function(s) { return s.dir === dir; });
       if (!sec) return null;
@@ -4814,8 +5009,7 @@ document.addEventListener('alpine:init', function() {
         }
         this.viewerOpen = false;
         this.viewerPath = null;
-        this.editorOpen = false;
-        this.editorPath = null;
+        this.closeFileEditor();
         await this.loadFiles();
       } catch (e) {
         alert('Archive failed: ' + (e && e.message ? e.message : String(e)));
@@ -4875,7 +5069,7 @@ document.addEventListener('alpine:init', function() {
 
     /** Open the viewer in an asset mode (pdf/image/video/audio) that streams bytes directly from /api/files. */
     openAssetViewer(dir, name, mode) {
-      this.editorOpen = false;
+      this.closeFileEditor();
       this.viewerPath = { dir: dir, name: name };
       this.viewerTitle = this.fileBaseName(name);
       this.viewerContent = '';
@@ -4890,7 +5084,7 @@ document.addEventListener('alpine:init', function() {
     },
 
     showDownloadOnlyPanel(dir, name) {
-      this.editorOpen = false;
+      this.closeFileEditor();
       this.viewerPath = { dir: dir, name: name };
       this.viewerTitle = this.fileBaseName(name);
       this.viewerContent = '';
@@ -4922,7 +5116,7 @@ document.addEventListener('alpine:init', function() {
 
     async viewFile(dir, name) {
       var url = this.fileApiPath(dir, name);
-      this.editorOpen = false;
+      this.closeFileEditor();
       this.viewerPath = { dir: dir, name: name };
       this.viewerTitle = this.fileBaseName(name);
       this.viewerLoadError = '';
@@ -4963,7 +5157,14 @@ document.addEventListener('alpine:init', function() {
         this.editorContent = text;
         this.editorOpen = true;
         var self = this;
-        this.$nextTick(function() { self.refreshIcons(); });
+        this.$nextTick(function() {
+          self.refreshIcons();
+          if (self.editorIsMarkdown() && self.editorMdUiMode === 'wysiwyg') {
+            self.mountMarkdownWysiwygEditor();
+          } else {
+            self.destroyMarkdownWysiwygEditor();
+          }
+        });
       } catch (err) {
         alert('Could not load file: ' + err.message);
       }
@@ -4971,17 +5172,24 @@ document.addEventListener('alpine:init', function() {
 
     async saveFile() {
       if (!this.editorPath) return;
+      this.syncMarkdownFromWysiwyg();
       this.editorSaving = true;
       var p = this.editorPath;
       var url = this.fileApiPath(p.dir, p.name);
       try {
         var r = await fetchWithAuth(url, { method: 'PUT', headers: { 'Content-Type': 'text/plain' }, body: this.editorContent });
-        await r.json();
-        this.editorOpen = false;
-        this.editorPath = null;
+        var errBody = null;
+        try {
+          errBody = await r.json();
+        } catch (_) {}
+        if (!r.ok) {
+          alert((errBody && errBody.error) ? errBody.error : ('Save failed (HTTP ' + r.status + ')'));
+          return;
+        }
+        this.closeFileEditor(true);
         await this.loadFiles();
       } catch (err) {
-        alert('Save failed: ' + err.message);
+        alert('Save failed: ' + (err && err.message ? err.message : String(err)));
       } finally {
         this.editorSaving = false;
       }

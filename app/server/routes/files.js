@@ -363,6 +363,40 @@ function registerFileRoutes(app, ctx) {
     fs.writeFileSync(putPath, req.body, 'utf8');
     res.json({ ok: true });
   });
+
+  app.delete('/api/files/:dir/*', (req, res) => {
+    const { dir } = req.params;
+    const relPath = req.params[0];
+    const targetPath = resolveWildcardFilePath(req, dir, relPath, { forWrite: true });
+    if (!targetPath) {
+      const code = (dir === 'root' || BROWSABLE.includes(dir)) ? 400 : 403;
+      return res.status(code).json({ error: 'Invalid path' });
+    }
+    const ws = workspaceDirForRequest(req);
+    const briefResolved = resolveOrchestratorBriefPathInWorkspace(ws);
+    if (briefResolved && path.resolve(targetPath) === path.resolve(briefResolved)) {
+      return res.status(403).json({ error: 'Cannot delete the orchestrator brief' });
+    }
+    try {
+      if (!fs.existsSync(targetPath)) return res.status(404).json({ error: 'Not found' });
+      if (!fs.statSync(targetPath).isFile()) return res.status(403).json({ error: 'Not a file' });
+    } catch (_) {
+      return res.status(404).json({ error: 'Not found' });
+    }
+    const safeRel = safeBrowseRelPath(relPath);
+    const metaRelFlat = safeRel && !safeRel.includes('/') && !safeRel.includes(path.sep);
+    if (FILES_META_DIRS.has(dir) && metaRelFlat) {
+      const dirPath = safeJoin(ws, dir);
+      const map = readFilesMetaMap(dirPath);
+      const fn = path.basename(safeRel);
+      if (map[fn]) {
+        delete map[fn];
+        writeFilesMetaMap(dirPath, map);
+      }
+    }
+    fs.unlinkSync(targetPath);
+    res.json({ ok: true });
+  });
 }
 
 module.exports = { registerFileRoutes };

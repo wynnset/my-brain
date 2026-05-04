@@ -71,10 +71,10 @@ body { touch-action: manipulation; }
 .chat-md-output h3 { font-size: 1em; }
 .chat-md-output ul, .chat-md-output ol { margin: 0.5em 0; padding-left: 1.35em; }
 .chat-md-output li { margin: 0.2em 0; }
-.chat-md-output code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 0.88em; padding: 0.12em 0.35em; border-radius: 0.25rem; background: rgb(241 245 249); }
-.dark .chat-md-output code { background: rgb(30 41 59); }
-.chat-md-output pre { margin: 0.65em 0; padding: 0.75rem 1rem; border-radius: 0.5rem; overflow-x: auto; background: rgb(241 245 249); border: 1px solid rgb(226 232 240); font-size: 0.82em; line-height: 1.45; }
-.dark .chat-md-output pre { background: rgb(15 23 42); border-color: rgb(51 65 85); }
+.chat-md-output code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 0.88em; padding: 0.12em 0.35em; border-radius: 0.25rem; background: rgb(241 245 249); color: rgb(51 65 85); }
+.dark .chat-md-output code { background: rgb(30 41 59); color: rgb(226 232 240); }
+.chat-md-output pre { margin: 0.65em 0; padding: 0.75rem 1rem; border-radius: 0.5rem; overflow-x: auto; background: rgb(241 245 249); border: 1px solid rgb(226 232 240); font-size: 0.82em; line-height: 1.45; color: rgb(15 23 42); }
+.dark .chat-md-output pre { background: rgb(15 23 42); border-color: rgb(51 65 85); color: rgb(226 232 240); }
 .chat-md-output pre code { padding: 0; background: transparent; font-size: inherit; }
 .chat-md-output a { color: rgb(79 70 229); text-decoration: underline; text-underline-offset: 2px; }
 .dark .chat-md-output a { color: rgb(165 180 252); }
@@ -215,4 +215,275 @@ body { touch-action: manipulation; }
 }
 .dark .agent-profile-md strong {
   color: rgb(248 250 252);
+}
+
+/* Quill (markdown visual editor) — layout + typography */
+.brain-quill-mount {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+.brain-quill-mount > .ql-toolbar.ql-snow {
+  flex-shrink: 0;
+  padding: 6px 8px;
+  border-left: none;
+  border-right: none;
+  border-top: none;
+  border-bottom: 1px solid rgb(226 232 240);
+  background: rgb(248 250 252);
+}
+.brain-quill-mount > .ql-container.ql-snow {
+  flex: 1 1 auto;
+  min-height: 180px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  border: none;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.875rem;
+  line-height: 1.55;
+  color: rgb(51 65 85);
+}
+/* Same surface as viewer pane (opaque card); avoid extra tint that makes editor look different */
+.dark .brain-quill-mount > .ql-container.ql-snow {
+  background: transparent;
+  color: rgb(226 232 240);
+}
+
+/*
+ * Quill Snow loads after dashboard.css and uses selectors like `.ql-snow .ql-editor code`
+ * (light gray code backgrounds, zero margins on p/headings/lists). This block uses higher
+ * specificity so the editable area matches the markdown file viewer (`.chat-md-output`).
+ */
+.brain-quill-mount > .ql-container.ql-snow .ql-editor.chat-md-output {
+  box-sizing: border-box;
+  min-height: 12rem;
+  padding: 1rem;
+  line-height: 1.55;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+@media (max-width: 1023px) {
+  .brain-quill-mount > .ql-container.ql-snow .ql-editor.chat-md-output {
+    padding: 1.25rem;
+  }
+}
+.brain-quill-mount > .ql-container.ql-snow .ql-editor.chat-md-output > *:first-child {
+  margin-top: 0;
+}
+.brain-quill-mount > .ql-container.ql-snow .ql-editor.chat-md-output > *:last-child {
+  margin-bottom: 0;
+}
+.brain-quill-mount > .ql-container.ql-snow .ql-editor.chat-md-output p {
+  margin: 0.5em 0;
+  line-height: 1.55;
+}
+/* Keep Quill list counter-reset with viewer margins/sizes */
+.brain-quill-mount > .ql-container.ql-snow .ql-editor.chat-md-output h1,
+.brain-quill-mount > .ql-container.ql-snow .ql-editor.chat-md-output h2,
+.brain-quill-mount > .ql-container.ql-snow .ql-editor.chat-md-output h3,
+.brain-quill-mount > .ql-container.ql-snow .ql-editor.chat-md-output h4,
+.brain-quill-mount > .ql-container.ql-snow .ql-editor.chat-md-output h5,
+.brain-quill-mount > .ql-container.ql-snow .ql-editor.chat-md-output h6 {
+  counter-reset: list-1 list-2 list-3 list-4 list-5 list-6 list-7 list-8 list-9;
+  font-weight: 600;
+  margin: 0.75em 0 0.35em;
+  line-height: 1.3;
+  padding: 0;
+}
+.brain-quill-mount > .ql-container.ql-snow .ql-editor.chat-md-output h1 {
+  font-size: 1.15em;
+}
+.brain-quill-mount > .ql-container.ql-snow .ql-editor.chat-md-output h2 {
+  font-size: 1.05em;
+}
+.brain-quill-mount > .ql-container.ql-snow .ql-editor.chat-md-output h3 {
+  font-size: 1em;
+}
+.brain-quill-mount > .ql-container.ql-snow .ql-editor.chat-md-output h4 {
+  font-size: 1em;
+}
+.brain-quill-mount > .ql-container.ql-snow .ql-editor.chat-md-output h5,
+.brain-quill-mount > .ql-container.ql-snow .ql-editor.chat-md-output h6 {
+  font-size: 1em;
+  font-weight: 600;
+}
+.brain-quill-mount > .ql-container.ql-snow .ql-editor.chat-md-output ol,
+.brain-quill-mount > .ql-container.ql-snow .ql-editor.chat-md-output ul {
+  margin: 0.5em 0;
+  padding-left: 1.35em;
+}
+.brain-quill-mount > .ql-container.ql-snow .ql-editor.chat-md-output li {
+  margin: 0.2em 0;
+}
+.brain-quill-mount > .ql-container.ql-snow .ql-editor.chat-md-output pre {
+  margin: 0.65em 0;
+}
+.brain-quill-mount > .ql-container.ql-snow .ql-editor.chat-md-output blockquote {
+  margin: 0.5em 0;
+  padding-left: 0.85em;
+  border-left: 3px solid rgb(203 213 225);
+  color: rgb(100 116 139);
+}
+.dark .brain-quill-mount > .ql-container.ql-snow .ql-editor.chat-md-output blockquote {
+  border-color: rgb(71 85 105);
+  color: rgb(148 163 184);
+}
+/* Beat `.ql-snow .ql-editor code, .ql-snow .ql-editor pre { background: #f0f0f0 }` */
+.brain-quill-mount > .ql-container.ql-snow .ql-editor.chat-md-output code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.88em;
+  padding: 0.12em 0.35em;
+  border-radius: 0.25rem;
+  background: rgb(241 245 249);
+  color: rgb(51 65 85);
+}
+.dark .brain-quill-mount > .ql-container.ql-snow .ql-editor.chat-md-output code {
+  background: rgb(30 41 59);
+  color: rgb(226 232 240);
+}
+.brain-quill-mount > .ql-container.ql-snow .ql-editor.chat-md-output pre:not(.ql-syntax) {
+  padding: 0.75rem 1rem;
+  border-radius: 0.5rem;
+  overflow-x: auto;
+  background: rgb(241 245 249);
+  border: 1px solid rgb(226 232 240);
+  font-size: 0.82em;
+  line-height: 1.45;
+  color: rgb(15 23 42);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.dark .brain-quill-mount > .ql-container.ql-snow .ql-editor.chat-md-output pre:not(.ql-syntax) {
+  background: rgb(15 23 42);
+  border-color: rgb(51 65 85);
+  color: rgb(226 232 240);
+}
+/* Code blocks: same as viewer `.chat-md-output pre`, not Quill Monokai */
+.brain-quill-mount > .ql-container.ql-snow .ql-editor.chat-md-output pre.ql-syntax {
+  margin: 0.65em 0;
+  padding: 0.75rem 1rem;
+  border-radius: 0.5rem;
+  overflow-x: auto;
+  background: rgb(241 245 249);
+  border: 1px solid rgb(226 232 240);
+  font-size: 0.82em;
+  line-height: 1.45;
+  color: rgb(15 23 42);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.dark .brain-quill-mount > .ql-container.ql-snow .ql-editor.chat-md-output pre.ql-syntax {
+  background: rgb(15 23 42);
+  border-color: rgb(51 65 85);
+  color: rgb(226 232 240);
+}
+.brain-quill-mount > .ql-container.ql-snow .ql-editor.chat-md-output pre code {
+  padding: 0;
+  background: transparent;
+  font-size: inherit;
+  color: inherit;
+}
+.brain-quill-mount > .ql-container.ql-snow .ql-editor.chat-md-output a {
+  color: rgb(79 70 229);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.dark .brain-quill-mount > .ql-container.ql-snow .ql-editor.chat-md-output a {
+  color: rgb(165 180 252);
+}
+.brain-quill-mount > .ql-container.ql-snow .ql-editor.chat-md-output .dashboard-table-x-scroll {
+  margin: 0.65em 0;
+}
+.brain-quill-mount > .ql-container.ql-snow .ql-editor.chat-md-output table {
+  border-collapse: collapse;
+  font-size: 0.9em;
+  margin: 0.65em 0;
+  width: 100%;
+}
+.brain-quill-mount > .ql-container.ql-snow .ql-editor.chat-md-output .dashboard-table-x-scroll > table {
+  margin: 0;
+  width: max(100%, max-content);
+}
+.brain-quill-mount > .ql-container.ql-snow .ql-editor.chat-md-output th,
+.brain-quill-mount > .ql-container.ql-snow .ql-editor.chat-md-output td {
+  border: 1px solid rgb(226 232 240);
+  padding: 0.35em 0.5em;
+  text-align: left;
+  word-break: normal;
+  overflow-wrap: break-word;
+}
+.dark .brain-quill-mount > .ql-container.ql-snow .ql-editor.chat-md-output th,
+.dark .brain-quill-mount > .ql-container.ql-snow .ql-editor.chat-md-output td {
+  border-color: rgb(51 65 85);
+}
+.brain-quill-mount > .ql-container.ql-snow .ql-editor.chat-md-output th {
+  background: rgb(248 250 252);
+  font-weight: 600;
+}
+.dark .brain-quill-mount > .ql-container.ql-snow .ql-editor.chat-md-output th {
+  background: rgb(30 41 59);
+}
+
+.brain-quill-host--pane {
+  border-top: 1px solid rgb(241 245 249);
+}
+.dark .brain-quill-host--pane {
+  border-top-color: rgb(51 65 85 / 0.85);
+}
+
+/* Quill Snow — dark toolbar / surface */
+.dark .brain-quill-mount > .ql-toolbar.ql-snow {
+  background: rgb(30 41 59);
+  border-bottom-color: rgb(51 65 85);
+}
+.dark .brain-quill-mount > .ql-toolbar.ql-snow .ql-stroke {
+  stroke: rgb(203 213 225);
+}
+.dark .brain-quill-mount > .ql-toolbar.ql-snow .ql-fill {
+  fill: rgb(203 213 225);
+}
+.dark .brain-quill-mount > .ql-toolbar.ql-snow .ql-picker {
+  color: rgb(226 232 240);
+}
+.dark .brain-quill-mount > .ql-toolbar.ql-snow .ql-picker-options {
+  background: rgb(30 41 59);
+  border-color: rgb(51 65 85);
+}
+.dark .brain-quill-mount > .ql-container.ql-snow .ql-editor.ql-blank::before {
+  color: rgb(148 163 184);
+}
+
+.dark .brain-quill-mount > .ql-container.ql-snow .ql-editor.chat-md-output pre.ql-syntax code {
+  background: transparent !important;
+  color: inherit !important;
+}
+.dark .brain-quill-mount > .ql-container.ql-snow .ql-editor.chat-md-output pre.ql-syntax .hljs {
+  background: transparent !important;
+  color: rgb(226 232 240);
+}
+.dark .brain-quill-mount > .ql-container.ql-snow .ql-editor.chat-md-output pre.ql-syntax span[class*='hljs-'] {
+  background-color: transparent !important;
+}
+.dark .brain-quill-mount > .ql-container.ql-snow .ql-editor.chat-md-output pre.ql-syntax .hljs-comment,
+.dark .brain-quill-mount > .ql-container.ql-snow .ql-editor.chat-md-output pre.ql-syntax .hljs-quote {
+  color: rgb(148 163 184);
+}
+.dark .brain-quill-mount > .ql-container.ql-snow .ql-editor.chat-md-output pre.ql-syntax .hljs-keyword,
+.dark .brain-quill-mount > .ql-container.ql-snow .ql-editor.chat-md-output pre.ql-syntax .hljs-selector-tag,
+.dark .brain-quill-mount > .ql-container.ql-snow .ql-editor.chat-md-output pre.ql-syntax .hljs-built_in {
+  color: rgb(165 180 252);
+}
+.dark .brain-quill-mount > .ql-container.ql-snow .ql-editor.chat-md-output pre.ql-syntax .hljs-string,
+.dark .brain-quill-mount > .ql-container.ql-snow .ql-editor.chat-md-output pre.ql-syntax .hljs-attr {
+  color: rgb(134 239 172);
+}
+.dark .brain-quill-mount > .ql-container.ql-snow .ql-editor.chat-md-output pre.ql-syntax .hljs-number,
+.dark .brain-quill-mount > .ql-container.ql-snow .ql-editor.chat-md-output pre.ql-syntax .hljs-literal {
+  color: rgb(253 224 71);
+}
+.dark .brain-quill-mount > .ql-container.ql-snow .ql-editor.chat-md-output pre.ql-syntax .hljs-title,
+.dark .brain-quill-mount > .ql-container.ql-snow .ql-editor.chat-md-output pre.ql-syntax .hljs-function .hljs-keyword {
+  color: rgb(147 197 253);
 }

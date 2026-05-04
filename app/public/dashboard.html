@@ -1068,7 +1068,7 @@ tailwind.config = {
 
   <!-- ── FILES PAGE ── -->
   <div id="page-files" x-show="page === 'files'" x-cloak x-transition.opacity.duration.150ms>
-    <div class="flex flex-col lg:flex-row lg:items-stretch lg:gap-0 lg:min-h-[calc(100vh-8rem)] min-w-0">
+    <div class="flex flex-col lg:flex-row lg:items-stretch lg:gap-0 lg:h-[calc(100vh-8rem)] lg:min-h-[calc(100vh-8rem)] lg:max-h-[calc(100vh-8rem)] lg:overflow-hidden min-w-0">
       <!-- File list (sidebar on lg+); width resizable on desktop -->
       <div class="flex flex-col min-h-0 w-full shrink-0 lg:min-w-0 lg:pr-4 lg:border-r border-slate-200 dark:border-slate-700" :style="filesListAsideStyle()">
 
@@ -1326,6 +1326,7 @@ tailwind.config = {
               <button type="button" x-show="viewerPath && viewerDisplayMode !== 'download'" @click="triggerFileDownload(viewerPath.dir, viewerPath.name)" class="text-xs font-medium px-2.5 py-1.5 rounded-md bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 transition-colors">Download</button>
               <button type="button" x-show="viewerPath && fileMetaAndArchiveEnabled(viewerPath.dir, viewerPath.name)" @click="openFileMetaEditor()" class="text-xs font-medium px-2.5 py-1.5 rounded-md bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 transition-colors">Details</button>
               <button type="button" x-show="viewerPath && fileMetaAndArchiveEnabled(viewerPath.dir, viewerPath.name)" @click="archiveFile(viewerPath.dir, viewerPath.name)" class="text-xs font-medium px-2.5 py-1.5 rounded-md bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 transition-colors">Archive</button>
+              <button type="button" x-show="viewerPath && fileIsDeletable(viewerPath.dir, viewerPath.name)" @click="deleteFile(viewerPath.dir, viewerPath.name)" class="text-xs font-medium px-2.5 py-1.5 rounded-md bg-slate-100 dark:bg-slate-700 hover:bg-red-50 dark:hover:bg-red-950/40 hover:text-red-700 dark:hover:text-red-300 text-slate-700 dark:text-slate-200 transition-colors">Delete</button>
               <button type="button" x-show="viewerPath && fileIsEditable(viewerPath.name)" @click="editFromViewer()" class="text-xs font-medium px-2.5 py-1.5 rounded-md bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 transition-colors">Edit</button>
               <button type="button" @click="closeViewer()" class="icon-btn p-1.5 rounded-md text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700" aria-label="Close">
                 <i data-lucide="x" class="w-5 h-5"></i>
@@ -1379,14 +1380,27 @@ tailwind.config = {
             <span class="font-semibold text-slate-800 dark:text-slate-100 text-sm truncate pr-2 min-w-0" x-text="editorTitle"></span>
             <div class="flex items-center gap-1 shrink-0">
               <button type="button" x-show="editorPath && fileMetaAndArchiveEnabled(editorPath.dir, editorPath.name)" @click="openFileMetaEditor()" class="text-xs font-medium px-2.5 py-1.5 rounded-md bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 transition-colors">Details</button>
-              <button type="button" @click="editorOpen = false" class="icon-btn p-1.5 rounded-md text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 shrink-0" aria-label="Close">
+              <button type="button" x-show="editorPath && fileIsDeletable(editorPath.dir, editorPath.name)" @click="deleteFile(editorPath.dir, editorPath.name)" class="text-xs font-medium px-2.5 py-1.5 rounded-md bg-slate-100 dark:bg-slate-700 hover:bg-red-50 dark:hover:bg-red-950/40 hover:text-red-700 dark:hover:text-red-300 text-slate-700 dark:text-slate-200 transition-colors">Delete</button>
+              <button type="button" @click="closeFileEditor(true)" class="icon-btn p-1.5 rounded-md text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 shrink-0" aria-label="Close">
                 <i data-lucide="x" class="w-5 h-5"></i>
               </button>
             </div>
           </div>
-          <textarea x-model="editorContent" class="flex-1 p-4 text-xs text-slate-700 dark:text-slate-200 dark:bg-slate-800 font-mono resize-none focus:outline-none min-h-[240px]"></textarea>
+          <div x-show="editorIsMarkdown()" x-cloak class="flex flex-wrap items-center gap-1.5 px-4 pt-2 pb-1 shrink-0 border-b border-slate-100 dark:border-slate-700/80">
+            <span class="text-[11px] text-slate-500 dark:text-slate-400">Edit as</span>
+            <button type="button" @click="setEditorMdUiMode('text')" :class="editorMdUiMode === 'text' ? 'bg-slate-200 dark:bg-slate-600 text-slate-900 dark:text-white' : 'bg-slate-100 dark:bg-slate-700/80 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600'" class="text-xs font-medium px-2.5 py-1 rounded-md transition-colors">Markdown</button>
+            <button type="button" @click="setEditorMdUiMode('wysiwyg')" :class="editorMdUiMode === 'wysiwyg' ? 'bg-slate-200 dark:bg-slate-600 text-slate-900 dark:text-white' : 'bg-slate-100 dark:bg-slate-700/80 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600'" class="text-xs font-medium px-2.5 py-1 rounded-md transition-colors">Visual</button>
+          </div>
+          <div class="flex flex-col flex-1 min-h-0 min-w-0 overflow-hidden">
+            <textarea x-show="!editorIsMarkdown() || editorMdUiMode === 'text'" x-model="editorContent" class="flex-1 min-h-0 w-full overflow-y-auto p-4 text-xs text-slate-700 dark:text-slate-200 dark:bg-slate-800 font-mono resize-none focus:outline-none"></textarea>
+            <template x-if="editorIsMarkdown() && editorMdUiMode === 'wysiwyg'">
+              <div class="brain-quill-mount flex flex-col flex-1 min-h-0 min-w-0 overflow-hidden">
+                <div x-ref="mdWysiwygHostLg" class="flex-1 min-h-0 min-w-0 brain-quill-host brain-quill-host--pane"></div>
+              </div>
+            </template>
+          </div>
           <div class="flex justify-end gap-2 px-4 py-3 border-t border-slate-200 dark:border-slate-700 shrink-0">
-            <button type="button" @click="editorOpen = false" class="px-4 py-1.5 text-sm rounded-lg bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 transition-colors">Cancel</button>
+            <button type="button" @click="closeFileEditor(true)" class="px-4 py-1.5 text-sm rounded-lg bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 transition-colors">Cancel</button>
             <button type="button" @click="saveFile()" :disabled="editorSaving" class="px-4 py-1.5 text-sm rounded-lg bg-blue-600 hover:bg-blue-700 text-white transition-colors disabled:opacity-50" x-text="editorSaving ? 'Saving…' : 'Save'"></button>
           </div>
         </div>
@@ -2455,6 +2469,7 @@ tailwind.config = {
         <button type="button" x-show="viewerPath && viewerDisplayMode !== 'download'" @click="triggerFileDownload(viewerPath.dir, viewerPath.name)" class="text-xs font-medium px-2.5 py-1.5 rounded-md bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200">Download</button>
         <button type="button" x-show="viewerPath && fileMetaAndArchiveEnabled(viewerPath.dir, viewerPath.name)" @click="openFileMetaEditor()" class="text-xs font-medium px-2.5 py-1.5 rounded-md bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200">Details</button>
         <button type="button" x-show="viewerPath && fileMetaAndArchiveEnabled(viewerPath.dir, viewerPath.name)" @click="archiveFile(viewerPath.dir, viewerPath.name)" class="text-xs font-medium px-2.5 py-1.5 rounded-md bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200">Archive</button>
+        <button type="button" x-show="viewerPath && fileIsDeletable(viewerPath.dir, viewerPath.name)" @click="deleteFile(viewerPath.dir, viewerPath.name)" class="text-xs font-medium px-2.5 py-1.5 rounded-md bg-slate-100 dark:bg-slate-700 hover:bg-red-50 dark:hover:bg-red-950/40 hover:text-red-700 dark:hover:text-red-300 text-slate-700 dark:text-slate-200">Delete</button>
         <button type="button" x-show="viewerPath && fileIsEditable(viewerPath.name)" @click="editFromViewer()" class="text-xs font-medium px-2.5 py-1.5 rounded-md bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200">Edit</button>
         <button type="button" @click="closeViewer()" class="icon-btn p-1.5 rounded-md text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700" aria-label="Close">
           <i data-lucide="x" class="w-5 h-5"></i>
@@ -2506,20 +2521,33 @@ tailwind.config = {
 </div>
 
 <!-- ── FILE EDITOR MODAL (mobile / &lt;lg) ── -->
-<div x-show="editorOpen" x-cloak @keydown.escape.window="editorOpen = false" class="lg:hidden fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" @click.self="editorOpen = false">
-  <div class="bg-white dark:bg-slate-800 rounded-xl shadow-xl w-full max-w-4xl max-h-[85vh] flex flex-col" @click.stop>
-    <div class="flex items-center justify-between gap-2 px-5 py-3 border-b border-slate-200 dark:border-slate-700">
+<div x-show="editorOpen" x-cloak @keydown.escape.window="closeFileEditor(true)" class="lg:hidden fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" @click.self="closeFileEditor(true)">
+  <div class="bg-white dark:bg-slate-800 rounded-xl shadow-xl w-full max-w-4xl max-h-[85vh] flex flex-col min-h-0" @click.stop>
+    <div class="flex items-center justify-between gap-2 px-5 py-3 border-b border-slate-200 dark:border-slate-700 shrink-0">
       <span class="font-semibold text-slate-800 dark:text-slate-100 text-sm truncate min-w-0 pr-2" x-text="editorTitle"></span>
       <div class="flex items-center gap-1 shrink-0">
         <button type="button" x-show="editorPath && fileMetaAndArchiveEnabled(editorPath.dir, editorPath.name)" @click="openFileMetaEditor()" class="text-xs font-medium px-2.5 py-1.5 rounded-md bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200">Details</button>
-        <button type="button" @click="editorOpen = false" class="icon-btn p-1.5 rounded-md text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700" aria-label="Close">
+        <button type="button" x-show="editorPath && fileIsDeletable(editorPath.dir, editorPath.name)" @click="deleteFile(editorPath.dir, editorPath.name)" class="text-xs font-medium px-2.5 py-1.5 rounded-md bg-slate-100 dark:bg-slate-700 hover:bg-red-50 dark:hover:bg-red-950/40 hover:text-red-700 dark:hover:text-red-300 text-slate-700 dark:text-slate-200">Delete</button>
+        <button type="button" @click="closeFileEditor(true)" class="icon-btn p-1.5 rounded-md text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700" aria-label="Close">
           <i data-lucide="x" class="w-5 h-5"></i>
         </button>
       </div>
     </div>
-    <textarea x-model="editorContent" class="flex-1 p-5 text-xs text-slate-700 dark:text-slate-200 dark:bg-slate-800 font-mono resize-none focus:outline-none min-h-[200px]"></textarea>
-    <div class="flex justify-end gap-2 px-5 py-3 border-t border-slate-200 dark:border-slate-700">
-      <button type="button" @click="editorOpen = false" class="px-4 py-1.5 text-sm rounded-lg bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 transition-colors">Cancel</button>
+    <div x-show="editorIsMarkdown()" x-cloak class="flex flex-wrap items-center gap-1.5 px-5 pt-2 pb-1 shrink-0 border-b border-slate-100 dark:border-slate-700/80">
+      <span class="text-[11px] text-slate-500 dark:text-slate-400">Edit as</span>
+      <button type="button" @click="setEditorMdUiMode('text')" :class="editorMdUiMode === 'text' ? 'bg-slate-200 dark:bg-slate-600 text-slate-900 dark:text-white' : 'bg-slate-100 dark:bg-slate-700/80 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600'" class="text-xs font-medium px-2.5 py-1 rounded-md transition-colors">Markdown</button>
+      <button type="button" @click="setEditorMdUiMode('wysiwyg')" :class="editorMdUiMode === 'wysiwyg' ? 'bg-slate-200 dark:bg-slate-600 text-slate-900 dark:text-white' : 'bg-slate-100 dark:bg-slate-700/80 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600'" class="text-xs font-medium px-2.5 py-1 rounded-md transition-colors">Visual</button>
+    </div>
+    <div class="flex flex-col flex-1 min-h-0 min-w-0 overflow-hidden">
+      <textarea x-show="!editorIsMarkdown() || editorMdUiMode === 'text'" x-model="editorContent" class="flex-1 min-h-0 w-full overflow-y-auto p-5 text-xs text-slate-700 dark:text-slate-200 dark:bg-slate-800 font-mono resize-none focus:outline-none"></textarea>
+      <template x-if="editorIsMarkdown() && editorMdUiMode === 'wysiwyg'">
+        <div class="brain-quill-mount flex flex-col flex-1 min-h-0 min-w-0 overflow-hidden">
+          <div x-ref="mdWysiwygHostSm" class="flex-1 min-h-0 min-w-0 brain-quill-host brain-quill-host--pane"></div>
+        </div>
+      </template>
+    </div>
+    <div class="flex justify-end gap-2 px-5 py-3 border-t border-slate-200 dark:border-slate-700 shrink-0">
+      <button type="button" @click="closeFileEditor(true)" class="px-4 py-1.5 text-sm rounded-lg bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 transition-colors">Cancel</button>
       <button type="button" @click="saveFile()" :disabled="editorSaving" class="px-4 py-1.5 text-sm rounded-lg bg-blue-600 hover:bg-blue-700 text-white transition-colors disabled:opacity-50" x-text="editorSaving ? 'Saving…' : 'Save'"></button>
     </div>
   </div>

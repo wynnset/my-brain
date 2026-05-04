@@ -2175,26 +2175,26 @@ tailwind.config = {
       >
         <textarea x-ref="chatPromptMobile" x-model="chatPrompt" @input="adjustChatComposerHeight($event.target)" @keydown.enter="onChatComposerEnterKeydown($event)" @paste="handleChatPaste($event)" rows="3" :placeholder="chatPromptPlaceholderMobile()"
           class="w-full text-base rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 px-3 py-2.5 resize-none focus:outline-none focus:ring-2 focus:ring-slate-400 dark:focus:ring-slate-500 min-h-[3.5rem] max-h-[50vh] overflow-y-hidden"></textarea>
-        <div class="flex items-stretch gap-2 min-w-0">
-          <div class="flex flex-1 min-w-0 items-stretch gap-1.5">
+        <div class="flex items-stretch gap-1.5 min-w-0">
+          <div class="flex flex-1 min-w-0 items-stretch gap-1">
             <button type="button" id="chat-agent-mobile"
               @click="toggleChatAgentProfile()"
               :aria-expanded="chatAgentProfileOpen"
               aria-haspopup="dialog"
               aria-controls="chat-agent-profile-panel"
-              class="flex h-10 min-h-[2.5rem] max-h-[2.5rem] min-w-[120px] flex-1 items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-2.5 text-left transition-colors hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 dark:border-slate-600 dark:bg-slate-900/50 dark:hover:bg-slate-800/80"
+              class="flex h-10 min-h-[2.5rem] max-h-[2.5rem] min-w-[80px] flex-1 items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2 text-left transition-colors hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 dark:border-slate-600 dark:bg-slate-900/50 dark:hover:bg-slate-800/80"
               :title="chatMessages.length ? 'View agent briefs. This conversation keeps the current agent until you start a new chat.' : 'View the full brief and switch agents from the sidebar.'"
               :aria-label="chatMessages.length ? 'Agent profile, browse briefs (agent fixed for this chat)' : 'Agent profile and switch agent'">
-              <div class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-indigo-100 text-[11px] font-bold leading-none text-indigo-700 dark:bg-indigo-950/55 dark:text-indigo-200" x-text="workPanelAvatarLetter(chatAgent)"></div>
+              <div class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-indigo-100 text-[10px] font-bold leading-none text-indigo-700 dark:bg-indigo-950/55 dark:text-indigo-200" x-text="workPanelAvatarLetter(chatAgent)"></div>
               <div class="flex min-w-0 flex-1 flex-col justify-center gap-0.5 leading-none">
-                <span class="truncate text-xs font-semibold text-slate-800 dark:text-slate-100" x-text="chatAgentDisplayName(chatAgent)"></span>
-                <span class="truncate text-[10px] font-normal text-slate-500 dark:text-slate-400" x-text="chatAgentSummaryLine(chatAgent)"></span>
+                <span class="truncate text-[11px] font-semibold text-slate-800 dark:text-slate-100" x-text="chatAgentDisplayName(chatAgent)"></span>
+                <span class="truncate text-[9px] font-normal text-slate-500 dark:text-slate-400" x-text="chatAgentSummaryLine(chatAgent)"></span>
               </div>
-              <i data-lucide="chevron-down" class="h-4 w-4 shrink-0 text-slate-400" aria-hidden="true"></i>
+              <i data-lucide="chevron-down" class="h-3.5 w-3.5 shrink-0 text-slate-400" aria-hidden="true"></i>
             </button>
-            <div class="relative h-10 min-h-[2.5rem] max-h-[2.5rem] shrink-0 min-w-[4rem] max-w-[5rem]">
+            <div class="relative h-10 min-h-[2.5rem] max-h-[2.5rem] shrink-0 min-w-[3.25rem] max-w-[4rem]">
               <select
-                class="h-10 w-full cursor-pointer appearance-none rounded-lg border border-slate-200 bg-slate-50 py-0 pl-2 pr-8 text-xs font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-slate-400 disabled:opacity-50 dark:border-slate-600 dark:bg-slate-900/50 dark:text-slate-200 dark:focus:ring-slate-500"
+                class="h-10 w-full cursor-pointer appearance-none rounded-lg border border-slate-200 bg-slate-50 py-0 pl-2 pr-6 text-[11px] font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-slate-400 disabled:opacity-50 dark:border-slate-600 dark:bg-slate-900/50 dark:text-slate-200 dark:focus:ring-slate-500"
                 :disabled="currentChatOutboundBusy()"
                 aria-label="Reply mode"
                 :value="chatPlanMode ? 'plan' : 'chat'"
@@ -2211,13 +2211,13 @@ tailwind.config = {
               :aria-expanded="chatModelPickerOpen"
               aria-haspopup="dialog"
               aria-controls="chat-model-picker-panel"
-              class="flex h-10 min-h-[2.5rem] max-h-[2.5rem] w-[6.25rem] shrink-0 items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 pl-1.5 pr-1.5 text-left text-xs font-medium text-slate-700 transition-colors hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 disabled:pointer-events-none disabled:opacity-60 dark:border-slate-600 dark:bg-slate-900/50 dark:text-slate-200 dark:hover:bg-slate-800/80 sm:w-[6.75rem]"
+              class="flex h-10 min-h-[2.5rem] max-h-[2.5rem] w-[5.25rem] shrink-0 items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 pl-1.5 pr-1 text-left text-[11px] font-medium text-slate-700 transition-colors hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 disabled:pointer-events-none disabled:opacity-60 dark:border-slate-600 dark:bg-slate-900/50 dark:text-slate-200 dark:hover:bg-slate-800/80 sm:w-[5.75rem]"
               :title="chatModelPickerDisabled() ? 'Wait for the reply to finish before changing model' : ('Choose model — ' + chatModelDisplayLabel(chatModel) + (chatModelSummaryLine(chatModel) ? (' · ' + chatModelSummaryLine(chatModel)) : ''))">
-              <div class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-slate-200/80 text-slate-600 dark:bg-slate-700/50 dark:text-slate-300" aria-hidden="true">
-                <i data-lucide="layers" class="h-3.5 w-3.5"></i>
+              <div class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-slate-200/80 text-slate-600 dark:bg-slate-700/50 dark:text-slate-300" aria-hidden="true">
+                <i data-lucide="layers" class="h-3 w-3"></i>
               </div>
               <span class="min-w-0 flex-1 truncate leading-none" x-text="chatModelDisplayLabel(chatModel)"></span>
-              <i data-lucide="chevron-down" class="h-4 w-4 shrink-0 text-slate-400" aria-hidden="true"></i>
+              <i data-lucide="chevron-down" class="h-3.5 w-3.5 shrink-0 text-slate-400" aria-hidden="true"></i>
             </button>
           </div>
           <div class="relative shrink-0" @click.outside="closeChatAttachmentsMenu()" @keydown.escape.window="onEscapeCloseChatAttachmentsMenu()">

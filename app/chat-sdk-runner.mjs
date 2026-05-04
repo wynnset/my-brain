@@ -225,16 +225,35 @@ export async function runAgentSdkQuery(opts) {
     const fetchLogPath =
       opts.auditTools !== false ? path.join(path.dirname(auditPathForFetch), 'brain-fetch.log') : '';
     const script = path.join(__dirname, 'mcp-brain-fetch.mjs');
-    mcpServers.brainFetch = {
-      type: 'stdio',
-      command: process.execPath,
-      args: [script],
-      env: {
-        ...process.env,
-        BRAIN_FETCH_PLAYWRIGHT_OK: playwrightOk ? '1' : '0',
-        BRAIN_FETCH_LOG_PATH: fetchLogPath,
-      },
-    };
+    let scriptOk = true;
+    try {
+      fs.statSync(script);
+    } catch (_) {
+      scriptOk = false;
+    }
+    if (!scriptOk) {
+      const msg = `[chat-sdk] brainFetch MCP NOT registered — script missing at ${script}`;
+      console.warn(msg);
+      opts.onLog?.(msg);
+    } else {
+      mcpServers.brainFetch = {
+        type: 'stdio',
+        command: process.execPath,
+        args: [script],
+        env: {
+          ...process.env,
+          BRAIN_FETCH_PLAYWRIGHT_OK: playwrightOk ? '1' : '0',
+          BRAIN_FETCH_LOG_PATH: fetchLogPath,
+        },
+      };
+      const msg = `[chat-sdk] brainFetch MCP registered (script=${script}, playwright=${playwrightOk ? 'on' : 'off'}, log=${fetchLogPath || '(disabled)'})`;
+      console.log(msg);
+      opts.onLog?.(msg);
+    }
+  } else {
+    const msg = '[chat-sdk] brainFetch MCP NOT registered (enableMcpBrowserFetch=false; set BRAIN_CHAT_MCP_BROWSER=1 to enable)';
+    console.log(msg);
+    opts.onLog?.(msg);
   }
 
   const auditPath = opts.auditLogPath || path.join(opts.cwd, 'chat-tool-audit.log');

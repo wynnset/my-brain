@@ -323,6 +323,18 @@ export async function runAgentSdkQuery(opts) {
     maxTurns: opts.maxTurns ?? 100,
   };
 
+  // BRAIN_CHAT_DEBUG_SDK=1 pipes the Claude Code CLI subprocess's stderr
+  // through opts.onLog. Useful for diagnosing why an MCP server isn't
+  // appearing in the model's tool list (the SDK otherwise discards CLI
+  // stderr unless DEBUG_CLAUDE_AGENT_SDK is set).
+  if (process.env.BRAIN_CHAT_DEBUG_SDK === '1') {
+    options.stderr = (line) => {
+      const msg = `[claude-cli] ${String(line).replace(/\s+$/, '')}`;
+      console.warn(msg);
+      opts.onLog?.(msg);
+    };
+  }
+
   if (opts.allowedTools?.length) options.allowedTools = opts.allowedTools;
   if (abortController) options.abortController = abortController;
   if (Object.keys(mcpServers).length) options.mcpServers = mcpServers;

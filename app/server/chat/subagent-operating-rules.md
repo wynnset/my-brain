@@ -45,13 +45,17 @@ files or broad searches in one minute will hit it and fail with a 429.
    about a rule or recommendation rather than the file's specific content,
    don't load the file.
 4. **Cap web fetches.** Default max 3 `WebFetch` / `WebSearch` /
-   `brain_fetch` calls per session unless the brief says otherwise. Prefer
-   `mcp__brainFetch__brain_fetch` over `WebFetch` when you need raw page
-   content — it runs Mozilla Readability (much cheaper on tokens), caches by
-   URL within the session, and auto-escalates to headless Chromium when the
-   page looks JS-required or bot-walled (Cloudflare, CAPTCHA, "enable
-   JavaScript" boilerplate, empty SPA shell). That auto-escalation counts as
-   one fetch, not two — you don't need to manually retry. Use
+   `brain_fetch` calls per session unless the brief says otherwise. Pick the
+   right tool: `WebFetch` runs internal Haiku extraction against the page
+   using your `prompt` and returns a small answer — cheapest choice for
+   "pull one fact from one page." Use `mcp__brainFetch__brain_fetch` when (a)
+   the page is JS-required / bot-walled (Cloudflare, CAPTCHA, "enable
+   JavaScript" boilerplate, empty SPA shell — `brain_fetch` auto-escalates
+   to headless Chromium, so a single call counts as one fetch even when it
+   escalates), (b) you'll re-fetch the same URL more than once (the cache
+   makes repeats free), (c) the page is large and Readability's cleaned text
+   is cheaper than a Haiku pass over the whole thing, or (d) you need raw
+   text to reason over rather than one extracted answer. Use
    `format: "markdown"` to preserve images and links, `format: "html"` for
    styling / DOM-structure questions, and `load_resources: "all"` when the
    page only renders correctly with images / CSS loaded.

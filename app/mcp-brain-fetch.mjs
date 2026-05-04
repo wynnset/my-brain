@@ -200,12 +200,15 @@ server.registerTool(
   {
     title: 'Fetch web page (auto-escalating)',
     description:
-      'Fetch a public http(s) URL. By default tries plain HTTP and only escalates to headless Chromium when the response looks JS-rendered or bot-blocked. Returns clean article text via Mozilla Readability.\n\n' +
-      'Use this instead of WebFetch when you want raw page content. Knobs:\n' +
-      '- mode: "auto" (default) | "http" (skip browser) | "browser" (force Chromium, e.g. when you already know JS is required).\n' +
-      '- format: "text" (default — cheapest, just article body text) | "markdown" (preserves images as ![alt](src), links, headings — use when you need to enumerate media or follow links) | "html" (full body HTML preserving classes / inline styles — use for styling or structure questions).\n' +
-      '- load_resources: "minimal" (default — blocks images/CSS/fonts/media when launching Chromium for speed) | "all" (load everything — needed for accurate rendered layout, computed styles, or pages that only show content after CSS/JS-loaded assets).\n' +
-      '- max_chars: per-call truncation cap on returned content. Defaults to ~30k chars; raise it (up to the env ceiling) when you genuinely need the whole page.',
+      'Fetch a public http(s) URL and return cleaned page content via Mozilla Readability (clean article text, no nav/ads/footers). Tries plain HTTP first; auto-escalates to headless Chromium internally when the response looks JS-required or bot-blocked, so one call covers both paths.\n\n' +
+      'When to choose this vs WebFetch:\n' +
+      '- Use WebFetch for "pull one fact from one page" — it runs an internal Haiku extraction against the page using your prompt and returns a small answer (cheapest path for single-fact extraction).\n' +
+      '- Use brain_fetch when (a) the page is JS-required / bot-walled (Cloudflare, CAPTCHA, "enable JavaScript", empty SPA shell — auto-escalates), (b) you will re-fetch the same URL more than once this session (cached), (c) the page is large and you want cleaned text instead of a Haiku pass over the full thing, or (d) you need raw text to reason over rather than one extracted answer.\n\n' +
+      'Knobs:\n' +
+      '- mode: "auto" (default) | "http" (skip browser) | "browser" (force Chromium when you already know JS is required).\n' +
+      '- format: "text" (default — article body text) | "markdown" (preserves images as ![alt](src), links, headings — use when enumerating media or following links) | "html" (full body HTML with classes / inline styles — use only for styling / DOM-structure questions; expensive on tokens).\n' +
+      '- load_resources: "minimal" (default — blocks images/CSS/fonts/media when launching Chromium) | "all" (load everything — needed for accurate rendered layout or computed styles).\n' +
+      '- max_chars: per-call truncation cap on returned content. Defaults to ~30k chars; raise it when you genuinely need the whole page.',
     inputSchema: z.object({
       url: z.string().max(8000),
       mode: z.enum(['auto', 'http', 'browser']).optional(),

@@ -161,15 +161,24 @@ directly or synthesize a subagent's result.
   available, use it. Do not rely on what you already know about how
   something works — fetch the current page and read it. Facts expire;
   fetched pages don't lie about their last-modified date.
-- **Prefer `mcp__brainFetch__brain_fetch` over `WebFetch` when you need raw
-  page content.** It runs Mozilla Readability on the response (clean article
-  text, far fewer tokens than `WebFetch` summarization re-fed into context),
-  caches by URL within the session, and auto-escalates to headless Chromium
-  when the page looks JS-required or bot-walled — so you don't need to
-  manually retry a failed `WebFetch` with a different tool. `WebFetch` is
-  still fine for "summarize this page" tasks where the SDK's built-in
-  summarization is what you actually want; `brain_fetch` is for "give me the
-  page text so I can reason over it myself."
+- **`mcp__brainFetch__brain_fetch` vs `WebFetch` — pick by workload.**
+  `WebFetch` runs an internal Haiku call against the page using your `prompt`
+  and returns a small extracted answer; that's well-suited for "pull one fact
+  from one page" and is the cheaper choice for those (Haiku reads the page,
+  the orchestrator only ever sees ~a few hundred tokens back). Reach for
+  `brain_fetch` when one of the following is true:
+  - **JS-required / bot-walled page** (Cloudflare, CAPTCHA, "enable
+    JavaScript" boilerplate, empty SPA shell) — `brain_fetch` auto-escalates
+    to headless Chromium internally, so you don't need to retry with a
+    different tool.
+  - **You'll re-fetch the same URL more than once in this session** — the
+    in-memory cache makes repeat fetches free.
+  - **You need raw page text to reason over directly** (search-result page
+    you'll filter, an article you'll quote from, a structured list you'll
+    enumerate) rather than a one-shot Haiku-extracted answer.
+  - **The page is large** (long-form articles, docs) where Haiku's per-call
+    extraction over the full page would burn more tokens than Readability's
+    cleaned-text version handed straight to you.
 - **`brain_fetch` knobs (set per-call when defaults aren't enough):**
   - `format: "markdown"` — keeps images as `![alt](src)`, links, and
     headings. Use when you need to enumerate media on a page or follow links.

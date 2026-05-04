@@ -323,12 +323,17 @@ export async function runAgentSdkQuery(opts) {
     maxTurns: opts.maxTurns ?? 100,
   };
 
-  // BRAIN_CHAT_DEBUG_SDK=1 turns on the Claude Code CLI's own --debug flag
-  // and pipes its stderr through opts.onLog so we can see MCP spawn /
-  // tools-list / handshake errors that are otherwise discarded. Diagnostic
-  // switch only — leaves normal runs quiet.
+  // BRAIN_CHAT_DEBUG_SDK=1 turns on the Claude Code CLI's debug logging and
+  // pipes its stderr through opts.onLog so we can see MCP spawn / tools-list
+  // / handshake errors that are otherwise discarded. Diagnostic switch only.
+  // Needs both: options.debug → CLI --debug flag; DEBUG_CLAUDE_AGENT_SDK
+  // injected into the CLI subprocess env → CLI --debug-to-stderr.
   if (process.env.BRAIN_CHAT_DEBUG_SDK === '1') {
     options.debug = true;
+    options.env = {
+      ...(options.env && Object.keys(options.env).length ? options.env : process.env),
+      DEBUG_CLAUDE_AGENT_SDK: '1',
+    };
     options.stderr = (line) => {
       const msg = `[claude-cli] ${String(line).replace(/\s+$/, '')}`;
       console.warn(msg);

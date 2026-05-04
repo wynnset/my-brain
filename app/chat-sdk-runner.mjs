@@ -12,6 +12,21 @@ import {
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 
+/**
+ * The Agent SDK bundle lowers `using` to `Symbol.dispose || Symbol.for("Symbol.dispose")`.
+ * Without native `Symbol.dispose`, Node builtins are not disposable under the fallback symbol,
+ * which surfaces as `TypeError: Object not disposable` during SDK init (see anthropics/claude-code#26942).
+ */
+function assertAgentSdkNodeRuntime() {
+  if (typeof Symbol.dispose !== 'symbol') {
+    throw new Error(
+      `[chat-sdk] Node.js ${process.version} is missing native Symbol.dispose, which ` +
+        '@anthropic-ai/claude-agent-sdk needs (otherwise chat fails with "Object not disposable"). ' +
+        'Upgrade to Node.js 20.4 or newer (recommended: latest Node 20 LTS or Node 22 LTS).'
+    );
+  }
+}
+
 function extractStreamTextDelta(event) {
   if (!event || typeof event !== 'object') return '';
   if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
@@ -191,6 +206,7 @@ export function parsePermissionOptions(spec) {
  * @returns {Promise<{ finalText: string, sessionId: string | null, hadError: boolean, errors: string[], sdkBilling: ReturnType<typeof snapshotSdkBillingFromResultMessage> }>}
  */
 export async function runAgentSdkQuery(opts) {
+  assertAgentSdkNodeRuntime();
   const { query } = await import('@anthropic-ai/claude-agent-sdk');
 
   const mcpServers = {};

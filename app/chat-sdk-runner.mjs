@@ -218,12 +218,22 @@ export async function runAgentSdkQuery(opts) {
       const msg = e && typeof e === 'object' && 'message' in e ? String(e.message) : String(e);
       opts.onLog?.(`[chat-sdk] brain_fetch: Chromium escalation disabled, playwright not available (${msg})`);
     }
+    // JSONL telemetry alongside chat-tool-audit.log when auditing is enabled.
+    // Tracks per-call: cache hit, http vs browser path, escalation reason,
+    // output chars, duration. Disabled when BRAIN_CHAT_AUDIT_TOOLS=0.
+    const auditPathForFetch = opts.auditLogPath || path.join(opts.cwd, 'chat-tool-audit.log');
+    const fetchLogPath =
+      opts.auditTools !== false ? path.join(path.dirname(auditPathForFetch), 'brain-fetch.log') : '';
     const script = path.join(__dirname, 'mcp-brain-fetch.mjs');
     mcpServers.brainFetch = {
       type: 'stdio',
       command: process.execPath,
       args: [script],
-      env: { ...process.env, BRAIN_FETCH_PLAYWRIGHT_OK: playwrightOk ? '1' : '0' },
+      env: {
+        ...process.env,
+        BRAIN_FETCH_PLAYWRIGHT_OK: playwrightOk ? '1' : '0',
+        BRAIN_FETCH_LOG_PATH: fetchLogPath,
+      },
     };
   }
 

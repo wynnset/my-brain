@@ -140,30 +140,39 @@ const SHELL_PATTERNS = [
 
 /**
  * Decide whether a plain-HTTP response is bot-blocked or a JS-rendered shell
- * and we should escalate to a real browser. Conservative: only trips on
- * explicit signals so we don't waste a Chromium launch on legitimately small
- * static pages.
+ * and we should escalate to a real browser. Returns a short reason code if
+ * we should escalate, or null if the response is fine to use as-is.
+ *
+ * Conservative: only trips on explicit signals so we don't waste a Chromium
+ * launch on legitimately small static pages.
  *
  * @param {string|null} html
  * @param {number} status
  * @param {string} extractedText  text content already pulled out via Readability
- * @returns {boolean}
+ * @returns {string | null}
  */
-export function looksLikeJsRequired(html, status, extractedText) {
-  if (status === 0 || (status >= 500 && status <= 599)) return true;
-  if (status === 403 || status === 429) return true;
-  if (!html) return true;
+export function escalationReason(html, status, extractedText) {
+  if (status === 0) return 'network_error';
+  if (status === 403) return 'http_403';
+  if (status === 429) return 'http_429';
+  if (status >= 500 && status <= 599) return `http_${status}`;
+  if (!html) return 'empty_body';
 
-  if (JS_REQUIRED_PATTERNS.some((re) => re.test(html))) return true;
-  if (SHELL_PATTERNS.some((re) => re.test(html))) return true;
+  if (JS_REQUIRED_PATTERNS.some((re) => re.test(html))) return 'js_required_marker';
+  if (SHELL_PATTERNS.some((re) => re.test(html))) return 'spa_shell';
 
   // Heavy script-to-text ratio with negligible visible text — almost
   // certainly a SPA shell that hasn't run its bundle yet.
   const extractedLen = (extractedText || '').trim().length;
   if (extractedLen < 80) {
     const scriptTags = (html.match(/<script\b/gi) || []).length;
-    if (scriptTags >= 3) return true;
+    if (scriptTags >= 3) return 'thin_body_with_scripts';
   }
 
-  return false;
+  return null;
+}
+
+/** Boolean wrapper for {@link escalationReason}. */
+export function looksLikeJsRequired(html, status, extractedText) {
+  return escalationReason(html, status, extractedText) !== null;
 }

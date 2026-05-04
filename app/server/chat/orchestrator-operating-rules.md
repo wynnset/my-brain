@@ -179,6 +179,19 @@ directly or synthesize a subagent's result.
   - **The page is large** (long-form articles, docs) where Haiku's per-call
     extraction over the full page would burn more tokens than Readability's
     cleaned-text version handed straight to you.
+- **When a search returns many candidate URLs, consider delegating the
+  enumeration.** If a `WebSearch` returns ~5+ promising URLs that all need
+  to be fetched and digested for the user's question, send the URL list to a
+  research subagent (Dara, typically) with an explicit output contract — let
+  them do the per-page fetches inside their own context and return a single
+  synthesized digest to you. Every URL you fetch directly stays in *your*
+  context across every subsequent turn (counted as cache reads on each
+  turn); the same fetch done by a subagent stays in *their* context, and you
+  only ever see the digest. For exhaustive enumeration tasks (price
+  comparisons, listing roundups, "which of these papers say X"), this is one
+  of the bigger levers for keeping orchestrator context — and turn cost —
+  lean. Not a hard rule: if you only need 2–3 fetches and the user expects
+  to see your reasoning, just do them yourself.
 - **`brain_fetch` knobs (set per-call when defaults aren't enough):**
   - `format: "markdown"` — keeps images as `![alt](src)`, links, and
     headings. Use when you need to enumerate media on a page or follow links.

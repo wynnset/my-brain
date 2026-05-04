@@ -11,16 +11,29 @@
  */
 import net from 'node:net';
 import dns from 'node:dns/promises';
+import fs from 'node:fs';
 import { z } from 'zod';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
   cacheGet,
   cacheSet,
+  escalationReason,
   extractFromHtml,
-  looksLikeJsRequired,
   truncate,
 } from './lib/web-extract.mjs';
+
+const LOG_PATH = (process.env.BRAIN_FETCH_LOG_PATH || '').trim();
+
+function logEvent(evt) {
+  if (!LOG_PATH) return;
+  try {
+    const line = JSON.stringify({ ts: new Date().toISOString(), ...evt }) + '\n';
+    fs.appendFileSync(LOG_PATH, line, 'utf8');
+  } catch (_) {
+    // Best-effort logging — never fail the tool call because of a log write.
+  }
+}
 
 const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n));
 
@@ -218,27 +231,36 @@ server.registerTool(
     }),
   },
   async ({ url, mode, format, load_resources, max_chars }) => {
+    const startedAt = Date.now();
     const m = mode || 'auto';
     const f = format || 'text';
     const lr = load_resources || 'minimal';
     const cap = clamp(max_chars ?? DEFAULT_MAX_CHARS, 1000, MAX_CHARS_CEILING);
+    const baseEvt = { url, mode_requested: m, format: f, load_resources: lr, max_chars: cap };
+    const finish = (extra) =>
+      logEvent({ ...baseEvt, ...extra, duration_ms: Date.now() - startedAt });
 
     try {
       await assertUrlSafe(url);
     } catch (e) {
       const msg = e instanceof SSRFError ? e.message : 'URL validation failed';
+      finish({ outcome: 'error', error_kind: 'ssrf', error: msg });
       return errorResp(url, msg);
     }
 
     const cacheKey = JSON.stringify({ url, mode: m, format: f, load_resources: lr, cap });
     const cached = cacheGet(cacheKey);
-    if (cached) return { content: [{ type: 'text', text: cached }] };
+    if (cached) {
+      finish({ outcome: 'ok', cache_hit: true, output_chars: cached.length });
+      return { content: [{ type: 'text', text: cached }] };
+    }
 
     let html = null;
     let status = 0;
     let finalUrl = url;
     let path = m;
     let escalated = false;
+    let escalateReason = null;
     let httpError = null;
 
     if (m === 'http' || m === 'auto') {
@@ -248,14 +270,16 @@ server.registerTool(
         finalUrl = r.finalUrl;
         html = r.isHtml ? r.html : null;
         if (!r.isHtml && m === 'http') {
-          return errorResp(
-            url,
-            `non-HTML content-type "${r.contentType}" — brain_fetch only handles HTML pages`,
-          );
+          const detail = `non-HTML content-type "${r.contentType}" — brain_fetch only handles HTML pages`;
+          finish({ outcome: 'error', error_kind: 'non_html', http_status: status, error: detail });
+          return errorResp(url, detail);
         }
       } catch (e) {
         httpError = e?.message || String(e);
-        if (m === 'http') return errorResp(url, `http fetch failed: ${httpError}`);
+        if (m === 'http') {
+          finish({ outcome: 'error', error_kind: 'http_fetch', error: httpError });
+          return errorResp(url, `http fetch failed: ${httpError}`);
+        }
       }
 
       if (m === 'auto') {
@@ -265,10 +289,17 @@ server.registerTool(
             preview = extractFromHtml(html, finalUrl, 'text').body;
           } catch (_) {}
         }
-        if (httpError || looksLikeJsRequired(html, status, preview)) {
+        if (httpError) {
           escalated = true;
+          escalateReason = 'http_error';
         } else {
-          path = 'http';
+          const reason = escalationReason(html, status, preview);
+          if (reason) {
+            escalated = true;
+            escalateReason = reason;
+          } else {
+            path = 'http';
+          }
         }
       } else {
         path = 'http';
@@ -283,11 +314,21 @@ server.registerTool(
         finalUrl = r.finalUrl;
         path = escalated ? 'browser (escalated from http)' : 'browser';
       } catch (e) {
-        return errorResp(url, `browser fetch failed: ${e?.message || e}`);
+        const detail = `browser fetch failed: ${e?.message || e}`;
+        finish({
+          outcome: 'error',
+          error_kind: 'browser_fetch',
+          path,
+          escalated,
+          escalation_reason: escalateReason,
+          error: detail,
+        });
+        return errorResp(url, detail);
       }
     }
 
     if (!html) {
+      finish({ outcome: 'error', error_kind: 'no_body', path, http_status: status });
       return errorResp(url, 'no HTML body retrieved');
     }
 
@@ -295,7 +336,15 @@ server.registerTool(
     try {
       extracted = extractFromHtml(html, finalUrl, f);
     } catch (e) {
-      return errorResp(url, `extraction failed: ${e?.message || e}`);
+      const detail = `extraction failed: ${e?.message || e}`;
+      finish({
+        outcome: 'error',
+        error_kind: 'extraction',
+        path,
+        http_status: status,
+        error: detail,
+      });
+      return errorResp(url, detail);
     }
 
     const payload = {
@@ -314,6 +363,17 @@ server.registerTool(
     };
     const text = JSON.stringify(payload, null, 2);
     cacheSet(cacheKey, text);
+    finish({
+      outcome: 'ok',
+      cache_hit: false,
+      path,
+      escalated,
+      escalation_reason: escalateReason,
+      http_status: status,
+      used_readability: extracted.usedReadability,
+      content_chars: extracted.body.length,
+      output_chars: text.length,
+    });
     return { content: [{ type: 'text', text }] };
   },
 );

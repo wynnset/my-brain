@@ -95,7 +95,7 @@ function agentSlugFromFilename(filename) {
  * Intentionally conservative — if a team member needs Bash or network access
  * they (or the operator) must opt in via frontmatter.
  */
-const DEFAULT_SUBAGENT_TOOLS = ['Read', 'Glob', 'Grep', 'Bash'];
+const DEFAULT_SUBAGENT_TOOLS = ['Read', 'Glob', 'Grep', 'Bash', 'Edit'];
 
 /**
  * Tools the Agent SDK recognizes. Used to filter out typos / unsupported

@@ -8,10 +8,14 @@ const { registerOrchestratorRoutes } = require('./orchestrator.js');
 const { registerDashboardRoutes } = require('./dashboard.js');
 const { registerDomainRoutes } = require('./domain.js');
 const { registerVoiceRoutes } = require('./voice.js');
+const { registerOAuthRoutes } = require('./oauth.js');
+const { registerMcpRoutes } = require('./mcp.js');
 
 /** Health + auth endpoints (before session gate). */
 function registerPublicRoutes(app, ctx) {
   registerCoreRoutes(app, ctx);
+  registerOAuthRoutes(app, ctx);
+  registerMcpRoutes(app, ctx);
 }
 
 /** All routes that require dashboard session (or API token where applicable). */

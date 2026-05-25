@@ -74,6 +74,7 @@ If asked what model or company powers the chat, answer clearly that it is **prop
 | Job posting URL dropped in `/team-inbox/` | Application package (cover letter + resume recs) | Tailor |
 | Contact name + context dropped in `/team-inbox/` | Outreach draft | Relay |
 | Rough notes or topic dropped in `/team-inbox/` | Content draft | Sylvan |
+| "find rentals" / "rental search" / "apartment search" / listing URL or FBM file in `/team-inbox/` | Scrape Craigslist + ingest dropped FBM file, score new listings, deliver `/owners-inbox/hearth-report-[date].md` | Hearth |
 | "done: [task title]" | Mark matching brain.db action_item as done with completed_at timestamp; confirm back | Dash |
 | "update: [status change]" | Write status change to correct DB tables | Dash |
 | "weekly summary" (Sundays) | Full weekly report → `/owners-inbox/weekly-summary-[date].md` | Dash |
@@ -86,6 +87,7 @@ If asked what model or company powers the chat, answer clearly that it is **prop
 | `wynnset.db` | `wynnset_db_path` | Corporate accounting — double-entry, HST, compliance (Charter) |
 | `launchpad.db` | Same directory as finance.db, filename `launchpad.db` | Career pipeline — jobs, outreach, tasks (Dash) |
 | `brain.db` | `brain_db_path` | Shared cross-domain action items — written by all agents, read by Dash |
+| `rentals.db` | Same directory as brain.db, filename `rentals.db` | Rental listings, soft-criteria scores, scam flags (Hearth) |
 
 ## Reference Docs
 
@@ -113,3 +115,4 @@ See `/team/` for individual team member profiles.
 | Vela    | Senior Designer         | Document polish, visual identity, branding          | Every document before delivery |
 | Gauge   | Market Intelligence + Career Strategist | Labor market analysis, role targeting, path sequencing for full-time/fractional/consulting | On hire (full report), quarterly, on-demand |
 | Mirror  | Executive Presence Coach | Vocal mechanics, body language, appearance, charisma — curriculum mode + situation mode | On hire (intake + plan), monthly review, on-demand (event prep/debrief) |
+| Hearth  | Rental Scout            | Vancouver rental search — Craigslist + Facebook Marketplace, soft-criteria scoring, scam flagging | Daily during active search, weekly otherwise; on-demand on trigger phrases |

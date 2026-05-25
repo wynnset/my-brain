@@ -1,0 +1,9 @@
+{
+  "_comment": "Copy to config.json and edit. search_urls = the Facebook Marketplace search result pages you want scanned. Build them in your browser (set category=Property Rentals, your location/radius, price, beds) then paste the URL here. Add as many as you like.",
+  "search_urls": [
+    "https://www.facebook.com/marketplace/vancouver/propertyrentals?minPrice=PRICE_MIN&maxPrice=PRICE_MAX&minBedrooms=2&exact=false",
+    "https://www.facebook.com/marketplace/vancouver/search?query=2%20bedroom%20rental"
+  ],
+  "max_scrolls": 8,
+  "headless": false
+}

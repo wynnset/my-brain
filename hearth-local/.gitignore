@@ -1,0 +1,7 @@
+# Local runtime artifacts — never commit your FB session or scraped data.
+.venv/
+__pycache__/
+.fb-profile/
+.seen.json
+out/
+config.json

@@ -8,24 +8,28 @@
   "max_scrolls": 8,
   "headless": false,
 
-  "_location_help": "Safety net applied to every source. A listing is kept only if its text mentions one of location_allow (and none of location_block). Edit these to your real target areas. Set location_allow to [] to disable.",
+  "_location_help": "Safety net applied to every source (checked against the listing text AND its URL slug). A listing is kept only if it mentions one of location_allow and none of location_block. This list is tuned to Vancouver PROPER — to include the suburbs, add e.g. 'burnaby','richmond','north vancouver' to location_allow and remove them from location_block. Set location_allow to [] to disable.",
   "location_allow": [
     "vancouver", "kitsilano", "mount pleasant", "commercial drive", "east van",
     "yaletown", "gastown", "fairview", "kerrisdale", "dunbar", "marpole",
-    "point grey", "west end", "strathcona", "hastings-sunrise", "grandview",
-    "north vancouver", "west vancouver", "burnaby", "new westminster", "richmond"
+    "point grey", "west end", "strathcona", "hastings-sunrise", "grandview", "downtown"
   ],
-  "location_block": ["surrey", "langley", "abbotsford", "chilliwack", "maple ridge", "mission"],
+  "location_block": [
+    "surrey", "langley", "abbotsford", "chilliwack", "maple ridge", "mission",
+    "burnaby", "new westminster", "richmond", "delta", "coquitlam", "port moody",
+    "north vancouver", "west vancouver", "white rock", "tsawwassen", "ladner"
+  ],
 
-  "_craigslist_help": "Listings are kept only if their URL is on {site}.craigslist.org, which drops the 'nearby areas' results that link to other cities. The vancouver site still spans the whole Lower Mainland (Surrey/Langley/etc.), so to tighten it either (a) set search_distance (miles) + postal to bound a radius, or (b) constrain the map in your browser and paste the resulting URL(s) into search_urls — those take priority over the params below.",
+  "_craigslist_help": "Two filters keep CL local: (1) only listings on {site}.craigslist.org are kept (drops 'nearby areas' links to other cities' subdomains); (2) subareas restricts to the parts of that site you want. The vancouver site splits the Lower Mainland into subareas in the URL path — van=city of Vancouver, bnc=Burnaby/NewWest, nvn=north shore, rds=richmond/delta, pml=tri-cities. Read the code off any listing URL (vancouver.craigslist.org/<code>/apa/...). subareas=['van'] = Vancouver proper; [] = all. search_distance(miles)+postal or your own pasted search_urls are alternative ways to bound the radius.",
   "craigslist": {
     "enabled": true,
     "site": "vancouver",
+    "subareas": ["van"],
     "min_price": null,
     "max_price": null,
     "min_bedrooms": 2,
-    "search_distance": 8,
-    "postal": "V6B 1A1",
+    "search_distance": null,
+    "postal": null,
     "search_urls": []
   },
 

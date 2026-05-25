@@ -157,18 +157,29 @@ def collect_craigslist(page, cfg, seen):
             u += "?" + "&".join(params)
         search_urls = [u]
 
-    # Only keep listings hosted on the Craigslist site(s) we searched. This is
-    # what kills the "nearby areas" results that link off to other cities'
-    # subdomains (the wrong-city URLs you saw).
+    # Only keep listings hosted on the Craigslist site(s) we searched. This
+    # kills the "nearby areas" results that link off to other cities' subdomains.
     allowed_hosts = {urlparse(u).netloc for u in search_urls}
+    # The vancouver site bundles the whole Lower Mainland into subareas — the
+    # first path segment, e.g. /van/ (city of Vancouver), /bnc/ (Burnaby/NewWest),
+    # /nvn/ (north shore), /rds/ (richmond/delta), /pml/ (tri-cities). Set
+    # craigslist.subareas to the codes you want (empty = all). Read the code off
+    # any listing URL: vancouver.craigslist.org/<subarea>/apa/...
+    allowed_subareas = {s.lower() for s in (cl.get("subareas") or [])}
     print("Craigslist (browser):", ", ".join(search_urls))
 
     links = harvest_links(page, search_urls, r"/\d{8,}\.html", int(cfg.get("max_scrolls", 8)))
-    rows, off_site, skipped = [], 0, 0
+    rows, off_site, off_area, skipped = [], 0, 0, 0
     for url in links:
         if urlparse(url).netloc not in allowed_hosts:
             off_site += 1
             continue
+        if allowed_subareas:
+            segs = urlparse(url).path.strip("/").split("/")
+            subarea = segs[0].lower() if segs else ""
+            if subarea not in allowed_subareas:
+                off_area += 1
+                continue
         idm = CL_ID_RE.search(url)
         cid = idm.group(1) if idm else url
         key = f"cl:{cid}"
@@ -179,13 +190,15 @@ def collect_craigslist(page, cfg, seen):
         except Exception as e:
             print("  ! capture failed", cid, e)
             continue
-        if not passes_location(cfg, cap["title"], cap["text"]):
+        # Include the URL slug — it carries the neighbourhood (e.g.
+        # "burnaby-north-burnaby") even when the page chrome says "vancouver".
+        if not passes_location(cfg, cap["title"], cap["text"], url):
             skipped += 1
             seen.add(key)
             continue
         rows.append(make_row("craigslist", cid, url, cap["title"], cap["text"], cap["photos"]))
         seen.add(key)
-    print(f"  Craigslist: {len(rows)} new, {off_site} off-site (other city), {skipped} skipped (out of area)")
+    print(f"  Craigslist: {len(rows)} new, {off_site} off-site, {off_area} wrong subarea, {skipped} out of area")
     return rows
 
 
@@ -252,7 +265,7 @@ def collect_facebook(page, cfg, seen):
         except Exception as e:
             print("  ! capture failed", iid, e)
             continue
-        if not passes_location(cfg, cap["title"], cap["text"]):
+        if not passes_location(cfg, cap["title"], cap["text"], url):
             skipped += 1
             seen.add(key)  # don't recheck this out-of-area listing tomorrow
             continue
@@ -278,7 +291,7 @@ def collect_site(page, site, cfg, seen):
         except Exception as e:
             print("  ! capture failed", url, e)
             continue
-        if not passes_location(cfg, cap["title"], cap["text"]):
+        if not passes_location(cfg, cap["title"], cap["text"], url):
             skipped += 1
             seen.add(key)
             continue

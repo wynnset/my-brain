@@ -62,13 +62,16 @@ python hearth_fbm.py login
 - **`location_allow` / `location_block`:** the safety net. Any listing whose text
   doesn't mention an allowed area (or that mentions a blocked one) is dropped
   from *every* source. Tune these lists to your real target neighbourhoods.
-- **`craigslist`:** set `min_price` / `max_price` / `min_bedrooms`. Listings are
-  kept only if their URL is on your `site` (e.g. `vancouver.craigslist.org`),
-  which drops the "nearby areas" results that link to other cities. The
-  vancouver site still covers the whole Lower Mainland, so to keep Surrey /
-  Langley / etc. out, either set `search_distance` (miles) + `postal`, or
-  constrain the map in your browser and paste those URL(s) into
-  `craigslist.search_urls` (which then take priority).
+- **`craigslist`:** set `min_price` / `max_price` / `min_bedrooms`. Two filters
+  keep results local: (1) only listings on your `site` (e.g.
+  `vancouver.craigslist.org`) are kept — drops "nearby areas" links to other
+  cities; (2) **`subareas`** restricts to parts of that site. The vancouver site
+  splits the Lower Mainland into subareas you can read off any listing URL
+  (`vancouver.craigslist.org/<code>/apa/…`): `van` = city of Vancouver, `bnc` =
+  Burnaby/New West, `nvn` = north shore, `rds` = richmond/delta, `pml` =
+  tri-cities. Ships as `["van"]` (Vancouver proper); use `[]` for all, or add
+  codes. (`search_distance`+`postal` or your own pasted `search_urls` are
+  alternative radius controls.)
 - **`sites`:** Rentals.ca is on by default; PadMapper/Zumper are off (turn on
   once you've eyeballed the output).
 

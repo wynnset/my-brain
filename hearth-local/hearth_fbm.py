@@ -14,8 +14,11 @@ blob is stable.)
 
 Sources, all toggled in config.json:
   - Facebook Marketplace  (browser, your login)   -> search_urls
-  - Craigslist            (RSS, no browser)        -> craigslist
+  - Craigslist            (browser HTML page)      -> craigslist
   - Generic sites         (browser)                -> sites[]  (Rentals.ca etc.)
+
+Craigslist 403s plain HTTP/RSS clients, so it's scraped through the same real
+browser as everything else — that's what a normal visitor looks like.
 
 Usage:
     python hearth_fbm.py login     # one-time: log into Facebook
@@ -29,11 +32,9 @@ Setup (once):
     cp config.example.json config.json                # then edit it
 """
 
-import html
 import json
 import re
 import sys
-import urllib.request
 from datetime import date, datetime, timezone
 from pathlib import Path
 from urllib.parse import urljoin
@@ -128,53 +129,44 @@ def make_row(source, source_id, url, title="", text="", photos=None):
     }
 
 
-# ─── Craigslist (RSS, no browser) ──────────────────────────────────────────────
-def collect_craigslist(cfg, seen):
+# ─── Craigslist (via the real browser — avoids the 403 plain HTTP clients get) ──
+def collect_craigslist(page, cfg, seen):
     cl = cfg.get("craigslist", {})
     if not cl.get("enabled"):
         return []
     site = cl.get("site", "vancouver")
-    params = ["format=rss", "availabilityMode=0"]
+    params = []
     if cl.get("min_price"):
         params.append(f"min_price={cl['min_price']}")
     if cl.get("max_price"):
         params.append(f"max_price={cl['max_price']}")
     if cl.get("min_bedrooms"):
         params.append(f"min_bedrooms={cl['min_bedrooms']}")
-    url = f"https://{site}.craigslist.org/search/apa?" + "&".join(params)
-    print("Craigslist RSS:", url)
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": UA})
-        xml = urllib.request.urlopen(req, timeout=30).read().decode("utf-8", "replace")
-    except Exception as e:
-        print("  ! Craigslist fetch failed:", e)
-        return []
+    search_url = f"https://{site}.craigslist.org/search/apa"
+    if params:
+        search_url += "?" + "&".join(params)
+    print("Craigslist (browser):", search_url)
 
-    rows = []
-    skipped = 0
-    for block in re.findall(r"<item[ >].*?</item>", xml, re.S):
-        link_m = re.search(r'rdf:about="([^"]+)"', block) or re.search(r"<link>(.*?)</link>", block, re.S)
-        if not link_m:
-            continue
-        link = html.unescape(link_m.group(1).strip())
-        idm = CL_ID_RE.search(link)
-        cid = idm.group(1) if idm else link
+    # Scrape the HTML results page in the browser; harvest listing links
+    # (…/NNNNNNNNNN.html), then open each new one and capture its text.
+    links = harvest_links(page, [search_url], r"/\d{8,}\.html", int(cfg.get("max_scrolls", 8)))
+    rows, skipped = [], 0
+    for url in links:
+        idm = CL_ID_RE.search(url)
+        cid = idm.group(1) if idm else url
         key = f"cl:{cid}"
         if key in seen:
             continue
-        title = ""
-        tm = re.search(r"<title>(.*?)</title>", block, re.S)
-        if tm:
-            title = html.unescape(re.sub(r"<.*?>", "", tm.group(1))).strip()
-        desc = ""
-        dm = re.search(r"<description>(.*?)</description>", block, re.S)
-        if dm:
-            desc = html.unescape(re.sub(r"<.*?>", " ", dm.group(1))).strip()
-        text = (title + "\n\n" + desc).strip()[:5000]
-        if not passes_location(cfg, title, desc):
-            skipped += 1
+        try:
+            cap = capture_listing(page, url)
+        except Exception as e:
+            print("  ! capture failed", cid, e)
             continue
-        rows.append(make_row("craigslist", cid, link, title, text))
+        if not passes_location(cfg, cap["title"], cap["text"]):
+            skipped += 1
+            seen.add(key)
+            continue
+        rows.append(make_row("craigslist", cid, url, cap["title"], cap["text"], cap["photos"]))
         seen.add(key)
     print(f"  Craigslist: {len(rows)} new, {skipped} skipped (out of area)")
     return rows
@@ -299,12 +291,11 @@ def cmd_run(cfg):
     seen = load_seen()
     rows = []
 
-    # Craigslist first — no browser needed.
-    rows += collect_craigslist(cfg, seen)
-
-    # Browser sources: Facebook + any enabled generic sites.
+    # All sources go through the real browser — Craigslist blocks plain HTTP
+    # clients, so we scrape its HTML page the same way a person's browser does.
     enabled_sites = [s for s in cfg.get("sites", []) if s.get("enabled")]
-    needs_browser = bool(cfg.get("search_urls")) or enabled_sites
+    cl_enabled = cfg.get("craigslist", {}).get("enabled")
+    needs_browser = bool(cfg.get("search_urls")) or enabled_sites or cl_enabled
     if needs_browser:
         from playwright.sync_api import sync_playwright
         if cfg.get("search_urls") and not PROFILE_DIR.exists():
@@ -312,6 +303,11 @@ def cmd_run(cfg):
         with sync_playwright() as p:
             ctx = open_context(p, headless=bool(cfg.get("headless", False)))
             page = ctx.pages[0] if ctx.pages else ctx.new_page()
+            if cl_enabled:
+                try:
+                    rows += collect_craigslist(page, cfg, seen)
+                except Exception as e:
+                    print("  ! Craigslist failed:", e)
             if cfg.get("search_urls") and PROFILE_DIR.exists():
                 rows += collect_facebook(page, cfg, seen)
             for s in enabled_sites:

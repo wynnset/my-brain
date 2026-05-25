@@ -9,7 +9,7 @@ workspace, and **Hearth on the deployed side** scores everything against
 
 Sources (toggle each in `config.json`):
 - **Facebook Marketplace** — browser, your login
-- **Craigslist** — RSS, no browser (handled here because the server is blocked)
+- **Craigslist** — scraped through the browser (it 403s plain HTTP/RSS clients *and* the server's IP)
 - **Rentals.ca** — browser (works well)
 - **PadMapper / Zumper** — browser, best-effort (map SPAs with anti-bot; off by default)
 
@@ -77,10 +77,10 @@ cd hearth-local
 python hearth_fbm.py run
 ```
 
-It pulls Craigslist (RSS) first, then opens a browser for Facebook + any enabled
-sites, and saves new listings to `out/hearth-listings-YYYY-MM-DD.md` (and a
-`.jsonl` twin). Each source prints a count like `12 new, 3 skipped (out of
-area)`. It remembers what it has already seen, so runs only add new listings.
+A browser opens and collects Craigslist, Facebook, and any enabled sites,
+saving new listings to `out/hearth-listings-YYYY-MM-DD.md` (and a `.jsonl`
+twin). Each source prints a count like `12 new, 3 skipped (out of area)`. It
+remembers what it has already seen, so runs only add new listings.
 
 Then:
 1. Open your Cyrus workspace.

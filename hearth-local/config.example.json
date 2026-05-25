@@ -17,12 +17,16 @@
   ],
   "location_block": ["surrey", "langley", "abbotsford", "chilliwack", "maple ridge", "mission"],
 
+  "_craigslist_help": "Listings are kept only if their URL is on {site}.craigslist.org, which drops the 'nearby areas' results that link to other cities. The vancouver site still spans the whole Lower Mainland (Surrey/Langley/etc.), so to tighten it either (a) set search_distance (miles) + postal to bound a radius, or (b) constrain the map in your browser and paste the resulting URL(s) into search_urls — those take priority over the params below.",
   "craigslist": {
     "enabled": true,
     "site": "vancouver",
     "min_price": null,
     "max_price": null,
-    "min_bedrooms": 2
+    "min_bedrooms": 2,
+    "search_distance": 8,
+    "postal": "V6B 1A1",
+    "search_urls": []
   },
 
   "_sites_help": "Generic browser sources. link_pattern is a regex matched against each <a href> on the search page to find listing links. Rentals.ca works well; PadMapper/Zumper are map-based SPAs with anti-bot, so they're best-effort — start with enabled=false and turn on once you've checked the output.",

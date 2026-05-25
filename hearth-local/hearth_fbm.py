@@ -37,7 +37,7 @@ import re
 import sys
 from datetime import date, datetime, timezone
 from pathlib import Path
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 ROOT = Path(__file__).resolve().parent
 CONFIG_PATH = ROOT / "config.json"
@@ -135,23 +135,40 @@ def collect_craigslist(page, cfg, seen):
     if not cl.get("enabled"):
         return []
     site = cl.get("site", "vancouver")
-    params = []
-    if cl.get("min_price"):
-        params.append(f"min_price={cl['min_price']}")
-    if cl.get("max_price"):
-        params.append(f"max_price={cl['max_price']}")
-    if cl.get("min_bedrooms"):
-        params.append(f"min_bedrooms={cl['min_bedrooms']}")
-    search_url = f"https://{site}.craigslist.org/search/apa"
-    if params:
-        search_url += "?" + "&".join(params)
-    print("Craigslist (browser):", search_url)
 
-    # Scrape the HTML results page in the browser; harvest listing links
-    # (…/NNNNNNNNNN.html), then open each new one and capture its text.
-    links = harvest_links(page, [search_url], r"/\d{8,}\.html", int(cfg.get("max_scrolls", 8)))
-    rows, skipped = [], 0
+    # If you paste your own (map-constrained) search URLs, we use those as-is;
+    # otherwise we build one from the simple params.
+    search_urls = cl.get("search_urls") or []
+    if not search_urls:
+        params = []
+        if cl.get("min_price"):
+            params.append(f"min_price={cl['min_price']}")
+        if cl.get("max_price"):
+            params.append(f"max_price={cl['max_price']}")
+        if cl.get("min_bedrooms"):
+            params.append(f"min_bedrooms={cl['min_bedrooms']}")
+        # search_distance (miles) + postal bounds results to a radius around a
+        # point — the in-subdomain way to keep Surrey/Langley/etc. out.
+        if cl.get("search_distance") and cl.get("postal"):
+            params.append(f"search_distance={cl['search_distance']}")
+            params.append(f"postal={cl['postal']}")
+        u = f"https://{site}.craigslist.org/search/apa"
+        if params:
+            u += "?" + "&".join(params)
+        search_urls = [u]
+
+    # Only keep listings hosted on the Craigslist site(s) we searched. This is
+    # what kills the "nearby areas" results that link off to other cities'
+    # subdomains (the wrong-city URLs you saw).
+    allowed_hosts = {urlparse(u).netloc for u in search_urls}
+    print("Craigslist (browser):", ", ".join(search_urls))
+
+    links = harvest_links(page, search_urls, r"/\d{8,}\.html", int(cfg.get("max_scrolls", 8)))
+    rows, off_site, skipped = [], 0, 0
     for url in links:
+        if urlparse(url).netloc not in allowed_hosts:
+            off_site += 1
+            continue
         idm = CL_ID_RE.search(url)
         cid = idm.group(1) if idm else url
         key = f"cl:{cid}"
@@ -168,7 +185,7 @@ def collect_craigslist(page, cfg, seen):
             continue
         rows.append(make_row("craigslist", cid, url, cap["title"], cap["text"], cap["photos"]))
         seen.add(key)
-    print(f"  Craigslist: {len(rows)} new, {skipped} skipped (out of area)")
+    print(f"  Craigslist: {len(rows)} new, {off_site} off-site (other city), {skipped} skipped (out of area)")
     return rows
 
 

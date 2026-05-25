@@ -1,9 +1,49 @@
 {
-  "_comment": "Copy to config.json and edit. search_urls = the Facebook Marketplace search result pages you want scanned. Build them in your browser (set category=Property Rentals, your location/radius, price, beds) then paste the URL here. Add as many as you like.",
+  "_comment": "Copy to config.json and edit. Toggle each source on/off. The location filter is the safety net that keeps out-of-area listings out of your results.",
+
+  "_fb_help": "search_urls = Facebook Marketplace result pages. IMPORTANT: build them in your browser with Location set to Vancouver and a radius (e.g. 20 km) and category = Property Rentals, then paste the URL. Avoid bare ?query= searches — they ignore location. Leave empty [] to skip Facebook.",
   "search_urls": [
-    "https://www.facebook.com/marketplace/vancouver/propertyrentals?minPrice=PRICE_MIN&maxPrice=PRICE_MAX&minBedrooms=2&exact=false",
-    "https://www.facebook.com/marketplace/vancouver/search?query=2%20bedroom%20rental"
+    "https://www.facebook.com/marketplace/vancouver/propertyrentals?minPrice=PRICE_MIN&maxPrice=PRICE_MAX&minBedrooms=2&radius=20&sortBy=creation_time_descend&exact=true"
   ],
   "max_scrolls": 8,
-  "headless": false
+  "headless": false,
+
+  "_location_help": "Safety net applied to every source. A listing is kept only if its text mentions one of location_allow (and none of location_block). Edit these to your real target areas. Set location_allow to [] to disable.",
+  "location_allow": [
+    "vancouver", "kitsilano", "mount pleasant", "commercial drive", "east van",
+    "yaletown", "gastown", "fairview", "kerrisdale", "dunbar", "marpole",
+    "point grey", "west end", "strathcona", "hastings-sunrise", "grandview",
+    "north vancouver", "west vancouver", "burnaby", "new westminster", "richmond"
+  ],
+  "location_block": ["surrey", "langley", "abbotsford", "chilliwack", "maple ridge", "mission"],
+
+  "craigslist": {
+    "enabled": true,
+    "site": "vancouver",
+    "min_price": null,
+    "max_price": null,
+    "min_bedrooms": 2
+  },
+
+  "_sites_help": "Generic browser sources. link_pattern is a regex matched against each <a href> on the search page to find listing links. Rentals.ca works well; PadMapper/Zumper are map-based SPAs with anti-bot, so they're best-effort — start with enabled=false and turn on once you've checked the output.",
+  "sites": [
+    {
+      "name": "rentals_ca",
+      "enabled": true,
+      "search_urls": ["https://rentals.ca/vancouver?beds=2"],
+      "link_pattern": "/vancouver/[^\"#?]+-\\d+"
+    },
+    {
+      "name": "padmapper",
+      "enabled": false,
+      "search_urls": ["https://www.padmapper.com/apartments/vancouver-bc/2-bedrooms"],
+      "link_pattern": "/(buildings|listing)/[^\"#?]+"
+    },
+    {
+      "name": "zumper",
+      "enabled": false,
+      "search_urls": ["https://www.zumper.com/apartments-for-rent/vancouver-bc/2-bedroom"],
+      "link_pattern": "/(listing|apartment-buildings)/[^\"#?]+"
+    }
+  ]
 }

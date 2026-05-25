@@ -1,22 +1,32 @@
-# Hearth — local Facebook Marketplace collector
+# Hearth — local rental collector
 
 This is the **local half** of Hearth, your rental scout. It runs on *your*
-machine because Facebook Marketplace needs a real, logged-in browser session and
-blocks servers. It collects FBM listings into one file. You drag that file into
-your Cyrus workspace, and **Hearth on the deployed side** does the rest:
-scrapes Craigslist itself, ingests your FBM file, scores everything against
+machine because Facebook needs a real logged-in browser, and Craigslist blocks
+the deployed server's datacenter IP — both work fine from home. It collects
+listings from several sources into one file. You drag that file into your Cyrus
+workspace, and **Hearth on the deployed side** scores everything against
 `docs/rental-criteria.md`, saves to `rentals.db`, and writes the report.
+
+Sources (toggle each in `config.json`):
+- **Facebook Marketplace** — browser, your login
+- **Craigslist** — RSS, no browser (handled here because the server is blocked)
+- **Rentals.ca** — browser (works well)
+- **PadMapper / Zumper** — browser, best-effort (map SPAs with anti-bot; off by default)
 
 ```
   YOUR MACHINE                          DEPLOYED (Cyrus / Hearth)
   ────────────                          ─────────────────────────
-  python hearth_fbm.py run              scrapes Craigslist (RSS)
-        │  writes out/hearth-fbm-*.md          │
-        └──── drag file into ─────────►  team-inbox/  ──► ingests + dedupes
-                                                          scores (LLM)
-                                                          writes rentals.db
-                                                          owners-inbox/hearth-report-[date].md
+  python hearth_fbm.py run              ───drag file──►  team-inbox/
+    FB + Craigslist + Rentals.ca ...                       │
+    writes out/hearth-listings-*.md                        ▼
+                                              ingests + dedupes, scores (LLM),
+                                              writes rentals.db,
+                                              owners-inbox/hearth-report-[date].md
 ```
+
+> Upgrading from the first version? Your `config.json` needs the new
+> `location_allow`, `location_block`, `craigslist`, and `sites` keys — easiest
+> is `cp config.example.json config.json` again and re-paste your FB search URL.
 
 ## One-time setup
 
@@ -44,11 +54,20 @@ copy config.example.json config.json     # then edit config.json
 python hearth_fbm.py login
 ```
 
-**Edit `config.json`:** open Facebook Marketplace in your browser, set the
-category to *Property Rentals*, your location + radius, price range, and 2+
-bedrooms. Copy that result-page URL into `search_urls`. Add as many search URLs
-as you want. Your login is saved in `.fb-profile/` so you only log in once
-(re-run `login` if Facebook logs you out).
+**Edit `config.json`:**
+- **Facebook `search_urls`:** open Marketplace in your browser, set **Location =
+  Vancouver with a radius** (e.g. 20 km), category = *Property Rentals*, price,
+  and 2+ beds, then copy that result-page URL. **Don't use a bare `?query=`
+  search** — those ignore location and are why you saw listings from all over.
+- **`location_allow` / `location_block`:** the safety net. Any listing whose text
+  doesn't mention an allowed area (or that mentions a blocked one) is dropped
+  from *every* source. Tune these lists to your real target neighbourhoods.
+- **`craigslist`:** set `min_price` / `max_price` / `min_bedrooms`.
+- **`sites`:** Rentals.ca is on by default; PadMapper/Zumper are off (turn on
+  once you've eyeballed the output).
+
+Your FB login is saved in `.fb-profile/`, so you only log in once (re-run
+`login` if Facebook logs you out).
 
 ## Every day (the whole routine)
 
@@ -58,21 +77,22 @@ cd hearth-local
 python hearth_fbm.py run
 ```
 
-A browser opens, scrolls your searches, and saves new listings to
-`out/hearth-fbm-YYYY-MM-DD.md` (and a `.jsonl` twin). It remembers what it has
-already seen, so each run only adds new listings.
+It pulls Craigslist (RSS) first, then opens a browser for Facebook + any enabled
+sites, and saves new listings to `out/hearth-listings-YYYY-MM-DD.md` (and a
+`.jsonl` twin). Each source prints a count like `12 new, 3 skipped (out of
+area)`. It remembers what it has already seen, so runs only add new listings.
 
 Then:
 1. Open your Cyrus workspace.
-2. Drag `out/hearth-fbm-YYYY-MM-DD.md` into **team-inbox** (or attach it in chat).
+2. Drag `out/hearth-listings-YYYY-MM-DD.md` into **team-inbox** (or attach it in chat).
 3. Say **"find rentals"**.
 
-Hearth ingests your FBM file, pulls fresh Craigslist listings, scores them all,
-and posts the ranked report (also saved to `owners-inbox/hearth-report-[date].md`).
+Hearth ingests the file, dedupes, scores everything, and posts the ranked report
+(also saved to `owners-inbox/hearth-report-[date].md`).
 
 ### Capture a single listing by hand
 
-If you spot one Facebook listing you want included (or the auto-scan missed it):
+If you spot one listing you want included (any site) or the auto-scan missed it:
 
 ```bash
 python hearth_fbm.py add "https://www.facebook.com/marketplace/item/1234567890/"
@@ -100,7 +120,14 @@ It appends to today's output file just like a normal run.
   (`headless: false`), just solve it in the window; the run continues.
 - This is for personal use at human pace. Don't crank `max_scrolls` high or run
   it in a tight loop — that's how sessions get flagged.
-- Craigslist is handled entirely by the deployed Hearth (RSS), not here.
+- **Location filter trade-off:** it keeps a listing only if its text mentions an
+  allowed area. If a real listing omits the city name in its body it can be
+  skipped — watch the `skipped (out of area)` counts and widen `location_allow`
+  if it's too aggressive. Set `location_allow` to `[]` to turn it off.
+- **PadMapper / Zumper** are map-based single-page apps with anti-bot defences;
+  the generic harvester may collect few or no links from them. If a site returns
+  nothing, leave it off and use `add <url>` for individual finds, or tune its
+  `link_pattern`. Rentals.ca behaves like a normal listings site and works well.
 
 ## Why not `ai-marketplace-monitor`?
 

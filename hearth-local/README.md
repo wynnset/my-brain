@@ -111,9 +111,11 @@ It appends to today's output file just like a normal run.
 
 ## What this tool does and doesn't do
 
-- **Does:** log into FB (your session), scan your saved searches, capture each
-  new listing's URL + visible text + cover photo, dedupe across days, write one
-  tidy file.
+- **Does:** log into FB (your session), scan your saved searches, and capture
+  each new listing's **main content** — the description/details, not the page
+  header, footer, nav or "more like this" rails — plus the URL and cover photo.
+  Craigslist is read from its exact post fields (`#postingbody` etc.); other
+  sites use the main content region with the suggested-listings tail trimmed.
 - **Doesn't:** score listings, apply your soft criteria, or judge scams — that
   all happens on the deployed Hearth side where the LLM and `rentals.db` live.
   Keeping scoring in one place means your criteria only live in one document

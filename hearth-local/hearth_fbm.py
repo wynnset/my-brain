@@ -49,6 +49,60 @@ UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML,
 FB_ITEM_RE = re.compile(r"/marketplace/item/(\d+)")
 CL_ID_RE = re.compile(r"/(\d+)\.html")
 
+# Runs in the page. Pulls just the listing content, not the whole page:
+#   1. Craigslist has stable selectors (#postingbody etc.) — use them exactly.
+#   2. Otherwise read the main content region ([role=main]/main/article), which
+#      drops the global header, footer, nav and side rails.
+#   3. Trim the trailing "suggested / more like this" sections (the biggest
+#      source of noise on Facebook), but only when they appear past the real
+#      content so we never cut a short description short.
+#   4. Prepend og:title / og:description as a reliable summary line.
+EXTRACT_JS = r"""
+() => {
+  const t = el => (el && el.innerText ? el.innerText.trim() : '');
+  const meta = k => {
+    const m = document.querySelector(`meta[property="${k}"]`) || document.querySelector(`meta[name="${k}"]`);
+    return m && m.content ? m.content.trim() : '';
+  };
+
+  // 1) Craigslist — precise.
+  const pb = document.querySelector('#postingbody');
+  if (pb) {
+    const attrs = [...document.querySelectorAll('.attrgroup')].map(e => e.innerText.trim()).join(' | ');
+    return [
+      t(document.querySelector('.postingtitletext, #titletextonly')),
+      t(document.querySelector('.price')),
+      t(document.querySelector('.mapaddress')),
+      attrs,
+      t(pb),
+    ].filter(Boolean).join('\n\n');
+  }
+
+  // 2) Main content region.
+  const main = document.querySelector('[role="main"]') || document.querySelector('main')
+            || document.querySelector('article') || document.body;
+  let body = main ? main.innerText : '';
+
+  // 3) Cut the suggested/related tail.
+  const markers = [
+    'More items like this', 'More like this', 'Related listings', 'Similar listings',
+    'More from this seller', 'People also viewed', 'You might also like',
+    'Suggested for you', 'More listings', 'Sponsored', 'Related searches',
+  ];
+  let cut = body.length;
+  for (const m of markers) {
+    const i = body.indexOf(m);
+    if (i > 200 && i < cut) cut = i;   // only trim if it's past the real content
+  }
+  body = body.slice(0, cut).trim();
+
+  // 4) Reliable summary line from structured metadata.
+  const head = [meta('og:title'), meta('og:description') || meta('description')]
+    .filter(Boolean).join(' — ');
+  return (head ? head + '\n\n' : '') + body;
+}
+"""
+
 
 # ─── config / seen ──────────────────────────────────────────────────────────
 def load_config():
@@ -215,8 +269,22 @@ def open_context(p, headless):
 def capture_listing(page, url):
     page.goto(url, wait_until="domcontentloaded", timeout=60000)
     page.wait_for_timeout(2500)
-    text = page.evaluate("() => document.body ? document.body.innerText : ''") or ""
-    text = re.sub(r"\n{3,}", "\n\n", text).strip()[:5000]
+    # Best-effort: expand truncated descriptions ("See more") so we capture the
+    # full body, not the collapsed preview. Harmless if absent.
+    for _ in range(2):
+        try:
+            btn = page.get_by_text("See more", exact=False).first
+            if btn.is_visible():
+                btn.click(timeout=1000)
+                page.wait_for_timeout(400)
+            else:
+                break
+        except Exception:
+            break
+
+    text = (page.evaluate(EXTRACT_JS) or "").strip()
+    text = re.sub(r"[ \t]+\n", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()[:4000]
     title = (page.title() or "").replace(" | Facebook", "").replace(" - Facebook", "").strip()
     photo = ""
     og = page.query_selector('meta[property="og:image"]')

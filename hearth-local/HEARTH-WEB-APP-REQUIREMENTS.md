@@ -25,6 +25,7 @@ reflects them.
 | 3 | Photos | **Hotlink original URLs** — store the source image URL, load directly. No storage. (Accepted risk: some FB/CDN links expire over time; revisit if breakage is annoying.) |
 | 4 | Scoring | **Cheapest text-only model, no vision** — score from `raw_text`; never analyze photos. |
 | 5 | Hard-filter behavior | **Keep-and-mark** (default) — listings that fail hard filters stay in the DB with `hard_filter_pass=0`, hidden from the default view but reachable via a "show filtered" toggle. |
+| 6 | Mac app shell | **Native window embedding the dashboard, via `pywebview` — part of v0, not optional.** The Mac app is one `.app`: a WKWebView window showing the dashboard *plus* the Python collector running in the background. The dashboard and the Playwright scraping browser stay separate engines (§4.1). |
 
 ---
 
@@ -38,7 +39,9 @@ user manage the search from any of their Apple devices.
 **Non-goals (v1):**
 - No multi-tenant / multi-user. Single user, single search profile.
 - No automated landlord contact or messaging.
-- No native iOS app (see §3 — not feasible for the Facebook part). PWA instead.
+- No native **iOS/iPadOS** app — those use the dashboard as a PWA. (The **Mac**
+  does get a native `pywebview` shell around the same dashboard — Decision #6 —
+  because the collector must run there anyway.)
 - Not tied to Cyrus, `brain.db`, or any external workspace.
 
 ---
@@ -61,32 +64,35 @@ Everything else (storage, scoring, dashboard) can be in the cloud. This yields a
 ## 3. Architecture (cloud-synced)
 
 ```
-┌─────────────────────── USER'S MAC ───────────────────────┐
-│ Collector agent (Python + Playwright, headed/persistent)  │
-│  • logs into Facebook once, session persists locally      │
-│  • scrapes FB Marketplace, Craigslist, Rentals.ca         │
-│  • applies location / subarea filters                     │
-│  • extracts clean listing content (not page chrome)       │
-│  • POSTs new listings to the cloud API (bearer token)     │
-│  • runs on demand and on a schedule (launchd)             │
-└───────────────┬───────────────────────────────────────────┘
-                │ HTTPS (auth: API token)
+┌────────────────────── USER'S MAC (.app) ────────────────────────┐
+│ Single native app (pywebview), two engines side by side:         │
+│                                                                  │
+│  ┌── WKWebView window ──┐      ┌── Collector (Python) ────────┐  │
+│  │ embeds the dashboard │      │ Playwright headed/persistent │  │
+│  │ (same UI as iPad/    │      │ • logs into FB once, session │  │
+│  │  iPhone, §6)         │      │   persists locally           │  │
+│  └──────────────────────┘      │ • scrapes FB/CL/Rentals.ca   │  │
+│         UI engine               │ • location / subarea filters │  │
+│   (NOT used for scraping)       │ • clean content extraction   │  │
+│                                 │ • pushes listings to cloud   │  │
+│                                 │ • Realtime channel + launchd │  │
+│                                 └──────────────────────────────┘  │
+└───────────────┬──────────────────────────────────────────────────┘
+                │ HTTPS / Supabase Realtime
                 ▼
-┌──────────────────────── CLOUD ────────────────────────────┐
-│ Backend API + DB + Scorer                                  │
-│  • ingest endpoint: upsert listings (idempotent)           │
-│  • scorer: for new listings, call Claude API →             │
-│      structured fields + per-criterion scores + rationale  │
-│  • hard-filter + scam-flag logic                           │
-│  • CRUD for manual edits / status / overrides              │
-│  • serves the web dashboard (static) + JSON API            │
-└───────────────┬───────────────────────────────────────────┘
-                │ HTTPS
+┌──────────────────────── CLOUD (Supabase) ──────────────────────┐
+│ Postgres + Auth + Storage + Realtime + Edge Functions          │
+│  • ingest: upsert listings (idempotent)                        │
+│  • scorer (Edge Function): Claude API → fields + scores + flags │
+│  • hard-filter + scam-flag logic                               │
+│  • CRUD for manual edits / status / overrides                  │
+└───────────────┬─────────────────────────────────────────────────┘
+                │ HTTPS  (same dashboard served to all clients)
                 ▼
-┌──────────── WEB DASHBOARD (PWA) ──────────────────────────┐
-│ Mac / iPad / iPhone browser, installable to home screen    │
-│  • ranked listings, filters, detail view, manual edits     │
-└────────────────────────────────────────────────────────────┘
+┌──────────── WEB DASHBOARD (Next.js/React PWA) ─────────────────┐
+│ Rendered in: the Mac app's WKWebView · iPad/iPhone browser     │
+│  • ranked listings, filters, detail view, manual edits         │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 **Secrets placement (important):**
@@ -142,6 +148,33 @@ the hard parts. Keep:
 - **Schedule**: `launchd` plist (or a `--watch` loop) for 1–2× daily runs. Note:
   FB may require re-login periodically; the run should detect "logged out" (zero
   links found) and surface a clear "re-run login" message / notification.
+
+### 4.1a Native Mac shell (v0, required — Decision #6)
+The collector ships as a **single native macOS `.app` built with `pywebview`**,
+so the user has one Dock icon instead of a headless background script.
+- **One window = the dashboard.** The app opens a `WKWebView` (macOS system web
+  engine) pointed at the dashboard — either the live Vercel URL (UI auto-updates,
+  needs network) or a bundled build (works offline; rebuild to update). Default
+  to the **live URL** for v0. The user sees the exact same dashboard as on
+  iPad/iPhone, just in a native window.
+- **Collector runs in the same app, in the background.** The Python collector
+  (§4.1) runs on a thread/subprocess within the `.app`, driving Playwright and
+  pushing to the cloud. Starting the app brings the collector online (Realtime
+  channel + schedule); quitting it takes the collector offline.
+- **Critical separation of the two browser engines:** the `WKWebView` is **only**
+  the UI. Scraping happens in a **separate Playwright-driven Chromium** instance.
+  Do **not** attempt to scrape Facebook inside the `WKWebView` — it isn't
+  automatable like Playwright and FB login/anti-bot would break. Two engines,
+  different jobs: WebView = display, Playwright = scrape.
+- **First-run Facebook login** still opens the headed Playwright browser window
+  (separate from the app window) so the user can log in / clear CAPTCHAs once.
+- **Status surface:** the app should make collector state visible (online/idle,
+  last run + counts, "needs Facebook re-login"). Simplest is for the dashboard to
+  show this from cloud data (`runs` + a heartbeat); a small native menu-bar
+  indicator is a nice-to-have, not required for v0.
+- **Packaging:** bundle with PyInstaller/py2app, including the Playwright browser
+  binaries. For personal use, skip Apple notarization (first launch via
+  right-click → Open). Expect a chunky `.app` due to the bundled browser.
 
 ### 4.2 Cloud backend
 - **Ingest API**: accept listing batches from the collector, upsert by
@@ -322,9 +355,13 @@ The dashboard's "Collect now" lives in the cloud, but only the Mac can scrape.
 
 ## 10. Tech stack
 
-**Collector:** keep **Python + Playwright** (reuse the prototype). Add a client
-that subscribes to the cloud push channel (§9) and posts results, plus a small
-config file.
+**Mac app (Decision #6): Python collector wrapped in a `pywebview` native shell.**
+- Keep **Python + Playwright** for the collector (reuse the prototype). Add a
+  client that subscribes to the cloud push channel (§9) and posts results, plus a
+  small config file.
+- Wrap it in a **`pywebview`** `.app`: a `WKWebView` window showing the dashboard
+  + the collector running in the background of the same process (§4.1a). Package
+  with PyInstaller/py2app including the Playwright browser binaries.
 
 **Cloud backend + dashboard (Decision #1): Supabase + a JS frontend.**
 - **Supabase** provides Postgres, built-in auth, storage, row-level security, and
@@ -332,8 +369,11 @@ config file.
   dashboard update live as listings sync/score).
 - **Scoring** runs in a Supabase **Edge Function** (or a small worker) that calls
   the Claude API with the server-side `ANTHROPIC_API_KEY`.
-- **Frontend** in Next.js/React or SvelteKit, deployed on Vercel/Netlify, built
-  as a PWA (§6).
+- **Frontend:** recommended **Next.js + React + Tailwind** (largest ecosystem +
+  best Supabase tooling; SvelteKit is a fine leaner alternative — not yet locked),
+  deployed on Vercel, built as a PWA (§6). The same hosted build is what the Mac
+  app's `WKWebView` loads and what iPad/iPhone open in the browser — one
+  frontend, all clients.
 
 **Auth:** single user — Supabase Auth (email magic link / password). The
 collector authenticates with a separate long-lived service token (not the user
@@ -366,19 +406,23 @@ login), scoped to ingest + the collect-request channel.
 
 ## 12. Suggested build phases
 
-1. **DB + ingest + dashboard read.** Stand up the schema, the ingest endpoint,
-   and a dashboard that lists synced listings (no scoring yet). Point the
-   existing collector at the ingest endpoint.
-2. **Scoring.** Add the Claude extract+score service, composite ranking, hard
-   filters, scam flags. Dashboard shows scores + rationale.
-3. **Manual editing.** Field corrections, score overrides, status workflow,
-   notes, flag dismissal, re-score.
-4. **Criteria editor + run controls.** In-app criteria; "collect now" (push
-   channel via Supabase Realtime) + "score new"; run history.
-5. **Polish.** PWA install, responsive layout, web-push, `launchd` schedule,
-   collector online/offline status.
+**v0 (the required baseline) bundles three things:** the synced read-only
+dashboard, the cloud ingest path, **and** the native `pywebview` Mac shell
+(Decision #6) — so from day one the experience is "open the Mac app, see
+listings". Concretely:
 
-A read-only synced dashboard (phase 1–2) is the meaningful MVP.
+0. **Native Mac shell + ingest + dashboard read (v0).** `pywebview` `.app`
+   wrapping the existing Python collector; collector pushes to Supabase; a
+   dashboard (loaded in the app's `WKWebView` and on iPad/iPhone) lists synced
+   listings. No scoring yet. This is the meaningful MVP.
+1. **Scoring.** Add the Claude extract+score Edge Function, composite ranking,
+   hard filters, scam flags. Dashboard shows scores + rationale.
+2. **Manual editing.** Field corrections, score overrides, status workflow,
+   notes, flag dismissal, re-score.
+3. **Criteria editor + run controls.** In-app criteria; "collect now" (push
+   channel via Supabase Realtime) + "score new"; run history.
+4. **Polish.** PWA install (iPad/iPhone), responsive layout, web-push, `launchd`
+   schedule, collector online/offline status, optional native menu-bar indicator.
 
 ---
 

@@ -26,6 +26,7 @@ reflects them.
 | 4 | Scoring | **Cheapest text-only model, no vision** — score from `raw_text`; never analyze photos. |
 | 5 | Hard-filter behavior | **Keep-and-mark** (default) — listings that fail hard filters stay in the DB with `hard_filter_pass=0`, hidden from the default view but reachable via a "show filtered" toggle. |
 | 6 | Mac app shell | **Native window embedding the dashboard, via `pywebview` — part of v0, not optional.** The Mac app is one `.app`: a WKWebView window showing the dashboard *plus* the Python collector running in the background. The dashboard and the Playwright scraping browser stay separate engines (§4.1). |
+| 7 | Frontend framework | **Next.js + React + Tailwind**, deployed on Vercel as a PWA. One hosted build serves the Mac app's WebView, iPad, and iPhone. |
 
 ---
 
@@ -369,11 +370,9 @@ The dashboard's "Collect now" lives in the cloud, but only the Mac can scrape.
   dashboard update live as listings sync/score).
 - **Scoring** runs in a Supabase **Edge Function** (or a small worker) that calls
   the Claude API with the server-side `ANTHROPIC_API_KEY`.
-- **Frontend:** recommended **Next.js + React + Tailwind** (largest ecosystem +
-  best Supabase tooling; SvelteKit is a fine leaner alternative — not yet locked),
-  deployed on Vercel, built as a PWA (§6). The same hosted build is what the Mac
-  app's `WKWebView` loads and what iPad/iPhone open in the browser — one
-  frontend, all clients.
+- **Frontend (Decision #7): Next.js + React + Tailwind**, deployed on Vercel,
+  built as a PWA (§6). The same hosted build is what the Mac app's `WKWebView`
+  loads and what iPad/iPhone open in the browser — one frontend, all clients.
 
 **Auth:** single user — Supabase Auth (email magic link / password). The
 collector authenticates with a separate long-lived service token (not the user

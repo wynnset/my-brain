@@ -13,6 +13,21 @@
 
 ---
 
+## 0. Decisions (resolved 2026-05-26)
+
+These were the open build choices; they are now settled. The rest of the doc
+reflects them.
+
+| # | Decision | Choice |
+|---|----------|--------|
+| 1 | Cloud stack | **Supabase + JS frontend** (Postgres, auth, storage, realtime, edge functions; frontend Next.js/SvelteKit on Vercel). |
+| 2 | "Collect now" trigger | **Push channel + schedule** — Mac holds a live channel (WebSocket/SSE, or Supabase Realtime) so the cloud can trigger instantly, *plus* a `launchd` schedule. |
+| 3 | Photos | **Hotlink original URLs** — store the source image URL, load directly. No storage. (Accepted risk: some FB/CDN links expire over time; revisit if breakage is annoying.) |
+| 4 | Scoring | **Cheapest text-only model, no vision** — score from `raw_text`; never analyze photos. |
+| 5 | Hard-filter behavior | **Keep-and-mark** (default) — listings that fail hard filters stay in the DB with `hard_filter_pass=0`, hidden from the default view but reachable via a "show filtered" toggle. |
+
+---
+
 ## 1. Goal & non-goals
 
 **Goal:** one self-contained app that answers "what are the best 2BR rentals in
@@ -241,8 +256,8 @@ it out")**
   duplicate). New listings enter `status='new'`, unscored.
 - Collector keeps its own local "seen" set so it only sends genuinely new items;
   server upsert is the safety net.
-- Photo handling: either send photo URLs and let the server fetch/re-host, or the
-  collector uploads images directly (signed URL). Decide per §11.
+- Photo handling: send the source photo URLs as-is; the dashboard hotlinks them
+  (Decision #3). No server-side fetch or re-host.
 
 ---
 
@@ -267,8 +282,9 @@ it out")**
 ```
 - On parse failure: retry once, then flag the listing `incomplete` and move on.
 - **Hard filters** applied after extraction (price range, min beds, parking,
-  exclusions). Failing → `hard_filter_pass=0`, not scored further (or scored but
-  marked filtered — builder's choice; prototype drops them).
+  exclusions). Failing → `hard_filter_pass=0`; the listing is **kept in the DB**
+  and hidden from the default view but reachable via a "show filtered" toggle
+  (Decision #5). Don't score filtered listings.
 - **Composite** = Σ(score × weight) over soft criteria, computed server-side from
   the weights in `criteria` (so changing a weight re-ranks without re-calling
   the API). Respect `score_override` when present.
@@ -276,69 +292,66 @@ it out")**
   if orientation/"bright" stated explicitly score high, if implied score mid with
   low confidence; "city view" facing towers is not "unobstructed"; don't invent
   facts (unmentioned criterion → 3–4 "not mentioned", not 0).
+- **Model (Decision #4): cheapest text-only model, no vision.** Score from
+  `raw_text` only — never send photos to the model. Keep the model id
+  configurable in settings so it can be swapped later, but default to the
+  lowest-cost capable option (~cents per run for ~50 listings).
 - **Rate / cost control**: batch ~5 at a time with a short delay; on HTTP 429
-  back off and resume. Use an inexpensive-but-capable model for scoring; cost is
-  ~cents per run for ~50 listings. Make the model configurable in settings.
-- **Photos**: optionally include the cover image in the scoring call (vision) for
-  better orientation/view/condition judgments; gate behind a setting since it
-  costs more. Text-only is the default.
+  back off and resume. Score each listing once; re-score only on demand or when
+  criteria change.
 
 ---
 
 ## 9. Triggering collection from the cloud
 
 The dashboard's "Collect now" lives in the cloud, but only the Mac can scrape.
-Options (pick one in the build):
-- **Pull model (simplest):** the Mac collector polls a cloud endpoint
-  (`GET /api/collect-requests`) every N minutes; the dashboard enqueues a
-  request; the Mac picks it up, runs, and posts results. No inbound connection to
-  the Mac needed.
-- **Push model:** a persistent channel (WebSocket / SSE) from Mac → cloud that
-  the cloud can signal. More immediate, more moving parts.
-- **Schedule-only:** skip on-demand entirely; the Mac runs on a `launchd`
-  schedule and the dashboard just shows whatever has synced.
 
-Recommend **pull model + schedule** for v1 (no firewall/tunnel needed, Mac stays
-behind NAT).
+**Decision #2: push channel + schedule.**
+- **Push channel:** the Mac collector holds a persistent live connection to the
+  cloud — simplest with this stack is **Supabase Realtime** (the collector
+  subscribes to a `collect_requests` table/channel; the dashboard inserts a row;
+  the Mac is notified instantly and runs). A raw WebSocket/SSE endpoint is the
+  fallback if not using Supabase Realtime. The Mac opens the connection outbound,
+  so it works behind NAT with no inbound port / tunnel.
+- **Schedule:** independently, a `launchd` job runs the collector 1–2× daily so
+  listings keep flowing even when no one taps "Collect now".
+- The collector should reconnect with backoff if the channel drops, and the
+  dashboard should reflect collector online/offline + last-run state.
 
 ---
 
-## 10. Tech stack (recommendations, not mandates)
+## 10. Tech stack
 
-**Collector:** keep **Python + Playwright** (reuse the prototype). Add an HTTP
-client to push to the cloud and a small config file.
+**Collector:** keep **Python + Playwright** (reuse the prototype). Add a client
+that subscribes to the cloud push channel (§9) and posts results, plus a small
+config file.
 
-**Cloud backend + dashboard — two good paths:**
-- **Path A — Supabase + a JS frontend (fastest to a polished app).** Postgres +
-  built-in auth + storage (for photos) + row-level security + realtime updates;
-  scoring runs in an Edge Function or a small worker calling Claude. Frontend in
-  Next.js/React or SvelteKit, deployed on Vercel/Netlify. Realtime makes the
-  dashboard feel live. Generous free tier.
-- **Path B — single small server (closest to the existing prototype/infra).**
-  Node (Express/Fastify) or Python (FastAPI) serving a JSON API + static SPA,
-  SQLite + Litestream for backup (matches the pattern already in use), on Fly.io.
-  Fewer services, you own all of it, but you build auth + realtime yourself.
+**Cloud backend + dashboard (Decision #1): Supabase + a JS frontend.**
+- **Supabase** provides Postgres, built-in auth, storage, row-level security, and
+  **Realtime** (used both for the collect-trigger channel in §9 and to make the
+  dashboard update live as listings sync/score).
+- **Scoring** runs in a Supabase **Edge Function** (or a small worker) that calls
+  the Claude API with the server-side `ANTHROPIC_API_KEY`.
+- **Frontend** in Next.js/React or SvelteKit, deployed on Vercel/Netlify, built
+  as a PWA (§6).
 
-**Recommendation:** **Path A (Supabase)** if you want the nicest cross-device app
-with the least backend plumbing; **Path B** if you'd rather keep one small,
-fully-owned server and reuse the SQLite/Litestream/Fly setup you already know.
-
-**Auth:** single user — a strong password / magic link (Supabase) or one bearer
-token + a simple login (Path B). The collector uses a separate long-lived token.
+**Auth:** single user — Supabase Auth (email magic link / password). The
+collector authenticates with a separate long-lived service token (not the user
+login), scoped to ingest + the collect-request channel.
 
 ---
 
 ## 11. Cross-cutting concerns
 
-- **Photos / FB CDN expiry:** FB `og:image` URLs may expire or require auth.
-  Safest: collector downloads the cover image and uploads to cloud storage
-  (Supabase Storage / S3-compatible); store the re-hosted URL in
-  `cover_photo_url`. Otherwise photos may break in the dashboard later.
-- **Cost control:** scoring is the only recurring cost. Score each listing once;
-  re-score only on demand or when criteria change. Show a rough cost/usage in
-  settings. Text-only scoring by default; vision optional.
-- **Privacy:** listing data + your criteria live in the cloud (Path A or B). The
-  FB session and login stay only on the Mac. No third party sees your FB account.
+- **Photos (Decision #3 — hotlink):** store and load the source image URLs
+  directly; no re-hosting. Known tradeoff: some FB/CDN URLs expire over time, so
+  a few thumbnails may eventually break. If that becomes annoying, revisit and
+  add collector-side re-hosting to Supabase Storage (`cover_photo_url`).
+- **Cost control:** scoring is the only recurring cost, kept low by the text-only
+  model (Decision #4). Score each listing once; re-score only on demand or when
+  criteria change. Show a rough cost/usage in settings.
+- **Privacy:** listing data + your criteria live in Supabase (cloud). The FB
+  session and login stay only on the Mac. No third party sees your FB account.
 - **Reliability / anti-fragility:** content extraction and link patterns will
   drift as sites change; keep them in config where possible and fail loud (a run
   that finds 0 links should warn, not silently succeed). Keep the local file
@@ -360,10 +373,10 @@ token + a simple login (Path B). The collector uses a separate long-lived token.
    filters, scam flags. Dashboard shows scores + rationale.
 3. **Manual editing.** Field corrections, score overrides, status workflow,
    notes, flag dismissal, re-score.
-4. **Criteria editor + run controls.** In-app criteria; "collect now" (pull
-   model) + "score new"; run history.
-5. **Polish.** PWA install, responsive layout, photo re-hosting, optional
-   web-push, optional vision scoring, schedule.
+4. **Criteria editor + run controls.** In-app criteria; "collect now" (push
+   channel via Supabase Realtime) + "score new"; run history.
+5. **Polish.** PWA install, responsive layout, web-push, `launchd` schedule,
+   collector online/offline status.
 
 A read-only synced dashboard (phase 1–2) is the meaningful MVP.
 
@@ -384,10 +397,8 @@ rather than rebuilt:
 
 ---
 
-## 14. Open decisions for the builder
+## 14. Decisions
 
-- Stack: **Supabase/JS** vs **single FastAPI/Node + SQLite/Fly** (see §10).
-- Collection trigger: pull-poll vs schedule-only for v1 (§9).
-- Photos: re-host vs hotlink (§11).
-- Scoring model + whether to enable vision (§8).
-- How aggressively to apply hard filters (drop vs keep-and-mark).
+All v1 build choices are settled — see **§0**. No open decisions remain for the
+builder to make before starting; revisit photo re-hosting (§11) only if expired
+links become a nuisance.
